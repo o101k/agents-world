@@ -1,5 +1,6 @@
 import type {
   AgentResponse,
+  MarketResponse,
   BrainConfig,
   CallsResponse,
   ModelPrice,
@@ -65,6 +66,7 @@ export const api = {
     request<SettingsResponse>('PUT', `/api/settings/providers/${provider}`, update),
   updatePrices: (prices: Record<string, ModelPrice | null>) =>
     request<SettingsResponse>('PUT', '/api/settings/prices', prices),
+  market: (id: string) => request<MarketResponse>('GET', `/api/worlds/${id}/market`),
   providerModels: (provider: string) =>
     request<{ models: string[] }>('GET', `/api/providers/${provider}/models`),
 };

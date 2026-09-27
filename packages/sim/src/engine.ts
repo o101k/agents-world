@@ -1,6 +1,9 @@
 import {
   IntentSchema,
   ITEM_LABELS,
+  RECIPES,
+  describeBundle,
+  type Bundle,
   OBJECT_LABELS,
   TICKS_PER_DAY,
   TICKS_PER_HOUR,
@@ -18,7 +21,8 @@ import {
 } from '@aw/shared';
 import { fullName, remember, type Agent } from './agent.ts';
 import type { AgentSpec } from './cast.ts';
-import { NUTRITION } from './items.ts';
+import { NUTRITION, isFood } from './items.ts';
+import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
 import { findPathToAny } from './pathfinding.ts';
 import { buildPerception, nameAsKnown } from './perception.ts';
 import { addAgent } from './population.ts';
@@ -114,7 +118,11 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
         1,
       );
     }
-    if (state.tick % H === 0) regrowResources(ctx);
+    if (state.tick % H === 0) {
+      regrowResources(ctx);
+      expireOffers(ctx);
+    }
+    if (state.tick % TICKS_PER_DAY === 0) driftMarket(state.market);
     const ageStep = 1 / (TICKS_PER_DAY * state.settings.daysPerYear);
     for (let i = 0; i < state.agents.length; i++) {
       const agent = state.agents[i]!;
@@ -155,6 +163,10 @@ function emit(
   importance: number,
 ) {
   ctx.events.push({ tick: ctx.state.tick, kind, actors, text, importance });
+  if (SUCCESS_EVENTS.has(kind) && actors[0]) {
+    const a = ctx.state.agents.find((x) => x.id === actors[0]);
+    if (a) a.failStreak = 0;
+  }
 }
 
 function objName(state: WorldState, id: string): string {
@@ -241,6 +253,8 @@ function regrowResources(ctx: Ctx): void {
     const before = Math.floor(r.amount);
     r.amount = Math.min(r.max, r.amount + r.regenPerDay / 24);
     if (Math.floor(r.amount) !== before) ctx.changed.add(id);
+    // Trees are tracked only while recovering from chopping, to keep the state small.
+    if (r.item === 'wood' && r.amount >= r.max) delete state.resources[id];
   }
 }
 
@@ -316,15 +330,16 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   }
 }
 
-function die(ctx: Ctx, agent: Agent): void {
+function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
   const n = agent.needs;
   const lowest = (['water', 'food', 'warmth'] as NeedName[]).reduce((a, b) =>
     n[a] <= n[b] ? a : b,
   );
   const cause =
-    n[lowest] <= 0
+    forcedCause ??
+    (n[lowest] <= 0
       ? { water: 'thirst', food: 'starvation', warmth: 'cold', energy: 'exhaustion' }[lowest]
-      : 'poor health';
+      : 'poor health');
   agent.alive = false;
   agent.death = { tick: ctx.state.tick, cause };
   agent.asleep = false;
@@ -393,10 +408,28 @@ function isAddressing(agent: Agent, need: NeedName): boolean {
   return steps.includes('sleep');
 }
 
+/** Things that count as getting something done (resets the failure back-off). */
+const SUCCESS_EVENTS = new Set([
+  'ate',
+  'drank',
+  'gathered',
+  'crafted',
+  'traded',
+  'gave',
+  'said',
+  'offer',
+]);
+
 function fail(ctx: Ctx, agent: Agent, reason: string): void {
   agent.plan = [];
   agent.action = null;
   remember(agent, ctx.state.tick, reason, 2);
+  agent.failStreak = (agent.failStreak ?? 0) + 1;
+  if (agent.failStreak >= 3) {
+    // Repeated failures: pause a while before thinking again, instead of hammering the brain.
+    agent.action = { type: 'rest', until: ctx.state.tick + Math.min(60, 5 * agent.failStreak) };
+    return;
+  }
   if (!agent.awaiting) agent.awaiting = { kind: 'action_failed', reason };
 }
 
@@ -435,6 +468,12 @@ function progressAction(ctx: Ctx, agent: Agent): void {
     }
     case 'gather':
       if (state.tick >= action.until) finishGather(ctx, agent, action.objectId);
+      return;
+    case 'chop':
+      if (state.tick >= action.until) finishChop(ctx, agent, action.objectId);
+      return;
+    case 'craft':
+      if (state.tick >= action.until) finishCraft(ctx, agent, action.recipe);
       return;
     case 'eat':
       if (state.tick >= action.until) {
@@ -545,6 +584,8 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       return;
     }
     case 'eat': {
+      if (!isFood(intent.item))
+        return fail(ctx, agent, `I can't eat ${ITEM_LABELS[intent.item].toLowerCase()}.`);
       if ((agent.inventory[intent.item] ?? 0) <= 0) {
         return fail(
           ctx,
@@ -594,32 +635,26 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       const other = state.agents.find((a) => a.id === intent.agentId);
       if (!other || other === agent)
         return fail(ctx, agent, "I tried to talk to someone who isn't here.");
-      const who = nameAsKnown(agent, other);
-      if (!other.alive) return fail(ctx, agent, `I wanted to talk to ${who}, but they are dead.`);
-      const dist = Math.max(Math.abs(other.x - agent.x), Math.abs(other.y - agent.y));
-      if (dist <= TALK_RANGE && !other.indoorsId) {
-        speak(ctx, agent, other, intent.message);
-        // Talking takes time: roughly one in-game minute per 15 words, then a pause for the answer.
-        const words = intent.message.split(/\s+/).length;
-        agent.action = { type: 'rest', until: state.tick + 2 + Math.ceil(words / 15) };
-        return;
-      }
-      if (other.indoorsId)
-        return fail(ctx, agent, `I wanted to talk to ${who}, but they are indoors.`);
-      if (dist > 60) return fail(ctx, agent, `${who} is too far away to reach.`);
-      const tries = intent.tries ?? 0;
-      if (tries >= 3) return fail(ctx, agent, `I couldn't catch up with ${who}.`);
-      const goals: Point[] = [];
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if ((dx || dy) && isWalkable(map, other.x + dx, other.y + dy))
-            goals.push({ x: other.x + dx, y: other.y + dy });
-        }
-      }
-      if (goals.length === 0) goals.push({ x: other.x, y: other.y });
-      walkTo(ctx, agent, goals, { ...intent, tries: tries + 1 }, who);
+      if (!approach(ctx, agent, other, intent, TALK_RANGE, 'talk to')) return;
+      speak(ctx, agent, other, intent.message);
+      // Talking takes time: roughly one in-game minute per 15 words, then a pause for the answer.
+      const words = intent.message.split(/\s+/).length;
+      agent.action = { type: 'rest', until: state.tick + 2 + Math.ceil(words / 15) };
       return;
     }
+    case 'chop_wood':
+      return startChop(ctx, agent, intent.objectId, arrived);
+    case 'craft':
+      return startCraft(ctx, agent, intent, arrived);
+    case 'buy':
+    case 'sell':
+      return marketTrade(ctx, agent, intent, arrived);
+    case 'give':
+    case 'offer_trade':
+    case 'respond_offer':
+    case 'steal':
+    case 'attack':
+      return personAction(ctx, agent, intent);
     case 'explore': {
       const target = pickExploreTarget(ctx, agent);
       if (!target) return fail(ctx, agent, "I couldn't find anywhere new to explore.");
@@ -720,15 +755,16 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
   agent.action = null;
   let item: ItemName;
   let got: number;
+  const tools = useTools(ctx, agent);
   if (o.kind === 'dock') {
     item = 'fish';
-    const chance = 0.3 + agent.skills.fishing * 0.005;
+    const chance = 0.3 + agent.skills.fishing * 0.005 + (tools ? 0.15 : 0);
     got = ctx.rng.chance(chance) ? 1 : 0;
     agent.skills.fishing = Math.min(100, agent.skills.fishing + 0.2);
   } else {
     const r = state.resources[o.id]!;
-    item = o.kind === 'field' ? 'vegetables' : 'berries';
-    got = Math.min(3, Math.floor(r.amount));
+    item = r.item ?? (o.kind === 'field' ? 'vegetables' : 'berries');
+    got = Math.min(3 + (tools ? 1 : 0), Math.floor(r.amount));
     r.amount -= got;
     ctx.changed.add(o.id);
     agent.knowledge[o.id] = { lastSeenTick: state.tick, lastSeenAmount: Math.floor(r.amount) };
@@ -767,6 +803,7 @@ export function look(state: WorldState, agent: Agent): void {
       lastSeenTick: state.tick,
       lastSeenAmount: r ? Math.floor(r.amount) : undefined,
     };
+    if (o.kind === 'market' && distanceToObject(o, agent) <= 3) seePrices(state, agent);
   }
 }
 
@@ -785,4 +822,611 @@ export function nearestKnown(state: WorldState, agent: Agent, kinds: string[]): 
     }
   }
   return best;
+}
+
+// ------------------------------------------------------------------ work & trade
+
+function cheb(a: Point, b: Point): number {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+}
+
+type ApproachIntent = Extract<Intent, { tries?: number }>;
+
+/**
+ * Walk to within `range` of another person. Returns true when close enough to act right now;
+ * otherwise it has either started walking (and will retry the intent on arrival) or failed.
+ */
+function approach(
+  ctx: Ctx,
+  agent: Agent,
+  other: Agent,
+  intent: ApproachIntent,
+  range: number,
+  verb: string,
+): boolean {
+  const who = nameAsKnown(agent, other);
+  if (!other.alive) {
+    fail(ctx, agent, `I wanted to ${verb} ${who}, but they are dead.`);
+    return false;
+  }
+  const dist = cheb(agent, other);
+  if (dist <= range && !other.indoorsId) return true;
+  if (other.indoorsId) {
+    fail(ctx, agent, `I wanted to ${verb} ${who}, but they are indoors.`);
+    return false;
+  }
+  if (dist > 60) {
+    fail(ctx, agent, `${who} is too far away to reach.`);
+    return false;
+  }
+  const tries = intent.tries ?? 0;
+  if (tries >= 3) {
+    fail(ctx, agent, `I couldn't catch up with ${who}.`);
+    return false;
+  }
+  const { map } = ctx.state;
+  const goals: Point[] = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if ((dx || dy) && isWalkable(map, other.x + dx, other.y + dy))
+        goals.push({ x: other.x + dx, y: other.y + dy });
+    }
+  }
+  if (goals.length === 0) goals.push({ x: other.x, y: other.y });
+  walkTo(ctx, agent, goals, { ...intent, tries: tries + 1 } as Intent, who);
+  return false;
+}
+
+function normBundle(b: Bundle | undefined): Bundle {
+  const out: Bundle = {};
+  if (b?.item && (b.quantity ?? 0) > 0) {
+    out.item = b.item;
+    out.quantity = Math.floor(b.quantity!);
+  }
+  if ((b?.coins ?? 0) > 0) out.coins = Math.floor(b!.coins!);
+  return out;
+}
+
+const isEmpty = (b: Bundle) => !(b.item && b.quantity) && !b.coins;
+
+function hasBundle(a: Agent, b: Bundle): boolean {
+  if (b.item && (a.inventory[b.item] ?? 0) < (b.quantity ?? 0)) return false;
+  return a.money >= (b.coins ?? 0);
+}
+
+function moveBundle(from: Agent, to: Agent, b: Bundle): void {
+  if (b.item && b.quantity) {
+    from.inventory[b.item] = (from.inventory[b.item] ?? 0) - b.quantity;
+    if (!from.inventory[b.item]) delete from.inventory[b.item];
+    to.inventory[b.item] = (to.inventory[b.item] ?? 0) + b.quantity;
+  }
+  if (b.coins) {
+    from.money -= b.coins;
+    to.money += b.coins;
+  }
+}
+
+/** Carrying tools improves yields; each use has a small chance of breaking them. */
+function useTools(ctx: Ctx, agent: Agent): boolean {
+  if ((agent.inventory.tools ?? 0) <= 0) return false;
+  if (ctx.rng.chance(0.03)) {
+    agent.inventory.tools! -= 1;
+    if (!agent.inventory.tools) delete agent.inventory.tools;
+    remember(agent, ctx.state.tick, 'My tools broke.', 3);
+  }
+  return true;
+}
+
+function seePrices(state: WorldState, agent: Agent): void {
+  agent.priceKnowledge = { tick: state.tick, prices: allQuotes(state.market) };
+}
+
+function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived: boolean): void {
+  const { state } = ctx;
+  const { map } = state;
+  const cache = mapCache(map);
+  const woodLeft = (id: string) => state.resources[id]?.amount ?? 4;
+  let tree = objectId ? cache.byId.get(objectId) : undefined;
+  if (tree && tree.kind !== 'tree') tree = undefined;
+  if (!tree) {
+    let best: { o: (typeof map.objects)[number]; d: number } | null = null;
+    for (const o of map.objects) {
+      if (o.kind !== 'tree') continue;
+      const d = Math.abs(o.x - agent.x) + Math.abs(o.y - agent.y);
+      if (d > 25 || woodLeft(o.id) < 1 || (best && d >= best.d)) continue;
+      if (interactionTiles(map, o).length === 0) continue;
+      best = { o, d };
+    }
+    tree = best?.o;
+  }
+  if (!tree) return fail(ctx, agent, "I couldn't find a tree with wood to chop nearby.");
+  if (woodLeft(tree.id) < 1) return fail(ctx, agent, 'That tree has been chopped bare for now.');
+  const tiles = interactionTiles(map, tree);
+  if (!arrived && !isAt(agent, tiles)) {
+    walkTo(ctx, agent, tiles, { type: 'chop_wood', objectId: tree.id }, 'a tree');
+    return;
+  }
+  agent.facing = facingTo(agent, tree);
+  agent.action = { type: 'chop', objectId: tree.id, until: state.tick + 30 };
+}
+
+function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
+  const { state } = ctx;
+  agent.action = null;
+  const r = (state.resources[treeId] ??= { amount: 4, max: 4, regenPerDay: 1, item: 'wood' });
+  const tools = useTools(ctx, agent);
+  const got = Math.min(2 + (tools ? 1 : 0), Math.floor(r.amount));
+  if (got <= 0) return fail(ctx, agent, 'That tree had no more wood worth taking.');
+  r.amount -= got;
+  agent.inventory.wood = (agent.inventory.wood ?? 0) + got;
+  agent.skills.building = Math.min(100, agent.skills.building + 0.1);
+  emit(ctx, 'gathered', [agent.id], `${fullName(agent)} chopped ${got} wood.`, 1);
+  remember(agent, state.tick, `I chopped ${got} wood.`);
+}
+
+function startCraft(
+  ctx: Ctx,
+  agent: Agent,
+  intent: Extract<Intent, { type: 'craft' }>,
+  arrived: boolean,
+): void {
+  const { state } = ctx;
+  const { map } = state;
+  const recipe = RECIPES[intent.recipe];
+  if (!recipe) return fail(ctx, agent, "I don't know how to make that.");
+  const workplaces = map.objects.filter((o) => o.kind === recipe.place);
+  const here = workplaces.find((o) => isAt(agent, interactionTiles(map, o)));
+  if (!here) {
+    if (arrived) return fail(ctx, agent, `I couldn't get into the ${recipe.place}.`);
+    const known = workplaces.filter((o) => agent.knowledge[o.id]);
+    if (known.length === 0) return fail(ctx, agent, `I don't know where a ${recipe.place} is.`);
+    walkTo(
+      ctx,
+      agent,
+      known.flatMap((o) => interactionTiles(map, o)),
+      intent,
+      `the ${recipe.place}`,
+    );
+    return;
+  }
+  if (intent.recipe === 'tools' && agent.skills.building < 15) {
+    return fail(ctx, agent, "I don't have the skill to make tools yet.");
+  }
+  for (const [item, n] of Object.entries(recipe.inputs)) {
+    if ((agent.inventory[item as ItemName] ?? 0) < n!) {
+      return fail(
+        ctx,
+        agent,
+        `I need ${describeBundle({ item: item as ItemName, quantity: n })} to make ${intent.recipe}.`,
+      );
+    }
+  }
+  const speedUp = 1 - Math.min(0.5, agent.skills[recipe.skill] / 200);
+  agent.action = {
+    type: 'craft',
+    recipe: intent.recipe,
+    until: state.tick + Math.round(recipe.minutes * speedUp),
+  };
+}
+
+function finishCraft(ctx: Ctx, agent: Agent, name: keyof typeof RECIPES): void {
+  const { state } = ctx;
+  agent.action = null;
+  const recipe = RECIPES[name];
+  for (const [item, n] of Object.entries(recipe.inputs)) {
+    if ((agent.inventory[item as ItemName] ?? 0) < n!)
+      return fail(ctx, agent, `I ran out of ${item} while making ${name}.`);
+  }
+  for (const [item, n] of Object.entries(recipe.inputs)) {
+    agent.inventory[item as ItemName]! -= n!;
+    if (!agent.inventory[item as ItemName]) delete agent.inventory[item as ItemName];
+  }
+  const made: string[] = [];
+  for (const [item, n] of Object.entries(recipe.outputs)) {
+    const bonus = name !== 'tools' && agent.skills[recipe.skill] >= 50 ? 1 : 0;
+    agent.inventory[item as ItemName] = (agent.inventory[item as ItemName] ?? 0) + n! + bonus;
+    made.push(describeBundle({ item: item as ItemName, quantity: n! + bonus }));
+  }
+  agent.skills[recipe.skill] = Math.min(100, agent.skills[recipe.skill] + 0.5);
+  const where = recipe.place === 'bakery' ? 'the bakery' : 'the workshop';
+  emit(ctx, 'crafted', [agent.id], `${fullName(agent)} made ${made.join(', ')} at ${where}.`, 2);
+  remember(agent, state.tick, `I made ${made.join(', ')} at ${where}.`, 2);
+}
+
+function marketTrade(
+  ctx: Ctx,
+  agent: Agent,
+  intent: Extract<Intent, { type: 'buy' | 'sell' }>,
+  arrived: boolean,
+): void {
+  const { state } = ctx;
+  const market = state.map.objects.find((o) => o.kind === 'market');
+  if (!market) return fail(ctx, agent, 'There is no market here.');
+  const tiles = interactionTiles(state.map, market);
+  if (!isAt(agent, tiles) && cheb(agent, { x: market.x + 1, y: market.y }) > 2) {
+    if (arrived) return fail(ctx, agent, "I couldn't reach the market stall.");
+    if (!agent.knowledge[market.id]) return fail(ctx, agent, "I don't know where the market is.");
+    walkTo(ctx, agent, tiles, intent, 'the market');
+    return;
+  }
+  seePrices(state, agent);
+  const item = intent.item;
+  const label = ITEM_LABELS[item].toLowerCase();
+  const q = quote(state.market, item);
+  const wanted = Math.max(1, Math.floor(intent.quantity));
+  if (intent.type === 'buy') {
+    const stock = state.market.stock[item] ?? 0;
+    const qty = Math.min(wanted, stock, Math.floor(agent.money / q.buy));
+    if (qty <= 0) {
+      return fail(
+        ctx,
+        agent,
+        stock <= 0
+          ? `The market had no ${label}.`
+          : `I couldn't afford ${label} (${q.buy} coins each; I have ${agent.money}).`,
+      );
+    }
+    agent.money -= qty * q.buy;
+    state.market.stock[item] = stock - qty;
+    agent.inventory[item] = (agent.inventory[item] ?? 0) + qty;
+    emit(
+      ctx,
+      'traded',
+      [agent.id],
+      `${fullName(agent)} bought ${qty} ${label} at the market for ${qty * q.buy} coins.`,
+      2,
+    );
+    remember(
+      agent,
+      state.tick,
+      `I bought ${qty} ${label} at the market for ${qty * q.buy} coins (${q.buy} each).`,
+      2,
+    );
+  } else {
+    const room = Math.max(0, MARKET_TARGET[item] * 3 - (state.market.stock[item] ?? 0));
+    const qty = Math.min(wanted, agent.inventory[item] ?? 0, room);
+    if ((agent.inventory[item] ?? 0) <= 0) return fail(ctx, agent, `I had no ${label} to sell.`);
+    if (qty <= 0)
+      return fail(ctx, agent, `The market won't take any more ${label} — it's overflowing.`);
+    agent.inventory[item]! -= qty;
+    if (!agent.inventory[item]) delete agent.inventory[item];
+    agent.money += qty * q.sell;
+    state.market.stock[item] = (state.market.stock[item] ?? 0) + qty;
+    emit(
+      ctx,
+      'traded',
+      [agent.id],
+      `${fullName(agent)} sold ${qty} ${label} at the market for ${qty * q.sell} coins.`,
+      2,
+    );
+    remember(
+      agent,
+      state.tick,
+      `I sold ${qty} ${label} at the market for ${qty * q.sell} coins (${q.sell} each).`,
+      2,
+    );
+  }
+  agent.action = { type: 'rest', until: state.tick + 5 };
+}
+
+/** Awake people within earshot who aren't part of the exchange. */
+function witnesses(state: WorldState, a: Agent, b: Agent): Agent[] {
+  return state.agents.filter(
+    (o) =>
+      o !== a && o !== b && o.alive && !o.asleep && !o.indoorsId && cheb(o, a) <= OVERHEAR_RANGE,
+  );
+}
+
+function personAction(
+  ctx: Ctx,
+  agent: Agent,
+  intent: Extract<Intent, { type: 'give' | 'offer_trade' | 'respond_offer' | 'steal' | 'attack' }>,
+): void {
+  const { state } = ctx;
+  const tick = state.tick;
+
+  if (intent.type === 'respond_offer') {
+    const offer = state.offers.find((o) => o.id === intent.offerId && o.to === agent.id);
+    if (!offer) return fail(ctx, agent, 'That offer is no longer open.');
+    const from = state.agents.find((a) => a.id === offer.from)!;
+    const who = nameAsKnown(agent, from);
+    const terms = `${describeBundle(offer.give)} for ${describeBundle(offer.ask)}`;
+    const answer = (accepted: boolean) => {
+      state.offers = state.offers.filter((o) => o !== offer);
+      if (from.alive && !from.asleep) {
+        remember(
+          from,
+          tick,
+          `${nameAsKnown(from, agent)} ${accepted ? 'accepted' : 'turned down'} my offer of ${terms}.`,
+          4,
+          'conversation',
+          [agent.id],
+        );
+        if (!from.awaiting)
+          from.awaiting = {
+            kind: 'offer_answered',
+            offerId: offer.id,
+            byName: nameAsKnown(from, agent),
+            accepted,
+          };
+      }
+    };
+    if (!intent.accept) {
+      answer(false);
+      remember(agent, tick, `I turned down ${who}'s offer of ${terms}.`, 3, 'conversation', [
+        from.id,
+      ]);
+      emit(
+        ctx,
+        'offer',
+        [agent.id, from.id],
+        `${fullName(agent)} declined ${fullName(from)}'s offer.`,
+        2,
+      );
+      return;
+    }
+    if (!approach(ctx, agent, from, intent, TALK_RANGE + 1, 'trade with')) return;
+    if (!hasBundle(from, offer.give) || !hasBundle(agent, offer.ask)) {
+      answer(false);
+      return fail(
+        ctx,
+        agent,
+        `The trade with ${who} fell through — one of us no longer had the goods.`,
+      );
+    }
+    moveBundle(from, agent, offer.give);
+    moveBundle(agent, from, offer.ask);
+    answer(true);
+    meet(agent, from, tick, true);
+    meet(from, agent, tick, true);
+    emit(
+      ctx,
+      'traded',
+      [from.id, agent.id],
+      `${fullName(from)} traded ${describeBundle(offer.give)} to ${fullName(agent)} for ${describeBundle(offer.ask)}.`,
+      3,
+    );
+    remember(
+      agent,
+      tick,
+      `I traded with ${who}: I got ${describeBundle(offer.give)} for ${describeBundle(offer.ask)}.`,
+      4,
+      'conversation',
+      [from.id],
+    );
+    return;
+  }
+
+  const other = state.agents.find((a) => a.id === intent.agentId);
+  if (!other || other === agent) return fail(ctx, agent, "The person I meant isn't here.");
+  const who = nameAsKnown(agent, other);
+
+  switch (intent.type) {
+    case 'give': {
+      const gift = normBundle(intent.gift);
+      if (isEmpty(gift)) return fail(ctx, agent, 'I meant to give something but chose nothing.');
+      if (!hasBundle(agent, gift))
+        return fail(ctx, agent, `I don't have ${describeBundle(gift)} to give.`);
+      if (!approach(ctx, agent, other, intent, 1, 'give something to')) return;
+      moveBundle(agent, other, gift);
+      meet(other, agent, tick, true);
+      other.people[agent.id]!.familiarity = Math.min(100, other.people[agent.id]!.familiarity + 5);
+      emit(
+        ctx,
+        'gave',
+        [agent.id, other.id],
+        `${fullName(agent)} gave ${describeBundle(gift)} to ${fullName(other)}.`,
+        3,
+      );
+      remember(agent, tick, `I gave ${describeBundle(gift)} to ${who}.`, 3, 'experience', [
+        other.id,
+      ]);
+      if (!other.asleep)
+        remember(
+          other,
+          tick,
+          `${nameAsKnown(other, agent)} gave me ${describeBundle(gift)}.`,
+          5,
+          'experience',
+          [agent.id],
+        );
+      agent.action = { type: 'rest', until: tick + 2 };
+      return;
+    }
+    case 'offer_trade': {
+      const give = normBundle(intent.give);
+      const ask = normBundle(intent.ask);
+      if (isEmpty(give) && isEmpty(ask)) return fail(ctx, agent, 'My offer had nothing in it.');
+      if (!hasBundle(agent, give))
+        return fail(ctx, agent, `I can't offer ${describeBundle(give)} — I don't have it.`);
+      if (!approach(ctx, agent, other, intent, TALK_RANGE, 'trade with')) return;
+      const offer = {
+        id: `o${state.nextOfferNum++}`,
+        from: agent.id,
+        to: other.id,
+        give,
+        ask,
+        createdTick: tick,
+        expiresTick: tick + 120,
+      };
+      state.offers.push(offer);
+      const terms = `${describeBundle(give)} for ${describeBundle(ask)}`;
+      agent.speech = {
+        text: `I'll give you ${describeBundle(give)} for ${describeBundle(ask)}.`,
+        until: tick + 30,
+      };
+      emit(
+        ctx,
+        'offer',
+        [agent.id, other.id],
+        `${fullName(agent)} offered ${fullName(other)} ${terms}.`,
+        2,
+      );
+      remember(agent, tick, `I offered ${who} ${terms}.`, 3, 'conversation', [other.id]);
+      meet(agent, other, tick, false);
+      if (!other.asleep) {
+        meet(other, agent, tick, true);
+        remember(
+          other,
+          tick,
+          `${nameAsKnown(other, agent)} offered me ${terms} (offer ${offer.id}).`,
+          4,
+          'conversation',
+          [agent.id],
+        );
+        if (!other.awaiting) {
+          other.awaiting = {
+            kind: 'offer_received',
+            offerId: offer.id,
+            fromId: agent.id,
+            fromName: nameAsKnown(other, agent),
+            text: terms,
+          };
+        }
+      }
+      agent.action = { type: 'rest', until: tick + 3 };
+      return;
+    }
+    case 'steal': {
+      if (!approach(ctx, agent, other, intent, 1, 'get close to')) return;
+      let taken: Bundle;
+      if (intent.item && (other.inventory[intent.item] ?? 0) > 0) {
+        taken = {
+          item: intent.item,
+          quantity: Math.max(1, Math.floor((other.inventory[intent.item] ?? 0) / 2)),
+        };
+      } else if (other.money > 0) {
+        taken = { coins: Math.min(10, Math.max(1, Math.floor(other.money / 2))) };
+      } else {
+        return fail(ctx, agent, `${who} had nothing worth taking.`);
+      }
+      const success = ctx.rng.chance(other.asleep ? 0.9 : 0.6);
+      if (success) moveBundle(other, agent, taken);
+      const victimNoticed = !success || ctx.rng.chance(other.asleep ? 0.1 : 0.5);
+      const seenBy = witnesses(state, agent, other).filter(() => ctx.rng.chance(0.5));
+      const what = describeBundle(taken);
+      const hidden = !victimNoticed && seenBy.length === 0 ? ' Nobody noticed.' : '';
+      emit(
+        ctx,
+        'stole',
+        [agent.id, other.id],
+        success
+          ? `${fullName(agent)} stole ${what} from ${fullName(other)}.${hidden}`
+          : `${fullName(agent)} tried to steal from ${fullName(other)} and was caught.`,
+        4,
+      );
+      remember(
+        agent,
+        tick,
+        success ? `I stole ${what} from ${who}.` : `I tried to steal from ${who} and got caught.`,
+        6,
+        'experience',
+        [other.id],
+      );
+      if (victimNoticed) {
+        if (other.asleep) wake(ctx, other, false);
+        const thief = nameAsKnown(other, agent);
+        remember(
+          other,
+          tick,
+          success ? `${thief} stole ${what} from me!` : `${thief} tried to rob me!`,
+          8,
+          'experience',
+          [agent.id],
+        );
+        if (!other.awaiting)
+          other.awaiting = {
+            kind: 'robbed',
+            byId: agent.id,
+            byName: thief,
+            what: success ? what : 'nothing (I caught them)',
+          };
+      } else if (success) {
+        remember(other, tick, `Some of my belongings went missing: ${what}.`, 5);
+        if (!other.asleep && !other.awaiting)
+          other.awaiting = { kind: 'robbed', byId: null, byName: 'someone', what };
+      }
+      for (const w of seenBy) {
+        remember(
+          w,
+          tick,
+          `I saw ${nameAsKnown(w, agent)} ${success ? 'steal from' : 'try to steal from'} ${nameAsKnown(w, other)}.`,
+          7,
+          'experience',
+          [agent.id, other.id],
+        );
+      }
+      agent.action = { type: 'rest', until: tick + 2 };
+      return;
+    }
+    case 'attack': {
+      if (!approach(ctx, agent, other, intent, 1, 'attack')) return;
+      const armed = (agent.inventory.tools ?? 0) > 0;
+      const damage = 8 + ctx.rng.int(0, 17) + (armed ? 5 : 0);
+      if (other.asleep) wake(ctx, other, false);
+      other.health = clamp(other.health - damage);
+      agent.facing = facingTo(agent, other);
+      const seen = witnesses(state, agent, other);
+      emit(
+        ctx,
+        'attacked',
+        [agent.id, other.id],
+        `${fullName(agent)} attacked ${fullName(other)}${armed ? ' with a tool' : ''}.`,
+        5,
+      );
+      remember(agent, tick, `I attacked ${who}.`, 7, 'experience', [other.id]);
+      remember(other, tick, `${nameAsKnown(other, agent)} attacked me!`, 9, 'experience', [
+        agent.id,
+      ]);
+      for (const w of seen)
+        remember(
+          w,
+          tick,
+          `I saw ${nameAsKnown(w, agent)} attack ${nameAsKnown(w, other)}!`,
+          8,
+          'experience',
+          [agent.id, other.id],
+        );
+      if (other.health <= 0) {
+        die(ctx, other, `violence (killed by ${fullName(agent)})`);
+        remember(agent, tick, `I killed ${who}.`, 10, 'experience', [other.id]);
+        for (const w of seen)
+          remember(
+            w,
+            tick,
+            `I saw ${nameAsKnown(w, agent)} kill ${nameAsKnown(w, other)}.`,
+            10,
+            'experience',
+            [agent.id, other.id],
+          );
+      } else if (!other.awaiting) {
+        other.awaiting = { kind: 'attacked', byId: agent.id, byName: nameAsKnown(other, agent) };
+        other.plan = [];
+        other.action = null;
+      }
+      agent.action = { type: 'rest', until: tick + 2 };
+      return;
+    }
+  }
+}
+
+/** Unanswered offers lapse after two hours; offers involving the dead vanish. */
+function expireOffers(ctx: Ctx): void {
+  const { state } = ctx;
+  const byId = new Map(state.agents.map((a) => [a.id, a]));
+  state.offers = state.offers.filter((o) => {
+    const from = byId.get(o.from);
+    const to = byId.get(o.to);
+    if (!from?.alive || !to?.alive) return false;
+    if (state.tick < o.expiresTick) return true;
+    remember(
+      from,
+      state.tick,
+      `${nameAsKnown(from, to)} never answered my offer of ${describeBundle(o.give)} for ${describeBundle(o.ask)}.`,
+      2,
+      'conversation',
+      [to.id],
+    );
+    return false;
+  });
 }

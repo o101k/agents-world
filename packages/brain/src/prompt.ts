@@ -1,6 +1,8 @@
 import {
   NEED_LABELS,
   ITEM_LABELS,
+  describeBundle,
+  type ItemName,
   type NeedName,
   type Perception,
   type Personality,
@@ -65,6 +67,10 @@ export function systemPrompt(p: Perception): string {
     '- Water: drink at the well or at the river.',
     '- Sleep at night. Sleeping at home is warmer and more restful than sleeping outside, and nights outdoors are cold.',
     '- You can talk to anyone within a few steps (talk_to). They may answer. People nearby can overhear.',
+    '- Money (coins) buys goods at the town market, and the market buys your goods. Prices rise when goods are scarce and fall when plentiful; you only know the prices you last saw there.',
+    '- Work: fields grow wheat or vegetables; trees give wood; at the bakery 3 wheat become 2 bread; at the workshop 2 wood become 2 planks and 3 planks become tools. Carrying tools makes gathering, chopping and fishing more productive. Skill improves with practice.',
+    '- You can give things to people, offer them trades (they may accept or refuse), and accept or decline offers made to you.',
+    '- Nothing physically stops you from taking what is not yours or using force, but anyone who sees it will remember, and people talk. Someone badly hurt can die.',
     '',
     'Actions for your plan (steps run in order):',
     '- go_to {target: place id or person id}',
@@ -75,6 +81,14 @@ export function systemPrompt(p: Perception): string {
     '- rest {minutes}',
     '- explore (wander somewhere new)',
     '- talk_to {target: person id, message: what you say out loud}',
+    '- chop_wood {target: optional tree id; omit to use the nearest tree}',
+    '- craft {recipe: bread | planks | tools} (goes to the bakery/workshop)',
+    '- buy / sell {item, quantity} (goes to the town market)',
+    '- give {target: person id, item + quantity and/or coins}',
+    '- offer_trade {target: person id, give_item/give_quantity/give_coins, ask_item/ask_quantity/ask_coins}',
+    '- respond_offer {offer_id, accept: true or false}',
+    '- steal {target: person id, item (omit for coins)}',
+    '- attack {target: person id}',
     '',
     'Answer by calling the decide tool once. Plan the next few hours in 2–6 concrete steps (include rests if you want to idle); you will decide again when the plan is done or something happens, such as someone speaking to you.',
   ]
@@ -97,6 +111,16 @@ function triggerText(p: Perception): string {
       return `Your body demands attention: you are ${needWord(t.need, p.self.needs[t.need]) || 'uncomfortable'}.`;
     case 'spoken_to':
       return `${t.fromName} (${t.fromId}) just said to you: “${t.message}”`;
+    case 'offer_received':
+      return `${t.fromName} (${t.fromId}) offers you ${t.text} (offer ${t.offerId}). Accept or decline with respond_offer, or ignore it.`;
+    case 'offer_answered':
+      return `${t.byName} ${t.accepted ? 'accepted' : 'turned down'} your trade offer.`;
+    case 'robbed':
+      return t.byId
+        ? `${t.byName} (${t.byId}) just stole from you: ${t.what}!`
+        : `You notice some of your things are missing: ${t.what}.`;
+    case 'attacked':
+      return `${t.byName} (${t.byId}) just attacked you!`;
     case 'check_in':
       return 'A few hours have passed. Take stock of your situation.';
   }
@@ -144,6 +168,29 @@ export function userPrompt(p: Perception): string {
     }
   } else {
     lines.push('You do not know any places here yet.');
+  }
+  if (p.treesNearby > 0) lines.push(`There are ${p.treesNearby} trees within sight.`);
+  if (p.marketPrices) {
+    const d = p.clock.day - Math.floor(p.marketPrices.tick / 1440) - 1;
+    const when = d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+    const list = Object.entries(p.marketPrices.prices)
+      .map(([i, q]) => `${ITEM_LABELS[i as ItemName].toLowerCase()} buy ${q!.buy}/sell ${q!.sell}`)
+      .join('; ');
+    lines.push('');
+    lines.push(
+      `Market prices you saw ${when} (coins each; buy = what you pay, sell = what you get): ${list}.`,
+    );
+  }
+  if (p.offers.length) {
+    lines.push('');
+    lines.push('Open trade offers:');
+    for (const o of p.offers) {
+      lines.push(
+        o.toName === 'you'
+          ? `- [${o.id}] ${o.fromName} offers you ${describeBundle(o.give)} for your ${describeBundle(o.ask)}.`
+          : `- [${o.id}] you offered ${o.toName} ${describeBundle(o.give)} for ${describeBundle(o.ask)} (waiting).`,
+      );
+    }
   }
   if (p.knownPeople.length) {
     lines.push('');

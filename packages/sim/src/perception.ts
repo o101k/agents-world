@@ -162,6 +162,8 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       distance: distanceToObject(o, agent),
       lastSeenAmount: k.lastSeenAmount,
       lastSeenTick: k.lastSeenTick,
+      ...(state.resources[id]?.item ? { produce: state.resources[id]!.item } : {}),
+      ...(ownerLabel(state, agent, id) ? { owner: ownerLabel(state, agent, id)! } : {}),
     });
   }
   knownPlaces.sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
@@ -230,5 +232,47 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     personality: { ...agent.personality },
     effort: agent.brain.effort,
     remainingPlan: [...agent.plan],
+    marketPrices: agent.priceKnowledge
+      ? { tick: agent.priceKnowledge.tick, prices: { ...agent.priceKnowledge.prices } }
+      : null,
+    offers: state.offers
+      .filter((o) => o.to === agent.id || o.from === agent.id)
+      .map((o) => {
+        const from = state.agents.find((a) => a.id === o.from)!;
+        const to = state.agents.find((a) => a.id === o.to)!;
+        return {
+          id: o.id,
+          fromId: o.from,
+          fromName: o.from === agent.id ? 'you' : nameAsKnown(agent, from),
+          toId: o.to,
+          toName: o.to === agent.id ? 'you' : nameAsKnown(agent, to),
+          give: o.give,
+          ask: o.ask,
+          expiresTick: o.expiresTick,
+        };
+      }),
+    treesNearby: senses ? countTrees(state, agent, isNight ? 4 : 8) : 0,
   };
+}
+
+function countTrees(state: WorldState, agent: Agent, radius: number): number {
+  let n = 0;
+  for (const o of state.map.objects) {
+    if (o.kind === 'tree' && Math.abs(o.x - agent.x) <= radius && Math.abs(o.y - agent.y) <= radius)
+      n++;
+  }
+  return n;
+}
+
+/** Who owns a building, as this agent would name them. */
+function ownerLabel(state: WorldState, agent: Agent, objectId: string): string | null {
+  const owners = state.owners[objectId];
+  if (!owners?.length) return null;
+  if (owners.includes(agent.id)) return 'you';
+  const names = owners
+    .map((id) => state.agents.find((a) => a.id === id))
+    .filter((a): a is Agent => Boolean(a))
+    .map((a) => agent.people[a.id]?.name ?? null)
+    .filter(Boolean);
+  return names.length ? names.join(' & ') : 'someone you don’t know';
 }

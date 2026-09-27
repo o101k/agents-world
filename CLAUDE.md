@@ -297,6 +297,21 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — Phase 3 details.** (a) Fields are common land anyone may harvest; odd-numbered
+  fields grow wheat, even ones vegetables. Trees give wood (4 each, regrowing 1/day). (b) Recipes:
+  bread (3 wheat → 2) at the bakery, planks (2 wood → 2) and tools (3 planks → 1, building skill ≥ 15)
+  at the workshop; skill ≥ 50 adds a bonus unit; carrying tools boosts gathering/chopping/fishing and
+  tools occasionally break. (c) The town market prices each good by its stock (0.5×–2× base, with a
+  buy/sell spread), drifts 30% back toward normal stock each day, and refuses to buy beyond 3× normal
+  stock. It has unlimited coins, so money enters the economy when villagers sell. (d) Ownership:
+  households own their houses, the baker the bakery and the carpenter the workshop; using someone
+  else's building isn't blocked. (e) No formal employment contracts or enforced loans: hiring and
+  lending happen through conversation, gifts and trade offers, and are remembered by those involved.
+  (f) No police or courts: theft and violence have social consequences only (victims and witnesses
+  remember, and talk). Theft success/detection and fight damage are random; a fight can kill.
+  (g) Repeated failed actions make an agent pause (5 min per failure, up to an hour) before its next
+  decision, so a confused AI can't burn money in a loop. (h) Building new houses moves to Phase 4,
+  alongside families that need homes.
 - **2026-09-27 — Phase 2 details.** (a) **Instinct:** at the Frugal effort level, routine bodily needs
   (a need dropping low, or bedtime when a plan ends) are handled by the free rulebook instead of an AI
   call; everything social, surprising or open-ended still goes to the AI. Standard/Deep send

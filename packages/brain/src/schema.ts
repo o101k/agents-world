@@ -1,12 +1,15 @@
 import {
-  ITEM_LABELS,
+  ITEM_NAMES,
+  RECIPE_NAMES,
+  type Bundle,
   type Decision,
   type Intent,
   type ItemName,
   type Perception,
+  type RecipeName,
 } from '@aw/shared';
 
-const ITEMS = Object.keys(ITEM_LABELS) as ItemName[];
+const ITEMS = ITEM_NAMES;
 export const ACTIONS = [
   'go_to',
   'gather',
@@ -45,9 +48,28 @@ export const DECIDE_SCHEMA = {
             description:
               'Id of a place (e.g. "well-1", "berry_bush-12") or person (e.g. "a3"). Omit if not needed.',
           },
-          item: { type: 'string', enum: ITEMS, description: 'For eat: which food.' },
+          item: {
+            type: 'string',
+            enum: ITEMS,
+            description: 'For eat / buy / sell / give / steal: which item.',
+          },
+          quantity: { type: 'integer', description: 'For buy / sell / give: how many.' },
+          coins: { type: 'integer', description: 'For give: coins to hand over.' },
           minutes: { type: 'integer', description: 'For rest: how long (1–600).' },
           message: { type: 'string', description: 'For talk_to: exactly what you say out loud.' },
+          recipe: { type: 'string', enum: RECIPE_NAMES, description: 'For craft.' },
+          give_item: {
+            type: 'string',
+            enum: ITEMS,
+            description: 'For offer_trade: item you give.',
+          },
+          give_quantity: { type: 'integer' },
+          give_coins: { type: 'integer' },
+          ask_item: { type: 'string', enum: ITEMS, description: 'For offer_trade: item you want.' },
+          ask_quantity: { type: 'integer' },
+          ask_coins: { type: 'integer' },
+          offer_id: { type: 'string', description: 'For respond_offer.' },
+          accept: { type: 'boolean', description: 'For respond_offer.' },
         },
         required: ['action'],
       },
@@ -71,8 +93,38 @@ interface RawStep {
   action?: unknown;
   target?: unknown;
   item?: unknown;
+  quantity?: unknown;
+  coins?: unknown;
   minutes?: unknown;
   message?: unknown;
+  recipe?: unknown;
+  give_item?: unknown;
+  give_quantity?: unknown;
+  give_coins?: unknown;
+  ask_item?: unknown;
+  ask_quantity?: unknown;
+  ask_coins?: unknown;
+  offer_id?: unknown;
+  accept?: unknown;
+}
+
+const asItem = (v: unknown): ItemName | undefined =>
+  typeof v === 'string' && (ITEMS as string[]).includes(v) ? (v as ItemName) : undefined;
+const asCount = (v: unknown): number => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 999) : 0;
+};
+function bundle(item: unknown, quantity: unknown, coins: unknown): Bundle {
+  const b: Bundle = {};
+  const i = asItem(item);
+  const q = asCount(quantity) || (i ? 1 : 0);
+  if (i && q) {
+    b.item = i;
+    b.quantity = q;
+  }
+  const c = asCount(coins);
+  if (c) b.coins = c;
+  return b;
 }
 
 /** Map the model's raw tool input to a Decision. Unusable steps are dropped, never guessed. */
@@ -125,6 +177,55 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
             message: step.message.trim().slice(0, 600),
           });
         }
+        break;
+      case 'chop_wood':
+        plan.push(target ? { type: 'chop_wood', objectId: target } : { type: 'chop_wood' });
+        break;
+      case 'craft':
+        if (typeof step.recipe === 'string' && (RECIPE_NAMES as string[]).includes(step.recipe)) {
+          plan.push({ type: 'craft', recipe: step.recipe as RecipeName });
+        }
+        break;
+      case 'buy':
+      case 'sell': {
+        const item = asItem(step.item);
+        if (item) plan.push({ type: action, item, quantity: asCount(step.quantity) || 1 });
+        break;
+      }
+      case 'give': {
+        const gift = bundle(step.item, step.quantity, step.coins);
+        if (target && (gift.item || gift.coins)) plan.push({ type: 'give', agentId: target, gift });
+        break;
+      }
+      case 'offer_trade': {
+        const give = bundle(step.give_item, step.give_quantity, step.give_coins);
+        const ask = bundle(step.ask_item, step.ask_quantity, step.ask_coins);
+        if (target && (give.item || give.coins || ask.item || ask.coins)) {
+          plan.push({ type: 'offer_trade', agentId: target, give, ask });
+        }
+        break;
+      }
+      case 'respond_offer': {
+        const offerId =
+          typeof step.offer_id === 'string' && step.offer_id.trim() ? step.offer_id.trim() : target;
+        if (offerId)
+          plan.push({
+            type: 'respond_offer',
+            offerId,
+            accept: step.accept === true || step.accept === 'true',
+          });
+        break;
+      }
+      case 'steal': {
+        const item = asItem(step.item);
+        if (target)
+          plan.push(
+            item ? { type: 'steal', agentId: target, item } : { type: 'steal', agentId: target },
+          );
+        break;
+      }
+      case 'attack':
+        if (target) plan.push({ type: 'attack', agentId: target });
         break;
     }
   }

@@ -9,6 +9,20 @@ import type { Agent } from './agent.ts';
 import { mapCache } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
+/** Owners' display names for every owned building. */
+export function ownerNames(state: WorldState): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [id, ids] of Object.entries(state.owners)) {
+    out[id] = ids
+      .map((aid) => state.agents.find((a) => a.id === aid))
+      .filter((a): a is Agent => Boolean(a))
+      .map(
+        (a) => (a.familyName ? `${a.name} ${a.familyName}` : a.name) + (a.alive ? '' : ' (dead)'),
+      );
+  }
+  return out;
+}
+
 export function activity(agent: Agent): Activity {
   if (!agent.alive) return 'dead';
   if (agent.asleep) return 'sleeping';
@@ -16,7 +30,10 @@ export function activity(agent: Agent): Activity {
     case 'walk':
       return 'walking';
     case 'gather':
+    case 'chop':
       return 'gathering';
+    case 'craft':
+      return 'working';
     case 'eat':
       return 'eating';
     case 'drink':
@@ -60,6 +77,8 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
     else if (a.type === 'gather') currentAction = `Gathering at ${name(a.objectId)}`;
     else if (a.type === 'eat') currentAction = `Eating ${a.item}`;
     else if (a.type === 'drink') currentAction = 'Drinking';
+    else if (a.type === 'chop') currentAction = 'Chopping wood';
+    else if (a.type === 'craft') currentAction = `Making ${a.recipe}`;
     else if (a.type === 'sleep') currentAction = 'Sleeping';
     else currentAction = 'Resting';
   }
@@ -99,6 +118,9 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
       .sort((a, b) => b.familiarity - a.familiarity),
     spentUsd: agent.spentUsd,
     decisions: agent.decisions,
+    owns: Object.entries(state.owners)
+      .filter(([, ids]) => ids.includes(agent.id))
+      .map(([id]) => ({ id, name: name(id) })),
     death: agent.death,
     bornTick: agent.bornTick,
   };

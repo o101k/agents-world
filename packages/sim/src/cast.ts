@@ -144,6 +144,8 @@ export function createAgent(
     convo: {},
     spentUsd: 0,
     decisions: 0,
+    priceKnowledge: null,
+    failStreak: 0,
   };
 }
 

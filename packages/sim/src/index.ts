@@ -13,3 +13,4 @@ export * from './spatial.ts';
 export * from './views.ts';
 export * from './walkability.ts';
 export * from './world.ts';
+export * from './market.ts';

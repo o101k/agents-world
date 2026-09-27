@@ -3,7 +3,7 @@
 A short technical design of what is built so far. The full plan, decisions and roadmap live in
 [`../CLAUDE.md`](../CLAUDE.md). Updated at the end of every phase.
 
-_Last updated: Phase 2._
+_Last updated: Phase 3._
 
 ## Processes
 

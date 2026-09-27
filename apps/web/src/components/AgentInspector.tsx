@@ -21,6 +21,7 @@ const ACTIVITY_LABEL: Record<string, string> = {
   drinking: 'Drinking',
   gathering: 'Gathering',
   resting: 'Resting',
+  working: 'Working',
   thinking: 'Thinking…',
   dead: 'Dead',
 };
@@ -131,6 +132,15 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
           <dd>{agent.money} coins</dd>
           <dt>Home</dt>
           <dd>{agent.homeName ?? 'None'}</dd>
+          {agent.owns.filter((o) => o.id !== agent.homeId).length > 0 && (
+            <FactRow
+              label="Owns"
+              value={agent.owns
+                .filter((o) => o.id !== agent.homeId)
+                .map((o) => o.name)
+                .join(', ')}
+            />
+          )}
           {Object.entries(agent.inventory).map(([item, n]) => (
             <FactRow key={item} label={item[0]!.toUpperCase() + item.slice(1)} value={String(n)} />
           ))}

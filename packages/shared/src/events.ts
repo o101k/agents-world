@@ -13,7 +13,13 @@ export type EventKind =
   | 'decided'
   | 'said'
   | 'cap_reached'
-  | 'observer';
+  | 'observer'
+  | 'crafted'
+  | 'traded'
+  | 'gave'
+  | 'offer'
+  | 'stole'
+  | 'attacked';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

@@ -1,4 +1,5 @@
 import type {
+  RecipeName,
   Appearance,
   BrainConfig,
   DecisionTrigger,
@@ -41,6 +42,8 @@ export interface KnownPlaceState {
 export type ActionState =
   | { type: 'walk'; path: Point[]; step: number; then: Intent | null }
   | { type: 'gather'; objectId: string; until: number }
+  | { type: 'chop'; objectId: string; until: number }
+  | { type: 'craft'; recipe: RecipeName; until: number }
   | { type: 'eat'; item: ItemName; until: number }
   | { type: 'drink'; until: number }
   | { type: 'sleep'; since: number }
@@ -103,6 +106,13 @@ export interface Agent {
   /** AI spending on this agent's decisions (USD) and number of decisions. */
   spentUsd: number;
   decisions: number;
+  /** Consecutive failed actions; after a few, the agent pauses before deciding again (saves AI calls). */
+  failStreak: number;
+  /** Market prices as last seen in person. */
+  priceKnowledge: {
+    tick: number;
+    prices: Partial<Record<ItemName, { buy: number; sell: number }>>;
+  } | null;
 }
 
 export const MEMORY_LIMIT = 300;

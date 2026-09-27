@@ -7,8 +7,11 @@ import {
   type MapSize,
   type WireMap,
   type WorldMap,
+  type Bundle,
+  type ItemName,
   type WorldSettings,
 } from '@aw/shared';
+import { initialMarket, type MarketState } from './market.ts';
 import type { Agent } from './agent.ts';
 import { SAMPLE_CAST, type AgentSpec } from './cast.ts';
 import type { Agent as AgentT } from './agent.ts';
@@ -17,7 +20,7 @@ import { addAgent, introduceResidents } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 3;
+export const WORLD_STATE_VERSION = 4;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -25,6 +28,19 @@ export interface ResourceState {
   max: number;
   /** Units regrown per in-game day. */
   regenPerDay: number;
+  /** What it yields (fields: wheat or vegetables; trees: wood). */
+  item?: ItemName;
+}
+
+/** A trade proposal waiting for an answer. */
+export interface Offer {
+  id: string;
+  from: string;
+  to: string;
+  give: Bundle;
+  ask: Bundle;
+  createdTick: number;
+  expiresTick: number;
 }
 
 /**
@@ -42,6 +58,11 @@ export interface WorldState {
   agents: Agent[];
   resources: Record<string, ResourceState>;
   nextAgentNum: number;
+  market: MarketState;
+  offers: Offer[];
+  nextOfferNum: number;
+  /** Owners of buildings by object id (houses: the household; bakery/workshop: their keepers). */
+  owners: Record<string, string[]>;
 }
 
 /** JSON-safe form of WorldState, used for snapshots. */
@@ -92,13 +113,38 @@ export function createWorldState({
     agents: [],
     resources: {},
     nextAgentNum: 1,
+    market: initialMarket(),
+    offers: [],
+    nextOfferNum: 1,
+    owners: {},
   };
   withRng(state, (r) => {
     state.resources = initialResources(map, r);
     for (const spec of cast) addAgent(state, { knowsVillage: true, ...spec }, r);
   });
   introduceResidents(state);
+  assignOwnership(state);
   return state;
+}
+
+/** Households own their houses; the baker keeps the bakery and the carpenter the workshop. */
+export function assignOwnership(state: WorldState): void {
+  for (const a of state.agents) {
+    if (!a.alive) continue;
+    if (a.homeId) {
+      const list = (state.owners[a.homeId] ??= []);
+      if (!list.includes(a.id)) list.push(a.id);
+    }
+    const occ = a.occupation.toLowerCase();
+    for (const [kind, word] of [
+      ['bakery', 'baker'],
+      ['workshop', 'carpenter'],
+    ] as const) {
+      if (!occ.startsWith(word)) continue;
+      const b = state.map.objects.find((o) => o.kind === kind);
+      if (b && !state.owners[b.id]?.length) state.owners[b.id] = [a.id];
+    }
+  }
 }
 
 /** Run `fn` with the world's RNG and store the advanced RNG state back. */
@@ -115,12 +161,35 @@ export function serializeWorldState(state: WorldState): SerializedWorldState {
 
 export function deserializeWorldState(data: SerializedWorldState | LegacyV1State): WorldState {
   if (data.version === 1) return upgradeV1(data as LegacyV1State);
-  if (data.version === 2)
-    return upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
+  if (data.version === 2) {
+    return upgradeV3(upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) }));
+  }
+  if (data.version === 3)
+    return upgradeV3({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
   if (data.version !== WORLD_STATE_VERSION) {
     throw new Error(`Unsupported world state version ${data.version}`);
   }
   return { ...(data as SerializedWorldState), map: decodeMap(data.map) };
+}
+
+/** Phase 2 → 3: add the market, trade offers, ownership, field crops and price knowledge. */
+function upgradeV3(state: WorldState): WorldState {
+  state.version = WORLD_STATE_VERSION;
+  state.market ??= initialMarket();
+  state.offers ??= [];
+  state.nextOfferNum ??= 1;
+  state.owners ??= {};
+  for (const o of state.map.objects) {
+    const r = state.resources[o.id];
+    if (o.kind === 'field' && r && !r.item)
+      r.item = Number(o.id.split('-')[1] ?? 1) % 2 === 1 ? 'wheat' : 'vegetables';
+  }
+  for (const a of state.agents as Partial<AgentT>[]) {
+    a.priceKnowledge ??= null;
+    a.failStreak ??= 0;
+  }
+  assignOwnership(state);
+  return state;
 }
 
 /** Phase 1 → 2: add memories, people, speech, spending and the world's default brain. */
@@ -163,11 +232,16 @@ function upgradeV1(old: LegacyV1State): WorldState {
     agents: [],
     resources: {},
     nextAgentNum: 1,
+    market: initialMarket(),
+    offers: [],
+    nextOfferNum: 1,
+    owners: {},
   };
   withRng(state, (r) => {
     state.resources = initialResources(state.map, r);
     for (const spec of SAMPLE_CAST) addAgent(state, { knowsVillage: true, ...spec }, r);
   });
   introduceResidents(state);
+  assignOwnership(state);
   return state;
 }

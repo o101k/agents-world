@@ -53,6 +53,7 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
   });
 
   app.get<IdParams>('/api/worlds/:id/view', async (req) => worlds.view(req.params.id));
+  app.get<IdParams>('/api/worlds/:id/market', async (req) => worlds.market(req.params.id));
 
   app.post<IdParams>('/api/worlds/:id/control', async (req) => {
     worlds.control(req.params.id, ControlRequest.parse(req.body ?? {}));

@@ -4,8 +4,10 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 2 (minds).** Villagers live in a generated village with needs (food, water, sleep,
-warmth), gather food, drink, sleep at home, talk to each other, remember, and can die of neglect.
+**Status: Phase 3 (work, trade, money).** Villagers live in a generated village with needs (food,
+water, sleep, warmth); they farm, fish, forage and chop wood, bake bread and make planks and tools,
+buy and sell at the town market, give gifts, make trade offers, talk and remember — and can also
+steal, fight and die.
 Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
 such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
@@ -74,6 +76,11 @@ Check the **Prices** table in settings so the meter matches your provider's pric
 
 In a person's inspector you can read their current thought, plan, memories and the people they know,
 and open **Raw AI exchanges** to see the exact prompt and reply behind recent decisions.
+
+**The economy**: fields grow wheat or vegetables, trees give wood, the bakery turns wheat into bread
+and the workshop turns wood into planks and tools. The town market (click it, or see the World tab)
+buys and sells everything at prices that follow supply and demand. Villagers can give things to each
+other and make trade offers; they only know market prices they've seen themselves.
 
 **+ Spawn** brings a new person into the world from your description (the world's default AI fleshes
 them out). They arrive on the road knowing no one.

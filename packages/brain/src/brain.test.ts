@@ -68,6 +68,9 @@ function perception(over: Partial<Perception> = {}): Perception {
     },
     effort: 'frugal',
     remainingPlan: [],
+    marketPrices: null,
+    offers: [],
+    treesNearby: 3,
     ...over,
   };
 }
@@ -133,6 +136,57 @@ describe('parseDecision', () => {
       { type: 'rest', minutes: 600 },
     ]);
     expect(d.remember).toEqual({ text: 'Bush by the river has berries', importance: 4 });
+  });
+
+  it('maps economy and conflict actions', () => {
+    const d = parseDecision(
+      {
+        thought: '',
+        goal: '',
+        plan: [
+          { action: 'chop_wood' },
+          { action: 'craft', recipe: 'planks' },
+          { action: 'buy', item: 'bread', quantity: 2 },
+          { action: 'sell', item: 'wood' },
+          { action: 'give', target: 'a2', coins: 5 },
+          {
+            action: 'offer_trade',
+            target: 'a2',
+            give_item: 'fish',
+            give_quantity: 2,
+            ask_coins: 10,
+          },
+          { action: 'respond_offer', offer_id: 'o3', accept: true },
+          { action: 'steal', target: 'a2' },
+        ],
+      },
+      perception(),
+    );
+    expect(d.plan).toEqual([
+      { type: 'chop_wood' },
+      { type: 'craft', recipe: 'planks' },
+      { type: 'buy', item: 'bread', quantity: 2 },
+      { type: 'sell', item: 'wood', quantity: 1 },
+      { type: 'give', agentId: 'a2', gift: { coins: 5 } },
+      {
+        type: 'offer_trade',
+        agentId: 'a2',
+        give: { item: 'fish', quantity: 2 },
+        ask: { coins: 10 },
+      },
+      { type: 'respond_offer', offerId: 'o3', accept: true },
+      { type: 'steal', agentId: 'a2' },
+    ]);
+    const d2 = parseDecision(
+      {
+        plan: [
+          { action: 'attack', target: 'a2' },
+          { action: 'craft', recipe: 'cake' },
+        ],
+      },
+      perception(),
+    );
+    expect(d2.plan).toEqual([{ type: 'attack', agentId: 'a2' }]);
   });
 
   it('never returns an empty plan', () => {

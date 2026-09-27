@@ -62,6 +62,7 @@ export type Activity =
   | 'drinking'
   | 'gathering'
   | 'resting'
+  | 'working'
   | 'thinking'
   | 'dead';
 
@@ -127,6 +128,8 @@ export interface AgentDetail extends AgentView {
   bornTick: number;
   spentUsd: number;
   decisions: number;
+  /** Buildings they own (or co-own). */
+  owns: { id: string; name: string }[];
 }
 
 /** One exchange with a brain, for the mind inspector. */

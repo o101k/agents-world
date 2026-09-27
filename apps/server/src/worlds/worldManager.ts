@@ -11,11 +11,19 @@ import {
   type AgentDetail,
   type BrainConfig,
   type LlmCallView,
+  type MarketResponse,
   type SpawnRequest,
   type WorldMeta,
   type WorldViewResponse,
 } from '@aw/shared';
-import { agentDetail, agentView, createWorldState, type TickInput } from '@aw/sim';
+import {
+  agentDetail,
+  agentView,
+  allQuotes,
+  createWorldState,
+  ownerNames,
+  type TickInput,
+} from '@aw/sim';
 import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
 
@@ -145,6 +153,16 @@ export class WorldManager {
       runner: runner.status(),
       agents: state.agents.map(agentView),
       resources: runner.resourceAmounts(),
+      owners: ownerNames(state),
+    };
+  }
+
+  market(worldId: string): MarketResponse {
+    const state = this.requireActive(worldId).state;
+    return {
+      stock: { ...state.market.stock },
+      quotes: allQuotes(state.market),
+      moneySupply: state.agents.filter((a) => a.alive).reduce((s, a) => s + a.money, 0),
     };
   }
 

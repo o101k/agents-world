@@ -46,6 +46,15 @@ export interface WorldViewResponse {
   agents: AgentView[];
   /** Visible resource amounts by object id (berries on bushes, crops in fields). */
   resources: Record<string, number>;
+  /** Owners' names by object id. */
+  owners: Record<string, string[]>;
+}
+
+export interface MarketResponse {
+  stock: Record<string, number>;
+  quotes: Record<string, { buy: number; sell: number }>;
+  /** Total coins held by living villagers. */
+  moneySupply: number;
 }
 
 export const ControlRequest = z.object({

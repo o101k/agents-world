@@ -11,6 +11,7 @@ import { api } from '../api.ts';
 import { AgentInspector } from '../components/AgentInspector.tsx';
 import { EventLog } from '../components/EventLog.tsx';
 import { BrainEditor } from '../components/BrainEditor.tsx';
+import { MarketPanel } from '../components/MarketPanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
 import { SpendMeter } from '../components/SpendMeter.tsx';
@@ -23,13 +24,13 @@ import { useWorld } from '../worldStore.ts';
 
 const OBJECT_BLURBS: Partial<Record<MapObjectKind, string>> = {
   house: 'A family home. Shelter from cold and storms, and a place to sleep.',
-  bakery: 'Turns flour into bread. Someone will need to run it.',
-  workshop: 'Where wood becomes planks, tools and furniture.',
   market: 'The town market buys and sells basic goods at prices driven by supply and demand.',
   well: 'Fresh drinking water for everyone.',
-  field: 'Farmland. Vegetables grow back over time.',
+  field: 'Common farmland anyone may work. Crops grow back over time.',
+  bakery: 'Turns wheat into bread (3 wheat → 2 bread).',
+  workshop: 'Turns wood into planks (2 → 2) and planks into tools (3 → 1).',
   dock: 'A good spot for fishing.',
-  tree: 'Wood for building and fires.',
+  tree: 'Chop it for wood. It grows back slowly.',
   berry_bush: 'Wild berries — free food for whoever finds them. They grow back slowly.',
   rock: 'Stone for building.',
 };
@@ -186,7 +187,12 @@ export function WorldScreen({ worldId }: { worldId: string }) {
           <div className="tab-body">
             {tab === 'selected' &&
               (selection ? (
-                <SelectionDetails worldId={worldId} selection={selection} map={map} />
+                <SelectionDetails
+                  worldId={worldId}
+                  selection={selection}
+                  map={map}
+                  ownersById={view?.owners ?? {}}
+                />
               ) : (
                 <p className="muted">Click a person or anything on the map.</p>
               ))}
@@ -229,6 +235,8 @@ function WorldInfo({
           <FactRow key={k} label={`${OBJECT_LABELS[k]}s`} value={counts.get(k) ?? 0} />
         ))}
       </dl>
+      <h3>Town market</h3>
+      <MarketPanel worldId={worldId} />
       <h3>Default brain</h3>
       <p className="muted small">
         Used for newborns and spawned people. You can also set each person’s brain in their
@@ -277,10 +285,12 @@ function SelectionDetails({
   worldId,
   selection,
   map,
+  ownersById,
 }: {
   worldId: string;
   selection: MapSelection;
   map: WorldMap | null;
+  ownersById: Record<string, string[]>;
 }) {
   const resources = useWorld((s) => s.resources);
   if (selection.kind === 'agent')
@@ -288,7 +298,22 @@ function SelectionDetails({
   if (selection.kind === 'object') {
     const object = map?.objects.find((o) => o.id === selection.id);
     if (!object) return null;
-    const amount = resources[object.id];
+    const amount = resources[object.id] ?? (object.kind === 'tree' ? 4 : undefined);
+    const owners = ownersById[object.id];
+    const crop =
+      object.kind === 'field'
+        ? Number(object.id.split('-')[1]) % 2 === 1
+          ? 'Wheat'
+          : 'Vegetables'
+        : null;
+    const amountLabel =
+      object.kind === 'berry_bush'
+        ? 'Berries'
+        : object.kind === 'tree'
+          ? 'Wood left'
+          : crop
+            ? `${crop} ready`
+            : 'Amount';
     return (
       <div className="selection">
         <div className="selection-title">{object.name ?? OBJECT_LABELS[object.kind]}</div>
@@ -297,12 +322,17 @@ function SelectionDetails({
           {object.w > 1 || object.h > 1 ? ` · ${object.w}×${object.h}` : ''}
         </div>
         {OBJECT_BLURBS[object.kind] && <p>{OBJECT_BLURBS[object.kind]}</p>}
+        {owners?.length ? (
+          <p>
+            <strong>Owned by:</strong> {owners.join(', ')}
+          </p>
+        ) : null}
         {amount !== undefined && (
           <p>
-            <strong>{object.kind === 'berry_bush' ? 'Berries' : 'Vegetables ready'}:</strong>{' '}
-            {amount}
+            <strong>{amountLabel}:</strong> {amount}
           </p>
         )}
+        {object.kind === 'market' && <MarketPanel worldId={worldId} />}
       </div>
     );
   }

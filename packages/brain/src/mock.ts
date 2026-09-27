@@ -1,15 +1,28 @@
-import type {
-  BrainConfig,
-  Decision,
-  DecisionRequest,
-  Intent,
-  ItemName,
-  KnownPlace,
-  Perception,
+import {
+  FOOD_ITEMS,
+  ITEMS,
+  type Bundle,
+  type BrainConfig,
+  type Decision,
+  type DecisionRequest,
+  type Intent,
+  type ItemName,
+  type KnownPlace,
+  type Perception,
 } from '@aw/shared';
 import type { BrainProvider, BrainResult } from './types.ts';
 
-const NUTRITION: Record<ItemName, number> = { bread: 30, fish: 25, vegetables: 18, berries: 8 };
+const NUTRITION = Object.fromEntries(FOOD_ITEMS.map((i) => [i, ITEMS[i].nutrition])) as Record<
+  ItemName,
+  number
+>;
+const value = (b: Bundle) =>
+  (b.coins ?? 0) + (b.item ? ITEMS[b.item].basePrice * (b.quantity ?? 0) : 0);
+
+/** What a person would pay at the market, as far as they know. */
+function knownBuyPrice(p: Perception, item: ItemName): number {
+  return p.marketPrices?.prices[item]?.buy ?? Math.ceil(ITEMS[item].basePrice * 1.2);
+}
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -62,12 +75,14 @@ export function mockDecide(p: Perception): Decision {
 
   const known = (kinds: string[]) => p.knownPlaces.filter((k) => kinds.includes(k.kind));
   const home = p.self.homeId ? p.knownPlaces.find((k) => k.id === p.self.homeId) : undefined;
-  const foodInBag = (Object.keys(NUTRITION) as ItemName[])
-    .filter((i) => (inventory[i] ?? 0) > 0)
-    .sort((a, b) => NUTRITION[b] - NUTRITION[a]);
+  const foodInBag = FOOD_ITEMS.filter((i) => (inventory[i] ?? 0) > 0).sort(
+    (a, b) => NUTRITION[b] - NUTRITION[a],
+  );
   const foodUnits = foodInBag.reduce((s, i) => s + (inventory[i] ?? 0), 0);
   const foodSources = (): KnownPlace[] => {
-    const sources = known(['berry_bush', 'field']).filter((k) => (k.lastSeenAmount ?? 1) >= 1);
+    const sources = known(['berry_bush', 'field']).filter(
+      (k) => (k.lastSeenAmount ?? 1) >= 1 && k.produce !== 'wheat',
+    );
     const docks = known(['dock']);
     const occ = p.self.occupation.toLowerCase();
     const prefer = (k: KnownPlace) =>
@@ -91,6 +106,45 @@ export function mockDecide(p: Perception): Decision {
     return true;
   };
 
+  if (p.trigger.kind === 'offer_received') {
+    const t = p.trigger;
+    const offer = p.offers.find((o) => o.id === t.offerId);
+    const rest = mockDecide({ ...p, trigger: { kind: 'plan_done' } });
+    if (!offer) return rest;
+    const fair = value(offer.give) >= value(offer.ask) * 0.9;
+    return {
+      thought: fair
+        ? `${t.fromName}'s offer seems fair. I'll take it.`
+        : `${t.fromName} wants too much. No deal.`,
+      goal: rest.goal,
+      plan: [{ type: 'respond_offer', offerId: offer.id, accept: fair }, ...rest.plan],
+    };
+  }
+  if (p.trigger.kind === 'robbed' && p.trigger.byId) {
+    return {
+      thought: `${p.trigger.byName} robbed me! I won't let that pass quietly.`,
+      goal: 'Confront the thief',
+      plan: [
+        { type: 'talk_to', agentId: p.trigger.byId, message: 'Thief! Give back what you took!' },
+      ],
+      remember: { text: `${p.trigger.byName} is a thief.`, importance: 8 },
+    };
+  }
+  if (p.trigger.kind === 'attacked') {
+    const flee: Intent[] = home
+      ? [
+          { type: 'go_to', target: { objectId: home.id } },
+          { type: 'rest', minutes: 30 },
+        ]
+      : [{ type: 'explore' }];
+    return {
+      thought: `${p.trigger.byName} hurt me! I need to get away.`,
+      goal: 'Get to safety',
+      plan: [{ type: 'talk_to', agentId: p.trigger.byId, message: 'Stop! Help!' }, ...flee],
+      remember: { text: `${p.trigger.byName} attacked me. They are dangerous.`, importance: 9 },
+    };
+  }
+
   // Thirst first: it kills fastest.
   if (needs.water < 45) {
     const source = known(['well', 'dock']).sort((a, b) => a.distance - b.distance)[0];
@@ -106,6 +160,25 @@ export function mockDecide(p: Perception): Decision {
       plan.push({ type: 'eat', item: foodInBag[0]! });
       thoughts.push(`Time to eat some ${foodInBag[0]}.`);
       goal ||= 'Eat something';
+    } else if (
+      known(['market']).length > 0 &&
+      p.self.money >= knownBuyPrice(p, 'bread') &&
+      (roll < 0.5 || foodSources().length === 0)
+    ) {
+      const item: ItemName = p.self.money >= knownBuyPrice(p, 'bread') * 2 ? 'bread' : 'vegetables';
+      plan.push({ type: 'buy', item, quantity: 2 }, { type: 'eat', item });
+      thoughts.unshift("I'm hungry. I'll buy something at the market.");
+      goal ||= 'Buy food';
+    } else if (
+      p.personality.agreeableness < 30 &&
+      needs.food < 20 &&
+      p.visibleAgents.length > 0 &&
+      roll < 0.4
+    ) {
+      const mark = p.visibleAgents[0]!;
+      plan.push({ type: 'steal', agentId: mark.id, item: 'bread' }, { type: 'eat', item: 'bread' });
+      thoughts.unshift(`I'm starving and ${mark.name} surely has food. Nobody needs to know.`);
+      goal ||= 'Take some food';
     } else if (gatherPlan()) {
       const last = plan[plan.length - 1] as { objectId: string };
       const src = p.knownPlaces.find((k) => k.id === last.objectId)!;
@@ -142,7 +215,7 @@ export function mockDecide(p: Perception): Decision {
 
   if (plan.length > 0) return { thought: thoughts.join(' '), goal, plan };
 
-  // Daytime: stock up on food, otherwise wander or rest.
+  // Daytime: stock up on food first.
   if (foodUnits < 4 && gatherPlan()) {
     return {
       thought: `My food stores are low. ${thoughts.join(' ')}`,
@@ -150,6 +223,8 @@ export function mockDecide(p: Perception): Decision {
       plan,
     };
   }
+  const work = workPlan(p, roll);
+  if (work) return work;
   if (roll < 0.35) {
     return {
       thought: 'Nothing pressing. I feel like wandering.',
@@ -179,6 +254,126 @@ export function mockDecide(p: Perception): Decision {
           ]
         : [{ type: 'rest', minutes: 60 }],
   };
+}
+
+/** A day's work by occupation, then selling the surplus at the market. */
+function workPlan(p: Perception, roll: number): Decision | null {
+  if (roll > 0.75) return null; // everyone needs some time off
+  const inv = p.self.inventory;
+  const have = (i: ItemName) => inv[i] ?? 0;
+  const occ = p.self.occupation.toLowerCase();
+  const place = (kind: string, produce?: ItemName) =>
+    p.knownPlaces
+      .filter(
+        (k) =>
+          k.kind === kind && (!produce || k.produce === produce) && (k.lastSeenAmount ?? 1) >= 1,
+      )
+      .sort((a, b) => a.distance - b.distance)[0];
+  const sellSurplus = (item: ItemName, keep: number): Intent[] =>
+    have(item) > keep ? [{ type: 'sell', item, quantity: have(item) - keep }] : [];
+
+  if (occ.includes('fish')) {
+    const dock = place('dock');
+    if (!dock) return null;
+    return {
+      thought: 'The fish are biting today, I can feel it.',
+      goal: 'Fish and sell the catch',
+      plan: [
+        { type: 'gather', objectId: dock.id },
+        { type: 'gather', objectId: dock.id },
+        { type: 'gather', objectId: dock.id },
+        ...sellSurplus('fish', 2),
+      ],
+    };
+  }
+  if (occ.includes('baker')) {
+    if (have('wheat') >= 3) {
+      return {
+        thought: 'Time to bake.',
+        goal: 'Bake bread',
+        plan: [{ type: 'craft', recipe: 'bread' }, ...sellSurplus('bread', 3)],
+      };
+    }
+    if (have('bread') > 4) {
+      return {
+        thought: 'I have more bread than I can eat. To the market.',
+        goal: 'Sell bread',
+        plan: sellSurplus('bread', 3),
+      };
+    }
+    const marketOut = p.recent.some((r) => r.includes('market had no wheat'));
+    if (p.self.money >= knownBuyPrice(p, 'wheat') * 3 && roll < 0.4 && !marketOut) {
+      return {
+        thought: "I'm out of wheat. I'll buy some and bake.",
+        goal: 'Buy wheat and bake',
+        plan: [
+          { type: 'buy', item: 'wheat', quantity: 3 },
+          { type: 'craft', recipe: 'bread' },
+        ],
+      };
+    }
+    const field = place('field', 'wheat');
+    if (field) {
+      return {
+        thought: "I'll fetch wheat myself.",
+        goal: 'Gather wheat',
+        plan: [
+          { type: 'gather', objectId: field.id },
+          { type: 'gather', objectId: field.id },
+          { type: 'craft', recipe: 'bread' },
+        ],
+      };
+    }
+  }
+  if (occ.includes('farm')) {
+    const field = place('field', roll < 0.35 ? 'wheat' : 'vegetables') ?? place('field');
+    if (!field) return null;
+    const crop: ItemName = field.produce ?? 'vegetables';
+    return {
+      thought: 'The fields need tending.',
+      goal: 'Harvest and sell',
+      plan: [
+        { type: 'gather', objectId: field.id },
+        { type: 'gather', objectId: field.id },
+        ...sellSurplus(crop, crop === 'wheat' ? 0 : 4),
+      ],
+    };
+  }
+  if (occ.includes('carpenter') || occ.includes('odd') || occ.includes('travel')) {
+    if (occ.includes('carpenter') && have('planks') >= 3 && have('tools') === 0) {
+      return {
+        thought: 'I should make myself some proper tools.',
+        goal: 'Make tools',
+        plan: [{ type: 'craft', recipe: 'tools' }],
+      };
+    }
+    if (occ.includes('carpenter') && have('wood') >= 2) {
+      return {
+        thought: 'Good timber. Into planks with it.',
+        goal: 'Make planks',
+        plan: [{ type: 'craft', recipe: 'planks' }, ...sellSurplus('planks', 3)],
+      };
+    }
+    return {
+      thought: 'There is always a need for wood.',
+      goal: 'Chop wood',
+      plan: [
+        { type: 'chop_wood' },
+        { type: 'chop_wood' },
+        ...(occ.includes('carpenter') ? [] : sellSurplus('wood', 0)),
+      ],
+    };
+  }
+  // Everyone else forages and sells a little.
+  const bush = p.knownPlaces.find((k) => k.kind === 'berry_bush' && (k.lastSeenAmount ?? 1) >= 2);
+  if (bush && roll < 0.4) {
+    return {
+      thought: 'I will pick berries.',
+      goal: 'Forage',
+      plan: [{ type: 'gather', objectId: bush.id }, ...sellSurplus('berries', 6)],
+    };
+  }
+  return null;
 }
 
 export class MockBrain implements BrainProvider {
