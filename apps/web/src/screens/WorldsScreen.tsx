@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { MAP_SIZES, formatClock, type MapSize, type WorldMeta } from '@aw/shared';
 import { api } from '../api.ts';
 import { formatDate } from '../format.ts';
+import { useSettings } from '../settingsStore.ts';
 import { useApp } from '../store.ts';
 
 const SIZE_LABELS: Record<MapSize, string> = {
@@ -39,7 +40,12 @@ export function WorldsScreen() {
   return (
     <div className="worlds-screen">
       <header className="worlds-header">
-        <h1>Agents World</h1>
+        <div className="row-between">
+          <h1>Agents World</h1>
+          <button className="btn" onClick={() => useSettings.getState().setOpen(true)}>
+            ⚙ AI settings
+          </button>
+        </div>
         <p className="muted">
           Each world is a separate village, saved on this computer. Only the open world runs; it
           keeps living while the helper is running, even with this tab closed.

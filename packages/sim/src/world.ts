@@ -11,11 +11,13 @@ import {
 } from '@aw/shared';
 import type { Agent } from './agent.ts';
 import { SAMPLE_CAST, type AgentSpec } from './cast.ts';
-import { addAgent } from './population.ts';
+import type { Agent as AgentT } from './agent.ts';
+import { DEFAULT_BRAIN } from './cast.ts';
+import { addAgent, introduceResidents } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 2;
+export const WORLD_STATE_VERSION = 3;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -85,7 +87,7 @@ export function createWorldState({
     seed,
     tick: startHour * TICKS_PER_HOUR,
     rng: rng.state(),
-    settings: { daysPerYear: DEFAULT_DAYS_PER_YEAR },
+    settings: { daysPerYear: DEFAULT_DAYS_PER_YEAR, defaultBrain: { ...DEFAULT_BRAIN } },
     map,
     agents: [],
     resources: {},
@@ -95,6 +97,7 @@ export function createWorldState({
     state.resources = initialResources(map, r);
     for (const spec of cast) addAgent(state, { knowsVillage: true, ...spec }, r);
   });
+  introduceResidents(state);
   return state;
 }
 
@@ -112,10 +115,31 @@ export function serializeWorldState(state: WorldState): SerializedWorldState {
 
 export function deserializeWorldState(data: SerializedWorldState | LegacyV1State): WorldState {
   if (data.version === 1) return upgradeV1(data as LegacyV1State);
+  if (data.version === 2)
+    return upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
   if (data.version !== WORLD_STATE_VERSION) {
     throw new Error(`Unsupported world state version ${data.version}`);
   }
   return { ...(data as SerializedWorldState), map: decodeMap(data.map) };
+}
+
+/** Phase 1 → 2: add memories, people, speech, spending and the world's default brain. */
+function upgradeV2(state: WorldState): WorldState {
+  state.version = WORLD_STATE_VERSION;
+  state.settings = {
+    ...state.settings,
+    defaultBrain: state.settings.defaultBrain ?? { ...DEFAULT_BRAIN },
+  };
+  for (const a of state.agents as Partial<AgentT>[]) {
+    a.memories ??= [];
+    a.people ??= {};
+    a.speech ??= null;
+    a.convo ??= {};
+    a.spentUsd ??= 0;
+    a.decisions ??= 0;
+  }
+  introduceResidents(state);
+  return state;
 }
 
 interface LegacyV1State {
@@ -134,7 +158,7 @@ function upgradeV1(old: LegacyV1State): WorldState {
     seed: old.seed,
     tick: Math.max(old.tick, 7 * TICKS_PER_HOUR),
     rng: old.rng,
-    settings: old.settings,
+    settings: { ...old.settings, defaultBrain: { ...DEFAULT_BRAIN } },
     map: decodeMap(old.map),
     agents: [],
     resources: {},
@@ -144,5 +168,6 @@ function upgradeV1(old: LegacyV1State): WorldState {
     state.resources = initialResources(state.map, r);
     for (const spec of SAMPLE_CAST) addAgent(state, { knowsVillage: true, ...spec }, r);
   });
+  introduceResidents(state);
   return state;
 }

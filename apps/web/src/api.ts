@@ -1,5 +1,12 @@
 import type {
   AgentResponse,
+  BrainConfig,
+  CallsResponse,
+  ModelPrice,
+  ProviderUpdate,
+  SettingsResponse,
+  SpawnRequest,
+  WorldSettings,
   ControlRequest,
   EventsQuery,
   EventsResponse,
@@ -43,4 +50,21 @@ export const api = {
   },
   agent: (id: string, agentId: string) =>
     request<AgentResponse>('GET', `/api/worlds/${id}/agents/${agentId}`),
+  calls: (id: string, agentId: string) =>
+    request<CallsResponse>('GET', `/api/worlds/${id}/agents/${agentId}/calls`),
+  setBrain: (id: string, agentId: string, brain: BrainConfig) =>
+    request<AgentResponse>('PUT', `/api/worlds/${id}/agents/${agentId}/brain`, brain),
+  setDefaultBrain: (id: string, brain: BrainConfig, applyToAll: boolean) =>
+    request<WorldSettings>('PUT', `/api/worlds/${id}/default-brain`, { brain, applyToAll }),
+  setCap: (id: string, capUsd: number) =>
+    request<{ runner: RunnerStatus }>('PUT', `/api/worlds/${id}/cap`, { capUsd }),
+  spawn: (id: string, req: SpawnRequest) =>
+    request<{ agentId: string; note?: string }>('POST', `/api/worlds/${id}/spawn`, req),
+  settings: () => request<SettingsResponse>('GET', '/api/settings'),
+  updateProvider: (provider: string, update: ProviderUpdate) =>
+    request<SettingsResponse>('PUT', `/api/settings/providers/${provider}`, update),
+  updatePrices: (prices: Record<string, ModelPrice | null>) =>
+    request<SettingsResponse>('PUT', '/api/settings/prices', prices),
+  providerModels: (provider: string) =>
+    request<{ models: string[] }>('GET', `/api/providers/${provider}/models`),
 };

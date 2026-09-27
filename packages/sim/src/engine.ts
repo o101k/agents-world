@@ -20,7 +20,7 @@ import { fullName, remember, type Agent } from './agent.ts';
 import type { AgentSpec } from './cast.ts';
 import { NUTRITION } from './items.ts';
 import { findPathToAny } from './pathfinding.ts';
-import { buildPerception } from './perception.ts';
+import { buildPerception, nameAsKnown } from './perception.ts';
 import { addAgent } from './population.ts';
 import type { Rng } from './rng.ts';
 import {
@@ -38,10 +38,11 @@ import { withRng, type WorldState } from './world.ts';
 
 /** Everything the simulation consumes besides its own state. Logged per tick for exact replay. */
 export type TickInput =
-  | { kind: 'decision'; agentId: string; decision: Decision }
+  | { kind: 'decision'; agentId: string; decision: Decision; usage?: { costUsd: number } }
   | { kind: 'decision_timeout'; agentId: string }
   | { kind: 'spawn_agent'; spec: AgentSpec }
   | { kind: 'set_brain'; agentId: string; brain: BrainConfig }
+  | { kind: 'set_default_brain'; brain: BrainConfig; applyToAll?: boolean }
   | { kind: 'set_days_per_year'; value: number };
 
 export interface StepResult {
@@ -67,7 +68,13 @@ const RATES = {
   coolTwilight: 2,
 };
 const H = TICKS_PER_HOUR;
-const CHECK_IN_TICKS = 4 * H;
+/** How long an awake agent may go without a fresh decision, by effort level. */
+const CHECK_IN_TICKS: Record<string, number> = { frugal: 8 * H, standard: 4 * H, deep: 3 * H };
+const checkInFor = (a: Agent) => CHECK_IN_TICKS[a.brain.effort] ?? 4 * H;
+/** Talk range (Chebyshev tiles), how far voices carry to bystanders, and conversation length. */
+const TALK_RANGE = 2;
+const OVERHEAR_RANGE = 5;
+const MAX_TURNS = 6;
 const URGENT = 20;
 const RECOVERED = 50;
 export const VISION_DAY = 8;
@@ -113,6 +120,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       const agent = state.agents[i]!;
       if (!agent.alive) continue;
       agent.age += ageStep;
+      if (agent.speech && state.tick >= agent.speech.until) agent.speech = null;
       updateBody(ctx, agent);
       if (!agent.alive) continue;
       if (!agent.asleep) {
@@ -171,7 +179,18 @@ function applyInput(ctx: Ctx, input: TickInput): void {
         if (parsed.success) plan.push(parsed.data as Intent);
       }
       agent.plan = plan;
-      agent.nextCheckIn = state.tick + CHECK_IN_TICKS;
+      agent.nextCheckIn = state.tick + checkInFor(agent);
+      agent.decisions += 1;
+      agent.spentUsd += Math.max(0, input.usage?.costUsd ?? 0);
+      const note = input.decision.remember;
+      if (note?.text)
+        remember(
+          agent,
+          state.tick,
+          `I made a note to myself: ${String(note.text).slice(0, 500)}`,
+          Math.max(2, Number(note.importance) || 3),
+          'thought',
+        );
       if (agent.action?.type !== 'sleep') agent.action = null;
       if (agent.asleep && plan.length > 0 && plan[0]!.type !== 'sleep') wake(ctx, agent, false);
       if (agent.goal)
@@ -191,6 +210,8 @@ function applyInput(ctx: Ctx, input: TickInput): void {
         ? `at ${objName(state, agent.homeId)}`
         : 'on the road into the village';
       emit(ctx, 'agent_arrived', [agent.id], `${fullName(agent)} appeared ${where}.`, 4);
+      if (!agent.homeId)
+        remember(agent, state.tick, 'I have just arrived in this village. I know no one here.', 6);
       look(state, agent);
       return;
     }
@@ -199,6 +220,10 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       if (agent) agent.brain = { ...input.brain };
       return;
     }
+    case 'set_default_brain':
+      state.settings.defaultBrain = { ...input.brain };
+      if (input.applyToAll) for (const a of state.agents) if (a.alive) a.brain = { ...input.brain };
+      return;
     case 'set_days_per_year':
       state.settings.daysPerYear = Math.min(60, Math.max(1, input.value));
       return;
@@ -270,7 +295,7 @@ function updateBody(ctx: Ctx, agent: Agent): void {
         k as 'food' | 'water' | 'warmth'
       ];
       emit(ctx, 'need_critical', [agent.id], `${fullName(agent)} is ${what}.`, 4);
-      remember(agent, state.tick, `I am ${what}.`);
+      remember(agent, state.tick, `I am ${what}.`, 6);
     } else if (n[k] > 20) {
       delete agent.alerted[`${k}_zero`];
     }
@@ -287,7 +312,7 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     agent.action = { type: 'sleep', since: state.tick };
     agent.asleep = true;
     emit(ctx, 'collapsed', [agent.id], `${fullName(agent)} collapsed from exhaustion.`, 3);
-    remember(agent, state.tick, 'I collapsed from exhaustion.');
+    remember(agent, state.tick, 'I collapsed from exhaustion.', 5);
   }
 }
 
@@ -348,7 +373,7 @@ function maybeNeedDecision(ctx: Ctx, agent: Agent): void {
   }
   if (!agent.action && agent.plan.length === 0) return request({ kind: 'plan_done' });
   if (state.tick >= agent.nextCheckIn) {
-    agent.nextCheckIn = state.tick + CHECK_IN_TICKS;
+    agent.nextCheckIn = state.tick + checkInFor(agent);
     return request({ kind: 'check_in' });
   }
 }
@@ -371,7 +396,7 @@ function isAddressing(agent: Agent, need: NeedName): boolean {
 function fail(ctx: Ctx, agent: Agent, reason: string): void {
   agent.plan = [];
   agent.action = null;
-  remember(agent, ctx.state.tick, reason);
+  remember(agent, ctx.state.tick, reason, 2);
   if (!agent.awaiting) agent.awaiting = { kind: 'action_failed', reason };
 }
 
@@ -565,6 +590,36 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
         until: state.tick + Math.min(600, Math.max(1, Math.round(intent.minutes))),
       };
       return;
+    case 'talk_to': {
+      const other = state.agents.find((a) => a.id === intent.agentId);
+      if (!other || other === agent)
+        return fail(ctx, agent, "I tried to talk to someone who isn't here.");
+      const who = nameAsKnown(agent, other);
+      if (!other.alive) return fail(ctx, agent, `I wanted to talk to ${who}, but they are dead.`);
+      const dist = Math.max(Math.abs(other.x - agent.x), Math.abs(other.y - agent.y));
+      if (dist <= TALK_RANGE && !other.indoorsId) {
+        speak(ctx, agent, other, intent.message);
+        // Talking takes time: roughly one in-game minute per 15 words, then a pause for the answer.
+        const words = intent.message.split(/\s+/).length;
+        agent.action = { type: 'rest', until: state.tick + 2 + Math.ceil(words / 15) };
+        return;
+      }
+      if (other.indoorsId)
+        return fail(ctx, agent, `I wanted to talk to ${who}, but they are indoors.`);
+      if (dist > 60) return fail(ctx, agent, `${who} is too far away to reach.`);
+      const tries = intent.tries ?? 0;
+      if (tries >= 3) return fail(ctx, agent, `I couldn't catch up with ${who}.`);
+      const goals: Point[] = [];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if ((dx || dy) && isWalkable(map, other.x + dx, other.y + dy))
+            goals.push({ x: other.x + dx, y: other.y + dy });
+        }
+      }
+      if (goals.length === 0) goals.push({ x: other.x, y: other.y });
+      walkTo(ctx, agent, goals, { ...intent, tries: tries + 1 }, who);
+      return;
+    }
     case 'explore': {
       const target = pickExploreTarget(ctx, agent);
       if (!target) return fail(ctx, agent, "I couldn't find anywhere new to explore.");
@@ -572,6 +627,79 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       return;
     }
   }
+}
+
+/** Say something to someone nearby. They hear it (and may reply); bystanders overhear. */
+function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
+  const { state } = ctx;
+  const message = raw.trim().slice(0, 600);
+  if (!message) return;
+  speaker.speech = { text: message, until: state.tick + 30 };
+  speaker.facing = facingTo(speaker, listener);
+  const listenerHears = !listener.asleep;
+  const speakerName = fullName(speaker);
+  emit(
+    ctx,
+    'said',
+    [speaker.id, listener.id],
+    `${speakerName} to ${fullName(listener)}: “${message}”`,
+    2,
+  );
+  remember(
+    speaker,
+    state.tick,
+    `I said to ${nameAsKnown(speaker, listener)}: “${message}”`,
+    3,
+    'conversation',
+    [listener.id],
+  );
+  meet(speaker, listener, state.tick, false);
+  if (listenerHears) {
+    meet(listener, speaker, state.tick, true); // people introduce themselves when they speak
+    remember(
+      listener,
+      state.tick,
+      `${nameAsKnown(listener, speaker)} said to me: “${message}”`,
+      4,
+      'conversation',
+      [speaker.id],
+    );
+    const c = listener.convo[speaker.id];
+    const turns = c && state.tick - c.lastTick < 90 ? c.turns + 1 : 1;
+    listener.convo[speaker.id] = { turns, lastTick: state.tick };
+    speaker.convo[listener.id] = { turns, lastTick: state.tick };
+    if (turns <= MAX_TURNS && !listener.awaiting && listener.alive) {
+      listener.awaiting = {
+        kind: 'spoken_to',
+        fromId: speaker.id,
+        fromName: nameAsKnown(listener, speaker),
+        message,
+      };
+    }
+  }
+  for (const other of state.agents) {
+    if (other === speaker || other === listener || !other.alive || other.asleep || other.indoorsId)
+      continue;
+    const d = Math.max(Math.abs(other.x - speaker.x), Math.abs(other.y - speaker.y));
+    if (d > OVERHEAR_RANGE) continue;
+    remember(
+      other,
+      state.tick,
+      `I overheard ${nameAsKnown(other, speaker)} tell ${nameAsKnown(other, listener)}: “${message}”`,
+      2,
+      'conversation',
+      [speaker.id, listener.id],
+    );
+  }
+}
+
+/** `viewer` has an encounter with `other`; learnName = other introduced themselves. */
+function meet(viewer: Agent, other: Agent, tick: number, learnName: boolean): void {
+  const p = viewer.people[other.id] ?? { name: null, familiarity: 0, lastSeenTick: tick };
+  if (learnName && !p.name) p.name = fullName(other);
+  p.familiarity = Math.min(100, p.familiarity + 2);
+  p.lastSeenTick = tick;
+  viewer.people[other.id] = p;
 }
 
 function pickExploreTarget(ctx: Ctx, agent: Agent): Point | null {

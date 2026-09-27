@@ -4,7 +4,10 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { ClientMessage } from '@aw/shared';
 import { DEV_WEB_PORT, SERVER_VERSION, type ServerConfig } from './config.ts';
 import { Hub } from './hub.ts';
+import { BrainRouter } from '@aw/brain';
+import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerWorldRoutes } from './routes/worlds.ts';
+import { SettingsStore } from './settings.ts';
 import { registerLocalOnlyGuard } from './security.ts';
 import { WorldManager } from './worlds/worldManager.ts';
 
@@ -12,6 +15,7 @@ export interface App {
   server: FastifyInstance;
   worlds: WorldManager;
   hub: Hub;
+  settings: SettingsStore;
 }
 
 export interface BuildOptions {
@@ -19,13 +23,18 @@ export interface BuildOptions {
   logger?: boolean | { level: string };
   /** Human-readable activity log (world created, deleted, …). */
   log?: (msg: string) => void;
+  /** Environment for API keys (defaults to process.env; tests pass {}). */
+  env?: NodeJS.ProcessEnv;
 }
 
 export async function buildApp(config: ServerConfig, options: BuildOptions = {}): Promise<App> {
   const server = Fastify({ logger: options.logger ?? false });
   const hub = new Hub();
+  const settings = new SettingsStore(config.dataDir, options.env);
+  const brains = new BrainRouter(settings.buildProviders());
   const worlds: WorldManager = new WorldManager(config.dataDir, {
     log: options.log,
+    brains,
     hooks: (worldId) => ({
       onFrame: (frame) => hub.broadcast({ type: 'frame', worldId, ...frame }),
       onEvents: (events) => hub.broadcast({ type: 'events', worldId, events }),
@@ -58,6 +67,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
 
   server.get('/api/health', async () => ({ ok: true, version: SERVER_VERSION }));
   registerWorldRoutes(server, worlds, hub);
+  registerSettingsRoutes(server, settings, brains);
 
   if (config.webDistDir) {
     await server.register(fastifyStatic, { root: config.webDistDir, wildcard: false });
@@ -84,7 +94,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
     await worlds.closeAll();
   });
 
-  return { server, worlds, hub };
+  return { server, worlds, hub, settings };
 }
 
 function safeJson(text: string): unknown {

@@ -1,6 +1,13 @@
 import Database from 'better-sqlite3';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { DEFAULT_SPEED, TICKS_PER_DAY, type WorldEvent, type WorldMeta } from '@aw/shared';
+import {
+  DEFAULT_CAP_USD,
+  DEFAULT_SPEED,
+  TICKS_PER_DAY,
+  type LlmCallView,
+  type WorldEvent,
+  type WorldMeta,
+} from '@aw/shared';
 import {
   deserializeWorldState,
   serializeWorldState,
@@ -43,6 +50,27 @@ const MIGRATIONS: string[] = [
   CREATE INDEX events_tick ON events(tick);
   CREATE INDEX events_kind ON events(kind);
   `,
+  `
+  -- Every AI call: tokens and cost always; prompt/response text for the latest few per person.
+  CREATE TABLE llm_calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick          INTEGER NOT NULL,
+    agent_id      TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    trigger       TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cached_tokens INTEGER NOT NULL,
+    cost_usd      REAL NOT NULL,
+    estimated     INTEGER NOT NULL,
+    latency_ms    INTEGER NOT NULL,
+    prompt        TEXT,
+    response      TEXT,
+    error         TEXT
+  );
+  CREATE INDEX llm_calls_agent ON llm_calls(agent_id, id);
+  `,
 ];
 
 const META_KEYS = [
@@ -56,7 +84,32 @@ const META_KEYS = [
   'mapHeight',
 ] as const;
 /** Meta keys added after Phase 0, with defaults for older files. */
-const META_DEFAULTS = { population: 0, running: false, speed: DEFAULT_SPEED };
+const META_DEFAULTS = {
+  population: 0,
+  running: false,
+  speed: DEFAULT_SPEED,
+  spentUsd: 0,
+  capUsd: DEFAULT_CAP_USD,
+};
+/** Full prompts/responses are kept for the most recent calls per person; older rows keep only numbers. */
+const KEEP_CALL_TEXT = 20;
+
+export interface CallRecord {
+  tick: number;
+  agentId: string;
+  provider: string;
+  model: string;
+  trigger: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  costUsd: number;
+  estimated: boolean;
+  latencyMs: number;
+  prompt: string | null;
+  response: string | null;
+  error: string | null;
+}
 
 /** Keep snapshots from the last two in-game days, plus one per day (midnight) and the first. */
 const SNAPSHOT_KEEP_TICKS = 2 * TICKS_PER_DAY;
@@ -227,6 +280,49 @@ export class WorldFile {
         importance: p.importance ?? 3,
       };
     });
+  }
+
+  appendCalls(calls: CallRecord[]): void {
+    const insert = this.db.prepare(
+      `INSERT INTO llm_calls (tick, agent_id, provider, model, trigger, input_tokens, output_tokens, cached_tokens,
+        cost_usd, estimated, latency_ms, prompt, response, error)
+       VALUES (@tick, @agentId, @provider, @model, @trigger, @inputTokens, @outputTokens, @cachedTokens,
+        @costUsd, @estimated, @latencyMs, @prompt, @response, @error)`,
+    );
+    const prune = this.db.prepare(
+      `UPDATE llm_calls SET prompt = NULL, response = NULL
+       WHERE agent_id = ? AND prompt IS NOT NULL AND id <= (
+         SELECT id FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT 1 OFFSET ${KEEP_CALL_TEXT})`,
+    );
+    const agents = new Set<string>();
+    for (const c of calls) {
+      insert.run({ ...c, estimated: c.estimated ? 1 : 0 });
+      agents.add(c.agentId);
+    }
+    for (const a of agents) prune.run(a, a);
+  }
+
+  listCalls(agentId: string, limit: number): LlmCallView[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, tick, provider, model, trigger, input_tokens, output_tokens, cost_usd, latency_ms, prompt, response, error
+         FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT ?`,
+      )
+      .all(agentId, limit) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      tick: r.tick as number,
+      provider: r.provider as string,
+      model: r.model as string,
+      trigger: r.trigger as string,
+      inputTokens: r.input_tokens as number,
+      outputTokens: r.output_tokens as number,
+      costUsd: r.cost_usd as number,
+      latencyMs: r.latency_ms as number,
+      prompt: (r.prompt as string | null) ?? null,
+      response: (r.response as string | null) ?? null,
+      error: (r.error as string | null) ?? null,
+    }));
   }
 
   transaction<T>(fn: () => T): T {

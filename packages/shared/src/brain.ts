@@ -3,7 +3,7 @@
  * The sim builds a Perception (only what this agent senses and knows) and asks for a Decision.
  */
 import { z } from 'zod';
-import type { NeedName, Needs, Sex } from './agent.ts';
+import type { EffortLevel, NeedName, Needs, Personality, Sex } from './agent.ts';
 import type { MapObjectKind, Point } from './map.ts';
 
 export type DecisionTrigger =
@@ -12,6 +12,7 @@ export type DecisionTrigger =
   | { kind: 'plan_done' }
   | { kind: 'action_failed'; reason: string }
   | { kind: 'urgent_need'; need: NeedName }
+  | { kind: 'spoken_to'; fromId: string; fromName: string; message: string }
   | { kind: 'check_in' };
 
 export type ItemName = 'berries' | 'vegetables' | 'fish' | 'bread';
@@ -31,7 +32,13 @@ export type Intent =
   | { type: 'drink'; sourceId?: string }
   | { type: 'sleep' }
   | { type: 'rest'; minutes: number }
-  | { type: 'explore' };
+  | { type: 'explore' }
+  | {
+      type: 'talk_to';
+      agentId: string;
+      message: string;
+      /** internal: catch-up attempts */ tries?: number;
+    };
 
 export interface Decision {
   /** Inner monologue shown to the observer. */
@@ -39,6 +46,8 @@ export interface Decision {
   /** Current goal in a few words. */
   goal: string;
   plan: Intent[];
+  /** Something the agent wants to remember, with importance 1–10. */
+  remember?: { text: string; importance: number };
 }
 
 export interface PerceivedAgent {
@@ -89,6 +98,14 @@ export interface Perception {
   knownPlaces: KnownPlace[];
   /** The agent's own recent experiences, newest last. */
   recent: string[];
+  /** Older memories that come to mind now (most relevant first). */
+  memories: string[];
+  /** People this agent knows by name, with how well. */
+  knownPeople: { id: string; name: string; familiarity: number; lastSeenTick: number }[];
+  /** Personality traits (0–100) for the prompt. */
+  personality: Personality;
+  /** The agent's thinking budget level. */
+  effort: EffortLevel;
   /** Plan steps still queued from the previous decision. */
   remainingPlan: Intent[];
 }
@@ -115,12 +132,18 @@ export const IntentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('sleep') }),
   z.object({ type: z.literal('rest'), minutes: z.number().min(1).max(600) }),
   z.object({ type: z.literal('explore') }),
+  z.object({
+    type: z.literal('talk_to'),
+    agentId: z.string(),
+    message: z.string().min(1).max(600),
+  }),
 ]);
 
 export const DecisionSchema = z.object({
   thought: z.string().max(2000).default(''),
   goal: z.string().max(300).default(''),
   plan: z.array(z.unknown()).max(20).default([]),
+  remember: z.object({ text: z.string().max(500), importance: z.number() }).optional(),
 });
 
 /** Human-readable one-liner for an intent, e.g. for the inspector. */
@@ -142,5 +165,7 @@ export function describeIntent(intent: Intent, names: (id: string) => string = (
       return `Rest ${intent.minutes} min`;
     case 'explore':
       return 'Explore';
+    case 'talk_to':
+      return `Say to ${names(intent.agentId)}: “${intent.message}”`;
   }
 }

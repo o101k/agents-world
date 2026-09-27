@@ -10,8 +10,12 @@ import {
 import { api } from '../api.ts';
 import { AgentInspector } from '../components/AgentInspector.tsx';
 import { EventLog } from '../components/EventLog.tsx';
+import { BrainEditor } from '../components/BrainEditor.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
+import { SpawnDialog } from '../components/SpawnDialog.tsx';
+import { SpendMeter } from '../components/SpendMeter.tsx';
 import { TimeControls } from '../components/TimeControls.tsx';
+import { useSettings } from '../settingsStore.ts';
 import { MapView } from '../map/MapView.tsx';
 import type { MapSelection, WorldRenderer } from '../map/renderer.ts';
 import { useApp } from '../store.ts';
@@ -40,6 +44,9 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('people');
   const selection = useWorld((s) => s.selection);
+  const capReached = useWorld((s) => s.runner.capReached);
+  const [spawning, setSpawning] = useState(false);
+  const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
 
   // State starts fresh per world: App renders this screen with key={worldId}.
@@ -98,7 +105,37 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </button>
         <div className="topbar-title">{meta?.name ?? view?.meta.name ?? '…'}</div>
         {view && <TimeControls worldId={worldId} />}
+        <div className="topbar-spacer" />
+        {view && <SpendMeter worldId={worldId} />}
+        <button
+          className="btn btn-small"
+          onClick={() => setSpawning(true)}
+          title="Bring a new person into the world"
+        >
+          + Spawn
+        </button>
+        <button
+          className="btn btn-small btn-ghost"
+          onClick={() => openSettings(true)}
+          title="Settings: AI providers, keys, prices"
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
       </header>
+      {capReached && (
+        <div className="banner banner-warn" role="alert">
+          The spending cap is reached, so time is paused. Raise the cap (click the spending meter)
+          or switch people to the free Mock brain, then press Play.
+        </div>
+      )}
+      {spawning && (
+        <SpawnDialog
+          worldId={worldId}
+          onClose={() => setSpawning(false)}
+          onSpawned={(id) => setTimeout(() => pickAgent(id), 300)}
+        />
+      )}
 
       <div className="world-body">
         <main className="map-area">
@@ -154,7 +191,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                 <p className="muted">Click a person or anything on the map.</p>
               ))}
             {tab === 'people' && <PeopleList onPick={pickAgent} />}
-            {tab === 'world' && view && <WorldInfo view={view} map={map} />}
+            {tab === 'world' && view && <WorldInfo worldId={worldId} view={view} map={map} />}
           </div>
         </aside>
       </div>
@@ -162,7 +199,17 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   );
 }
 
-function WorldInfo({ view, map }: { view: WorldViewResponse; map: WorldMap | null }) {
+function WorldInfo({
+  worldId,
+  view,
+  map,
+}: {
+  worldId: string;
+  view: WorldViewResponse;
+  map: WorldMap | null;
+}) {
+  const [settings, setSettings] = useState(view.settings);
+  const [applyToAll, setApplyToAll] = useState(false);
   const counts = new Map<MapObjectKind, number>();
   for (const o of map?.objects ?? []) counts.set(o.kind, (counts.get(o.kind) ?? 0) + 1);
   return (
@@ -182,6 +229,30 @@ function WorldInfo({ view, map }: { view: WorldViewResponse; map: WorldMap | nul
           <FactRow key={k} label={`${OBJECT_LABELS[k]}s`} value={counts.get(k) ?? 0} />
         ))}
       </dl>
+      <h3>Default brain</h3>
+      <p className="muted small">
+        Used for newborns and spawned people. You can also set each person’s brain in their
+        inspector.
+      </p>
+      <BrainEditor
+        key={JSON.stringify(settings.defaultBrain)}
+        value={settings.defaultBrain}
+        saveLabel={applyToAll ? 'Save and apply to everyone' : 'Save default'}
+        extra={
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={applyToAll}
+              onChange={(e) => setApplyToAll(e.target.checked)}
+            />{' '}
+            Also switch everyone alive to this brain
+          </label>
+        }
+        onSave={async (brain) => {
+          setSettings(await api.setDefaultBrain(worldId, brain, applyToAll));
+          setApplyToAll(false);
+        }}
+      />
       <h3>Getting around</h3>
       <ul className="help-list">
         <li>Drag or two-finger scroll to pan</li>

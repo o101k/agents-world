@@ -10,7 +10,10 @@ export type EventKind =
   | 'need_critical'
   | 'died'
   | 'new_day'
-  | 'decided';
+  | 'decided'
+  | 'said'
+  | 'cap_reached'
+  | 'observer';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

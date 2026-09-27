@@ -6,6 +6,8 @@ export interface Usage {
   /** Tokens served from the provider's prompt cache (cheaper). */
   cachedInputTokens?: number;
   costUsd: number;
+  /** True when the model had no known price and a pessimistic default was used. */
+  estimated?: boolean;
 }
 
 export interface BrainResult {
@@ -19,4 +21,24 @@ export interface BrainResult {
 export interface BrainProvider {
   readonly id: ProviderId;
   decide(request: DecisionRequest, config: BrainConfig, signal?: AbortSignal): Promise<BrainResult>;
+  /** Model ids the provider offers (for the settings UI). */
+  listModels?(): Promise<string[]>;
+  /** Free-form structured call (used to flesh out spawned people). */
+  generate?(
+    req: GenerateRequest,
+    signal?: AbortSignal,
+  ): Promise<{ output: unknown; usage?: Usage; model: string }>;
 }
+
+export interface GenerateRequest {
+  model: string;
+  system: string;
+  user: string;
+  toolName: string;
+  toolDescription: string;
+  schema: Record<string, unknown>;
+  maxTokens: number;
+}
+
+/** Thrown when the model declines to answer. */
+export class RefusalError extends Error {}

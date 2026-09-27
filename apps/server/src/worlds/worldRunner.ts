@@ -1,9 +1,9 @@
 import { performance } from 'node:perf_hooks';
-import type { BrainRouter } from '@aw/brain';
+import { instinctApplies, type BrainRouter } from '@aw/brain';
 import type { AgentView, DecisionRequest, RunnerStatus, WorldEvent, WorldMeta } from '@aw/shared';
 import { TICKS_PER_HOUR } from '@aw/shared';
 import { agentView, pendingRequests, step, type TickInput, type WorldState } from '@aw/sim';
-import type { WorldFile } from './worldFile.ts';
+import type { CallRecord, WorldFile } from './worldFile.ts';
 
 /** Full snapshot every 6 in-game hours (and on pause/stop). Resume replays at most that many ticks. */
 const SNAPSHOT_EVERY = 6 * TICKS_PER_HOUR;
@@ -20,13 +20,6 @@ export interface RunnerHooks {
   }) => void;
   onEvents?: (events: WorldEvent[]) => void;
   onStatus?: (meta: WorldMeta) => void;
-  /** Called with every brain result, e.g. to record costs and traces (Phase 2). */
-  onDecision?: (info: {
-    request: DecisionRequest;
-    provider: string;
-    error?: string;
-    timedOut?: boolean;
-  }) => void;
 }
 
 /**
@@ -50,9 +43,11 @@ export class WorldRunner {
   private batch = {
     inputs: [] as [number, TickInput][],
     events: [] as WorldEvent[],
+    calls: [] as CallRecord[],
     snapshot: false,
     dirty: false,
   };
+  private capReached = false;
   private changedResources = new Set<string>();
   private lastFrameAt = 0;
   private tickTimes: number[] = [];
@@ -100,6 +95,9 @@ export class WorldRunner {
       speed: this.speed,
       actualSpeed: this.running ? this.tickTimes.length : 0,
       thinking: this.thinking,
+      spentUsd: this.meta.spentUsd,
+      capUsd: this.meta.capUsd,
+      capReached: this.capReached,
     };
   }
 
@@ -117,7 +115,22 @@ export class WorldRunner {
     return this.state.agents.map(agentView);
   }
 
+  /** Record spending that happened outside decisions (e.g. drafting a spawned person). */
+  addSpend(costUsd: number): void {
+    this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + Math.max(0, costUsd) };
+    this.file.writeMeta({ spentUsd: this.meta.spentUsd });
+  }
+
+  setCap(capUsd: number): void {
+    this.meta = { ...this.meta, capUsd: Math.max(0, capUsd) };
+    this.file.writeMeta({ capUsd: this.meta.capUsd });
+    if (this.meta.spentUsd < this.meta.capUsd) this.capReached = false;
+    this.hooks.onStatus?.(this.currentMeta());
+    this.emitFrame(true);
+  }
+
   setRunning(running: boolean): void {
+    if (running) this.capReached = false; // re-checked before the next paid decision
     if (this.stopped || this.running === running) return;
     this.running = running;
     this.meta = { ...this.meta, running };
@@ -224,8 +237,43 @@ export class WorldRunner {
     }
   }
 
+  /** Would answering these requests spend money (a real AI, not instinct or the mock)? */
+  private needsPaidCall(requests: DecisionRequest[]): boolean {
+    const byId = new Map(this.state.agents.map((a) => [a.id, a]));
+    return requests.some((r) => {
+      const brain = byId.get(r.agentId)?.brain;
+      return (
+        brain &&
+        brain.provider !== 'mock' &&
+        this.brains.has(brain.provider) &&
+        !instinctApplies(r.perception)
+      );
+    });
+  }
+
+  /** Pause and tell everyone the spending cap was hit. Returns true if it did. */
+  private enforceCap(): boolean {
+    if (this.meta.spentUsd < this.meta.capUsd) return false;
+    if (!this.capReached) {
+      this.capReached = true;
+      this.batch.events.push({
+        tick: this.state.tick,
+        kind: 'cap_reached',
+        actors: [],
+        text: `Spending cap reached ($${this.meta.spentUsd.toFixed(2)} of $${this.meta.capUsd.toFixed(2)}). Time is paused — raise the cap or switch people to cheaper brains to continue.`,
+        importance: 5,
+      });
+      this.batch.dirty = true;
+    }
+    if (this.running) this.setRunning(false);
+    this.capReached = true;
+    this.emitFrame(true);
+    return true;
+  }
+
   private async tickOnce(): Promise<void> {
     if (this.outstanding.length > 0) {
+      if (this.needsPaidCall(this.outstanding) && this.enforceCap()) return;
       await this.resolve(this.outstanding);
       this.outstanding = [];
     }
@@ -249,16 +297,43 @@ export class WorldRunner {
       requests.map(async (request) => {
         const agent = byId.get(request.agentId);
         const routed = await this.brains.decide(request, agent!.brain, DECISION_TIMEOUT_MS);
-        this.hooks.onDecision?.({
-          request,
-          provider: routed.provider,
-          error: routed.error,
-          timedOut: routed.timedOut,
-        });
         return { request, routed };
       }),
     );
     for (const { request, routed } of results) {
+      const usage = routed.result?.usage;
+      const cost = usage?.costUsd ?? 0;
+      if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
+      if (routed.provider !== 'mock' || routed.fallback || routed.error) {
+        const trace = routed.result?.trace;
+        this.batch.calls.push({
+          tick: this.state.tick,
+          agentId: request.agentId,
+          provider: routed.fallback
+            ? `mock (${byId.get(request.agentId)?.brain.provider} not set up)`
+            : routed.provider,
+          model: routed.model || trace?.model || '',
+          trigger: request.perception.trigger.kind,
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          cachedTokens: usage?.cachedInputTokens ?? 0,
+          costUsd: cost,
+          estimated: Boolean(usage?.estimated),
+          latencyMs: trace?.latencyMs ?? 0,
+          prompt: trace?.prompt ?? null,
+          response: trace?.response ?? null,
+          error: routed.error ?? null,
+        });
+      }
+      if (routed.result && cost > 0) {
+        this.enqueue({
+          kind: 'decision',
+          agentId: request.agentId,
+          decision: routed.result.decision,
+          usage: { costUsd: cost },
+        });
+        continue;
+      }
       if (routed.result)
         this.enqueue({
           kind: 'decision',
@@ -273,15 +348,16 @@ export class WorldRunner {
   /** Commit everything since the last flush in one transaction, then notify listeners. */
   private flush(): void {
     if (!this.batch.dirty) return;
-    const { inputs, events, snapshot } = this.batch;
-    this.batch = { inputs: [], events: [], snapshot: false, dirty: false };
+    const { inputs, events, calls, snapshot } = this.batch;
+    this.batch = { inputs: [], events: [], calls: [], snapshot: false, dirty: false };
     const population = this.state.agents.filter((a) => a.alive).length;
     let stored: WorldEvent[] = [];
     this.file.transaction(() => {
       this.file.appendInputs(inputs);
       stored = this.file.appendWorldEvents(events);
+      if (calls.length) this.file.appendCalls(calls);
       if (snapshot) this.file.saveSnapshot(this.state);
-      this.file.writeMeta({ tick: this.state.tick, population });
+      this.file.writeMeta({ tick: this.state.tick, population, spentUsd: this.meta.spentUsd });
     });
     const popChanged = population !== this.meta.population;
     this.meta = { ...this.meta, tick: this.state.tick, population };

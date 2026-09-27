@@ -297,6 +297,23 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — Phase 2 details.** (a) **Instinct:** at the Frugal effort level, routine bodily needs
+  (a need dropping low, or bedtime when a plan ends) are handled by the free rulebook instead of an AI
+  call; everything social, surprising or open-ended still goes to the AI. Standard/Deep send
+  everything to the AI. This is the main lever for the very-low budget. (b) New worlds start on the
+  free Mock brain; the owner switches people (or the world default) to an AI in the World tab. The
+  suggested cheap Claude model is `claude-haiku-4-5`. (c) The spending cap is a per-world total
+  (default $1), raised by hand; the world pauses before the next paid decision once it's reached, so
+  the overshoot is at most one batch of simultaneous decisions. (d) Models with no known price are
+  costed at a pessimistic $3/$15 per million tokens so they can't slip past the cap. (e) Decisions
+  use a single `decide` tool: `tool_choice: auto` on Anthropic (forced tool choice is rejected by some
+  newer Claude models) and a named function on OpenAI-style APIs; text JSON is accepted as a
+  fallback; failures and refusals become a 15-minute hesitation, never a stall. (f) Prompt/reply text
+  is kept for each person's 20 most recent AI calls; token counts and costs are kept for all.
+  (g) Conversations: talk range 2 tiles, bystanders within 5 tiles overhear, replies stop after 6
+  turns; speaking takes about a minute per 15 words. (h) Villagers of the starting cast know each other
+  by name; newcomers know nobody and learn names when people speak to them. (i) The memory stream is
+  capped at 300 per person (weakest dropped) until proper forgetting in Phase 5.
 - **2026-09-27 — Phase 1 details.** (a) Full snapshots every 6 in-game hours (not every hour) plus
   on pause/stop; resume replays at most 360 ticks, which takes milliseconds. Old snapshots are pruned
   to one per in-game day after two days. (b) Inputs are logged the moment they are queued (tagged

@@ -138,6 +138,12 @@ export function createAgent(
     alerted: {},
     nextCheckIn: opts.tick + 240,
     recent: [],
+    memories: [],
+    people: {},
+    speech: null,
+    convo: {},
+    spentUsd: 0,
+    decisions: 0,
   };
 }
 

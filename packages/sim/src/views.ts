@@ -41,6 +41,7 @@ export function agentView(agent: Agent): AgentView {
     sex: agent.sex,
     age: Math.floor(agent.age),
     appearance: agent.appearance,
+    speech: agent.speech?.text,
   };
 }
 
@@ -85,6 +86,19 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
     awaitingDecision: agent.awaiting !== null,
     knownPlaces: Object.keys(agent.knowledge).length,
     recent: [...agent.recent].reverse(),
+    memories: [...agent.memories]
+      .sort((a, b) => b.tick - a.tick)
+      .map((m) => ({ tick: m.tick, text: m.text, importance: m.importance, kind: m.kind })),
+    people: Object.entries(agent.people)
+      .map(([id, p]) => ({
+        id,
+        name: p.name ?? '(not introduced)',
+        familiarity: Math.round(p.familiarity),
+        lastSeenTick: p.lastSeenTick,
+      }))
+      .sort((a, b) => b.familiarity - a.familiarity),
+    spentUsd: agent.spentUsd,
+    decisions: agent.decisions,
     death: agent.death,
     bornTick: agent.bornTick,
   };

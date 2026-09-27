@@ -1,5 +1,5 @@
 import { OBJECT_LABELS, Tile, tickToClock, type KnownPlace, type Perception } from '@aw/shared';
-import { fullName, type Agent } from './agent.ts';
+import type { Agent, Memory } from './agent.ts';
 import { distanceToObject, mapCache, objectsNear } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
@@ -22,6 +22,101 @@ function activityOf(a: Agent): string {
     default:
       return 'standing around';
   }
+}
+
+const COLOR_NAMES: [string, [number, number, number]][] = [
+  ['red', [192, 80, 77]],
+  ['blue', [79, 129, 189]],
+  ['green', [110, 160, 90]],
+  ['purple', [128, 100, 162]],
+  ['orange', [247, 150, 70]],
+  ['teal', [75, 172, 198]],
+  ['beige', [216, 200, 160]],
+  ['pink', [160, 90, 138]],
+  ['grey-blue', [90, 106, 138]],
+  ['mustard', [200, 160, 64]],
+  ['brown', [138, 74, 58]],
+];
+
+function colorName(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const rgb = [n >> 16, (n >> 8) & 255, n & 255];
+  let best = 'plain';
+  let bestD = Infinity;
+  for (const [name, c] of COLOR_NAMES) {
+    const d = (c[0] - rgb[0]!) ** 2 + (c[1] - rgb[1]!) ** 2 + (c[2] - rgb[2]!) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = name;
+    }
+  }
+  return best;
+}
+
+/** How someone looks to a stranger. */
+export function describeStranger(a: Agent): string {
+  const age =
+    a.age < 2
+      ? 'a baby'
+      : a.age < 13
+        ? `a ${a.sex === 'female' ? 'girl' : 'boy'}`
+        : a.age < 20
+          ? `a young ${a.sex === 'female' ? 'woman' : 'man'}`
+          : a.age < 55
+            ? `a ${a.sex === 'female' ? 'woman' : 'man'}`
+            : `an old ${a.sex === 'female' ? 'woman' : 'man'}`;
+  return `a stranger — ${age} in a ${colorName(a.appearance.shirt)} shirt`;
+}
+
+/** What a person is called from `viewer`'s point of view. */
+export function nameAsKnown(viewer: Agent, other: Agent): string {
+  return viewer.people[other.id]?.name ?? describeStranger(other);
+}
+
+const RECALL: Record<string, number> = { frugal: 6, standard: 12, deep: 20 };
+
+/**
+ * Memories that come to mind: importance, recency (fading over a few in-game days) and relevance
+ * to who is around, who is talking and the current goal. The newest few (already in working
+ * memory) are skipped.
+ */
+export function recall(
+  state: WorldState,
+  agent: Agent,
+  present: string[],
+  limit: number,
+): Memory[] {
+  const recentTicks = new Set(agent.recent.map((r) => r.tick));
+  const goalWords = new Set(
+    agent.goal
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter((w) => w.length > 3),
+  );
+  const presentSet = new Set(present);
+  const scored = agent.memories
+    .filter((m) => !recentTicks.has(m.tick))
+    .map((m) => {
+      const hoursAgo = (state.tick - m.tick) / 60;
+      let score = m.importance / 10 + Math.pow(0.99, hoursAgo);
+      if (m.people.some((p) => presentSet.has(p))) score += 1;
+      if (
+        goalWords.size &&
+        m.text
+          .toLowerCase()
+          .split(/[^a-z]+/)
+          .some((w) => goalWords.has(w))
+      )
+        score += 0.5;
+      return { m, score };
+    });
+  scored.sort((a, b) => b.score - a.score || b.m.tick - a.m.tick);
+  return scored.slice(0, limit).map((s) => s.m);
+}
+
+function stamp(tick: number): string {
+  const c = tickToClock(tick);
+  return `[Day ${c.day} ${String(c.hour).padStart(2, '0')}:${String(c.minute).padStart(2, '0')}]`;
 }
 
 /** A few words about where the agent is standing. */
@@ -81,21 +176,37 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         .sort((a, b) => a.d - b.d)
         .map(({ o, d }) => ({
           id: o.id,
-          name: fullName(o),
+          name: nameAsKnown(agent, o),
           x: o.x,
           y: o.y,
           distance: d,
           activity: activityOf(o),
         }))
     : [];
+  const trigger = agent.awaiting ?? { kind: 'check_in' as const };
+  const present = visibleAgents.map((v) => v.id);
+  if (trigger.kind === 'spoken_to') present.push(trigger.fromId);
+  const memories = recall(state, agent, present, RECALL[agent.brain.effort] ?? 8).map(
+    (m) => `${stamp(m.tick)} ${m.text}`,
+  );
+  const knownPeople = Object.entries(agent.people)
+    .filter(([, p]) => p.name)
+    .map(([id, p]) => ({
+      id,
+      name: p.name!,
+      familiarity: Math.round(p.familiarity),
+      lastSeenTick: p.lastSeenTick,
+    }))
+    .sort((a, b) => b.familiarity - a.familiarity)
+    .slice(0, 30);
 
   return {
     agentId: agent.id,
     tick: state.tick,
     clock: { ...clock, isNight },
-    trigger: agent.awaiting ?? { kind: 'check_in' },
+    trigger,
     self: {
-      name: fullName(agent),
+      name: agent.familyName ? `${agent.name} ${agent.familyName}` : agent.name,
       age: Math.floor(agent.age),
       sex: agent.sex,
       occupation: agent.occupation,
@@ -113,10 +224,11 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     location: describeLocation(state, agent),
     visibleAgents,
     knownPlaces: knownPlaces.slice(0, MAX_PLACES),
-    recent: agent.recent.map((r) => {
-      const c = tickToClock(r.tick);
-      return `[Day ${c.day} ${String(c.hour).padStart(2, '0')}:${String(c.minute).padStart(2, '0')}] ${r.text}`;
-    }),
+    recent: agent.recent.map((r) => `${stamp(r.tick)} ${r.text}`),
+    memories,
+    knownPeople,
+    personality: { ...agent.personality },
+    effort: agent.brain.effort,
     remainingPlan: [...agent.plan],
   };
 }

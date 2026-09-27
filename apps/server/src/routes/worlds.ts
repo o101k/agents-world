@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import {
+  BrainConfigSchema,
+  CapRequest,
   ControlRequest,
   EventsQuery,
+  SpawnRequest,
+  type CallsResponse,
   type AgentResponse,
   type EventsResponse,
   type WorldResponse,
@@ -65,6 +69,40 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     async (req): Promise<AgentResponse> => ({
       agent: worlds.agent(req.params.id, req.params.agentId),
     }),
+  );
+
+  type AgentParams = { Params: { id: string; agentId: string } };
+
+  app.put<AgentParams>('/api/worlds/:id/agents/:agentId/brain', async (req) => {
+    await worlds.setBrain(req.params.id, req.params.agentId, BrainConfigSchema.parse(req.body));
+    return { agent: worlds.agent(req.params.id, req.params.agentId) };
+  });
+
+  app.get<AgentParams>(
+    '/api/worlds/:id/agents/:agentId/calls',
+    async (req): Promise<CallsResponse> => ({
+      calls: worlds.calls(req.params.id, req.params.agentId, 10),
+    }),
+  );
+
+  app.put<IdParams>('/api/worlds/:id/default-brain', async (req) => {
+    const body = (req.body ?? {}) as { brain?: unknown; applyToAll?: unknown };
+    await worlds.setDefaultBrain(
+      req.params.id,
+      BrainConfigSchema.parse(body.brain),
+      body.applyToAll === true,
+    );
+    return worlds.view(req.params.id).settings;
+  });
+
+  app.put<IdParams>('/api/worlds/:id/cap', async (req) => {
+    worlds.setCap(req.params.id, CapRequest.parse(req.body).capUsd);
+    notifyChanged();
+    return { runner: worlds.active!.status() };
+  });
+
+  app.post<IdParams>('/api/worlds/:id/spawn', async (req) =>
+    worlds.spawn(req.params.id, SpawnRequest.parse(req.body)),
   );
 
   app.delete<IdParams>('/api/worlds/:id', async (req, reply) => {

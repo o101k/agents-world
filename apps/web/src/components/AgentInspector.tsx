@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
-import { NEED_LABELS, formatClock, type AgentDetail, type NeedName } from '@aw/shared';
+import {
+  NEED_LABELS,
+  formatClock,
+  type AgentDetail,
+  type LlmCallView,
+  type NeedName,
+} from '@aw/shared';
 import { api } from '../api.ts';
+import { BrainEditor } from './BrainEditor.tsx';
+import { formatUsd } from './SpendMeter.tsx';
 import { useWorld } from '../worldStore.ts';
 import { Bar } from './Bars.tsx';
 import { Portrait } from './Portrait.tsx';
@@ -163,16 +171,54 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
           ))}
       </section>
 
+      {agent.memories.length > 0 && (
+        <section>
+          <h3>Memories ({agent.memories.length})</h3>
+          <ul className="recent memories">
+            {agent.memories.slice(0, 15).map((m, i) => (
+              <li key={i}>
+                <span
+                  className={`imp imp-${Math.min(3, Math.ceil(m.importance / 3.4))}`}
+                  title={`Importance ${m.importance}/10`}
+                >
+                  {m.importance}
+                </span>{' '}
+                <span className="muted small">{formatClock(m.tick)}</span> {m.text}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {agent.people.length > 0 && (
+        <section>
+          <h3>People they know</h3>
+          <ul className="recent">
+            {agent.people.slice(0, 12).map((p) => (
+              <li key={p.id} className="person-known">
+                <span>{p.name}</span>
+                <span className="muted small">familiarity {p.familiarity}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section>
         <h3>Brain</h3>
-        <dl className="facts">
-          <dt>Provider</dt>
-          <dd>
-            {agent.brain.provider === 'mock' ? 'Mock (free, rule-based)' : agent.brain.provider}
-          </dd>
-          <dt>Effort</dt>
-          <dd>{agent.brain.effort}</dd>
-        </dl>
+        <p className="muted small">
+          {agent.decisions} decisions · {formatUsd(agent.spentUsd)} spent on AI
+        </p>
+        {agent.alive && (
+          <BrainEditor
+            key={JSON.stringify(agent.brain)}
+            value={agent.brain}
+            onSave={async (brain) => {
+              await api.setBrain(worldId, agentId, brain);
+            }}
+          />
+        )}
+        <AiExchanges worldId={worldId} agentId={agentId} />
       </section>
     </div>
   );
@@ -184,5 +230,48 @@ function FactRow({ label, value }: { label: string; value: string }) {
       <dt>{label}</dt>
       <dd>{value}</dd>
     </>
+  );
+}
+
+/** The raw prompts and replies behind recent decisions (for curiosity and debugging). */
+function AiExchanges({ worldId, agentId }: { worldId: string; agentId: string }) {
+  const [calls, setCalls] = useState<LlmCallView[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void api.calls(worldId, agentId).then((r) => setCalls(r.calls));
+  };
+  return (
+    <div className="exchanges">
+      <button className="linkish small" onClick={toggle}>
+        {open ? '▾' : '▸'} Raw AI exchanges
+      </button>
+      {open &&
+        (calls === null ? (
+          <p className="muted small">Loading…</p>
+        ) : calls.length === 0 ? (
+          <p className="muted small">
+            No AI calls yet (the mock brain and instinct don’t call an AI).
+          </p>
+        ) : (
+          calls.map((c) => (
+            <details key={c.id} className="exchange">
+              <summary>
+                {formatClock(c.tick)} · {c.trigger} · {c.model || c.provider} · {c.inputTokens}+
+                {c.outputTokens} tok · {formatUsd(c.costUsd)}
+                {c.error ? ' · ⚠' : ''}
+              </summary>
+              {c.error && <p className="warn small">{c.error}</p>}
+              {c.prompt ? (
+                <pre>{c.prompt}</pre>
+              ) : (
+                <p className="muted small">(Text of older calls isn’t kept.)</p>
+              )}
+              {c.response && <pre>{c.response}</pre>}
+            </details>
+          ))
+        ))}
+    </div>
   );
 }

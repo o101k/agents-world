@@ -70,6 +70,10 @@ interface AgentSprite {
   lookKey: string;
   label: Text;
   zzz: Text;
+  bubble: Container;
+  bubbleText: Text;
+  bubbleBg: Graphics;
+  bubbleFor: string;
   /** Displayed position in world pixels (bottom-centre of the feet). */
   from: Point;
   to: Point;
@@ -224,6 +228,7 @@ export class WorldRenderer {
         a.sprite.destroy();
         a.label.destroy();
         a.zzz.destroy();
+        a.bubble.destroy({ children: true });
         a.grave?.destroy();
         this.agents.delete(id);
       }
@@ -436,7 +441,23 @@ export class WorldRenderer {
       resolution: Math.max(2, window.devicePixelRatio || 1),
     });
     zzz.anchor.set(0, 1);
-    this.overlay.addChild(label, zzz);
+    const bubble = new Container();
+    const bubbleBg = new Graphics();
+    const bubbleText = new Text({
+      text: '',
+      style: {
+        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        fontSize: 12,
+        fill: '#1a1a1a',
+        wordWrap: true,
+        wordWrapWidth: 200,
+        lineHeight: 15,
+      },
+      resolution: Math.max(2, window.devicePixelRatio || 1),
+    });
+    bubble.addChild(bubbleBg, bubbleText);
+    bubble.visible = false;
+    this.overlay.addChild(bubble, label, zzz);
     const a: AgentSprite = {
       view: v,
       sprite,
@@ -444,6 +465,10 @@ export class WorldRenderer {
       lookKey: '',
       label,
       zzz,
+      bubble,
+      bubbleText,
+      bubbleBg,
+      bubbleFor: '',
       from: { ...at },
       to: { ...at },
       shown: { ...at },
@@ -534,8 +559,12 @@ export class WorldRenderer {
       a.label.visible = visible && (showLabels || selected);
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
       a.label.style.fill = selected ? '#ffd84a' : '#ffffff';
-      a.zzz.visible = visible && a.view.activity === 'sleeping' && this.cam.zoom >= 1.5;
+      const thinking = a.view.activity === 'thinking';
+      a.zzz.visible =
+        visible && (a.view.activity === 'sleeping' || thinking) && this.cam.zoom >= 1.5;
+      a.zzz.text = thinking ? '…' : 'z z';
       a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
+      this.updateBubble(a, visible && (this.cam.zoom >= 1.5 || selected), screen);
     }
     if (this.followId) {
       const a = this.agents.get(this.followId);
@@ -548,6 +577,34 @@ export class WorldRenderer {
     }
     this.drawSelection();
     return busy;
+  }
+
+  /** Speech bubble above a person while they're talking. */
+  private updateBubble(a: AgentSprite, show: boolean, screen: Point): void {
+    const speech = a.view.speech ?? '';
+    if (!speech || !show) {
+      a.bubble.visible = false;
+      return;
+    }
+    if (a.bubbleFor !== speech) {
+      a.bubbleFor = speech;
+      a.bubbleText.text = speech.length > 140 ? `${speech.slice(0, 137)}…` : speech;
+      const w = a.bubbleText.width + 12;
+      const h = a.bubbleText.height + 8;
+      a.bubbleText.position.set(6, 4);
+      a.bubbleBg
+        .clear()
+        .roundRect(0, 0, w, h, 6)
+        .fill({ color: 0xfffbe8, alpha: 0.95 })
+        .stroke({ width: 1, color: 0x1a1a1a, alpha: 0.6 })
+        .moveTo(w / 2 - 5, h)
+        .lineTo(w / 2, h + 6)
+        .lineTo(w / 2 + 5, h)
+        .fill({ color: 0xfffbe8, alpha: 0.95 });
+    }
+    a.bubble.visible = true;
+    const b = a.bubble.getLocalBounds();
+    a.bubble.position.set(Math.round(screen.x - b.width / 2), Math.round(screen.y - 16 - b.height));
   }
 
   private toScreen(wx: number, wy: number): Point {

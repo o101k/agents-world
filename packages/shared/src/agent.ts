@@ -78,6 +78,15 @@ export interface AgentView {
   sex: Sex;
   age: number;
   appearance: Appearance;
+  /** Words said in the last few in-game minutes (speech bubble). */
+  speech?: string;
+}
+
+export interface MemoryView {
+  tick: number;
+  text: string;
+  importance: number;
+  kind: 'experience' | 'conversation' | 'thought' | 'told';
 }
 
 export interface KnownPlaceView {
@@ -112,6 +121,26 @@ export interface AgentDetail extends AgentView {
   awaitingDecision: boolean;
   knownPlaces: number;
   recent: { tick: number; text: string }[];
+  memories: MemoryView[];
+  people: { id: string; name: string; familiarity: number; lastSeenTick: number }[];
   death?: { tick: number; cause: string };
   bornTick: number;
+  spentUsd: number;
+  decisions: number;
+}
+
+/** One exchange with a brain, for the mind inspector. */
+export interface LlmCallView {
+  id: number;
+  tick: number;
+  provider: string;
+  model: string;
+  trigger: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  latencyMs: number;
+  prompt: string | null;
+  response: string | null;
+  error: string | null;
 }

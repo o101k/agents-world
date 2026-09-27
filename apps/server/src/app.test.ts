@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -20,7 +20,7 @@ beforeEach(async () => {
     openBrowser: false,
     webDistDir: null,
   };
-  app = await buildApp(config);
+  app = await buildApp(config, { env: {} });
 });
 afterEach(async () => {
   await app.server.close();
@@ -97,5 +97,50 @@ describe('HTTP API', () => {
       headers: { ...HOST, origin: 'http://127.0.0.1:4747' },
     });
     expect(own.statusCode).toBe(200);
+  });
+
+  it('stores API keys privately and never returns them', async () => {
+    const put = await app.server.inject({
+      method: 'PUT',
+      url: '/api/settings/providers/anthropic',
+      headers: HOST,
+      payload: { apiKey: 'sk-ant-secret-1234' },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.body).not.toContain('secret');
+    const view = (await app.server.inject({ url: '/api/settings', headers: HOST })).json();
+    const anthropic = view.providers.find((p: { id: string }) => p.id === 'anthropic');
+    expect(anthropic.configured).toBe(true);
+    expect(anthropic.keyHint).toBe('sk-…1234');
+    expect(JSON.stringify(view)).not.toContain('secret');
+    expect(statSync(join(dir, 'secrets.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('spawns a person from a description (offline draft without an AI)', async () => {
+    const created = await app.server.inject({
+      method: 'POST',
+      url: '/api/worlds',
+      headers: HOST,
+      payload: { name: 'Spawn', seed: 'sp', mapSize: 'small' },
+    });
+    const id = created.json().world.id as string;
+    await app.server.inject({ method: 'POST', url: `/api/worlds/${id}/activate`, headers: HOST });
+    const res = await app.server.inject({
+      method: 'POST',
+      url: `/api/worlds/${id}/spawn`,
+      headers: HOST,
+      payload: {
+        description: 'A weary travelling tinker who sells pots and tells tall tales.',
+        name: 'Hob',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const agentId = res.json().agentId as string;
+    const agent = (
+      await app.server.inject({ url: `/api/worlds/${id}/agents/${agentId}`, headers: HOST })
+    ).json().agent;
+    expect(agent.name).toContain('Hob');
+    expect(agent.homeId).toBeNull();
+    expect(agent.knownPlaces).toBeLessThan(10);
   });
 });

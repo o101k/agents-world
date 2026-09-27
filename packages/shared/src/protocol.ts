@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AgentDetail, AgentView } from './agent.ts';
+import type { AgentDetail, AgentView, LlmCallView } from './agent.ts';
 import type { WorldEvent } from './events.ts';
 import type { WireMap } from './map.ts';
 import type { WorldMeta, WorldSettings } from './world.ts';
@@ -31,6 +31,10 @@ export interface RunnerStatus {
   actualSpeed: number;
   /** Number of agents the world is currently waiting on to decide. */
   thinking: number;
+  spentUsd: number;
+  capUsd: number;
+  /** Paused because the spending cap was reached. */
+  capReached: boolean;
 }
 
 export interface WorldViewResponse {
@@ -64,6 +68,10 @@ export interface EventsResponse {
 
 export interface AgentResponse {
   agent: AgentDetail;
+}
+
+export interface CallsResponse {
+  calls: LlmCallView[];
 }
 
 export interface AgentsResponse {

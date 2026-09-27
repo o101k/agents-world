@@ -1,3 +1,4 @@
+import { SettingsDialog } from './components/SettingsDialog.tsx';
 import { WorldScreen } from './screens/WorldScreen.tsx';
 import { WorldsScreen } from './screens/WorldsScreen.tsx';
 import { useApp } from './store.ts';
@@ -23,6 +24,7 @@ export function App() {
       ) : (
         <WorldsScreen />
       )}
+      <SettingsDialog />
     </>
   );
 }

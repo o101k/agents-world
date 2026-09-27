@@ -30,6 +30,36 @@ export function mockDecide(p: Perception): Decision {
   let goal = '';
   const roll = hash(`${p.agentId}:${p.tick}`);
 
+  // Someone spoke to us: answer briefly (unless we're in real trouble), then carry on.
+  if (p.trigger.kind === 'spoken_to') {
+    const t = p.trigger;
+    const firstName = t.fromName.startsWith('a stranger') ? 'stranger' : t.fromName.split(' ')[0];
+    const replies = [
+      `Good day, ${firstName}.`,
+      `Ah, ${firstName}. All well with you?`,
+      `Can't talk long, ${firstName} — lots to do.`,
+      `Nice to see you, ${firstName}.`,
+      `Mm. If you say so, ${firstName}.`,
+    ];
+    const asked = t.message.trim().endsWith('?');
+    const reply = asked
+      ? `I'm getting by, ${firstName}. And you?`
+      : replies[Math.floor(roll * replies.length)]!;
+    const rest = mockDecide({ ...p, trigger: { kind: 'plan_done' } });
+    const chatty = p.personality.extraversion > 40 || asked;
+    if (needs.water < 15 || needs.food < 10 || !chatty) {
+      return {
+        ...rest,
+        thought: `${t.fromName} is talking to me, but I have other things on my mind. ${rest.thought}`,
+      };
+    }
+    return {
+      thought: `${t.fromName} said something to me. ${rest.thought}`,
+      goal: rest.goal || 'Chat',
+      plan: [{ type: 'talk_to', agentId: t.fromId, message: reply }, ...rest.plan],
+    };
+  }
+
   const known = (kinds: string[]) => p.knownPlaces.filter((k) => kinds.includes(k.kind));
   const home = p.self.homeId ? p.knownPlaces.find((k) => k.id === p.self.homeId) : undefined;
   const foodInBag = (Object.keys(NUTRITION) as ItemName[])

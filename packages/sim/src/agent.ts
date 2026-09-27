@@ -12,6 +12,26 @@ import type {
   SkillName,
 } from '@aw/shared';
 
+export type MemoryKind = 'experience' | 'conversation' | 'thought' | 'told';
+
+/** One long-term memory. Importance 1 (trivial) – 10 (life-changing). */
+export interface Memory {
+  tick: number;
+  text: string;
+  importance: number;
+  kind: MemoryKind;
+  /** People involved (agent ids), used for recall. */
+  people: string[];
+}
+
+export interface PersonKnowledge {
+  /** Name as known to this agent (null = not introduced yet). */
+  name: string | null;
+  /** Grows with every conversation. */
+  familiarity: number;
+  lastSeenTick: number;
+}
+
 export interface KnownPlaceState {
   lastSeenTick: number;
   lastSeenAmount?: number;
@@ -70,16 +90,61 @@ export interface Agent {
   alerted: Record<string, boolean>;
   /** Next tick at which an awake, busy agent gets a routine check-in decision. */
   nextCheckIn: number;
-  /** Short memory of the agent's own recent experiences (full memory system arrives in Phase 2). */
+  /** Working memory: the agent's last few experiences, always in the prompt. */
   recent: { tick: number; text: string }[];
+  /** Long-term memory stream (bounded; see MEMORY_LIMIT). */
+  memories: Memory[];
+  /** People this agent has met, by agent id. */
+  people: Record<string, PersonKnowledge>;
+  /** Words said recently (shown as a speech bubble until `until`). */
+  speech: { text: string; until: number } | null;
+  /** Conversation turn counters by partner id, to wind long chats down. */
+  convo: Record<string, { turns: number; lastTick: number }>;
+  /** AI spending on this agent's decisions (USD) and number of decisions. */
+  spentUsd: number;
+  decisions: number;
 }
+
+export const MEMORY_LIMIT = 300;
 
 export const RECENT_LIMIT = 12;
 
-export function remember(agent: Agent, tick: number, text: string): void {
+/**
+ * Record an experience. Everything goes into working memory; anything above trivial also goes
+ * into the long-term stream, which is capped by dropping the weakest (least important, oldest).
+ */
+export function remember(
+  agent: Agent,
+  tick: number,
+  text: string,
+  importance = 1,
+  kind: MemoryKind = 'experience',
+  people: string[] = [],
+): void {
   agent.recent.push({ tick, text });
   if (agent.recent.length > RECENT_LIMIT)
     agent.recent.splice(0, agent.recent.length - RECENT_LIMIT);
+  if (importance < 2) return;
+  agent.memories.push({
+    tick,
+    text,
+    importance: Math.max(1, Math.min(10, Math.round(importance))),
+    kind,
+    people,
+  });
+  if (agent.memories.length > MEMORY_LIMIT) {
+    let weakest = 0;
+    let weakestScore = Infinity;
+    for (let i = 0; i < agent.memories.length; i++) {
+      const m = agent.memories[i]!;
+      const score = m.importance * 1e6 + m.tick; // importance dominates; the older one loses ties
+      if (score < weakestScore) {
+        weakestScore = score;
+        weakest = i;
+      }
+    }
+    agent.memories.splice(weakest, 1);
+  }
 }
 
 export function fullName(agent: Agent): string {

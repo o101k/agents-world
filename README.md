@@ -4,9 +4,10 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 1 (a world that runs).** Villagers live in a generated village with needs (food,
-water, sleep, warmth), gather berries, vegetables and fish, drink, sleep at home, and can die of
-neglect. They're driven by a free rule-based "mock brain" for now; AI brains arrive in Phase 2. See
+**Status: Phase 2 (minds).** Villagers live in a generated village with needs (food, water, sleep,
+warmth), gather food, drink, sleep at home, talk to each other, remember, and can die of neglect.
+Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
+such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
 
 ## Requirements
@@ -46,6 +47,37 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 - Stopping the helper (Ctrl+C) or even a crash loses nothing: the world resumes at the exact
   in-game minute it had reached.
 
+### Giving villagers AI brains
+
+1. Click **⚙ AI settings** (on the worlds screen, or ⚙ in a world's top bar) and add a key:
+   - **Anthropic**: paste your API key. Default model `claude-haiku-4-5` (the cheapest Claude model).
+   - **OpenAI**: paste your key and choose a default model.
+   - **OpenAI-compatible**: set the base URL — `https://openrouter.ai/api/v1` for OpenRouter (plus
+     your key), or `http://localhost:11434/v1` for Ollama / `http://localhost:1234/v1` for LM Studio
+     (no key needed; free, runs on your Mac).
+   - **Test connection** lists the models it can see.
+     Keys stay in `~/.agents-world/secrets.json` (readable only by you) and are never shown again or
+     sent to the browser. You can instead set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+     `OPENAI_COMPATIBLE_API_KEY` before `npm start`.
+2. In a world, open the **World** tab → **Default brain**, pick the provider/model/effort, tick
+   "Also switch everyone alive", and save. Or set one person's brain in their inspector.
+3. Press Play. The meter in the top bar shows AI spending against the world's cap (default $1); click
+   it to change the cap. When the cap is reached, time pauses.
+
+**Effort levels**: _Frugal_ (cheapest — routine needs like drinking, eating and going to bed are
+handled by instinct without an AI call), _Standard_, _Deep_ (more memories per prompt, more thinking).
+
+**Rough costs** (they depend on the model): a decision is about 1,000–1,500 input tokens and ~150
+output tokens. With `claude-haiku-4-5` that's roughly $0.002 per decision; eight Frugal villagers
+make a few hundred decisions per in-game day. Local models via Ollama or LM Studio cost nothing.
+Check the **Prices** table in settings so the meter matches your provider's prices.
+
+In a person's inspector you can read their current thought, plan, memories and the people they know,
+and open **Raw AI exchanges** to see the exact prompt and reply behind recent decisions.
+
+**+ Spawn** brings a new person into the world from your description (the world's default AI fleshes
+them out). They arrive on the road knowing no one.
+
 ### Where your worlds are saved
 
 In `~/.agents-world/` (a hidden folder in your home directory):
@@ -53,6 +85,8 @@ In `~/.agents-world/` (a hidden folder in your home directory):
 ```
 ~/.agents-world/
   app.json                 which world is active
+  settings.json            provider URLs, default models, price table
+  secrets.json             your API keys (only readable by you)
   worlds/<world-id>.sqlite one file per world (its whole history)
 ```
 
@@ -85,6 +119,7 @@ For the end-to-end tests, install a browser once with `npx playwright install ch
 ```
 packages/shared   types and message formats shared by everything
 packages/sim      the simulation: deterministic world rules (no AI, no I/O)
+packages/brain    the AI layer: providers, prompts, mock brain, pricing
 apps/server       the local helper: saves worlds, runs the simulation, serves the UI
 apps/web          the browser UI: React panels + PixiJS map
 tests/e2e         Playwright tests

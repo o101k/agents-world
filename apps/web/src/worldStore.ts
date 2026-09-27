@@ -34,7 +34,15 @@ interface WorldRuntime {
   reset: () => void;
 }
 
-const idle: RunnerStatus = { running: false, speed: 5, actualSpeed: 0, thinking: 0 };
+const idle: RunnerStatus = {
+  running: false,
+  speed: 5,
+  actualSpeed: 0,
+  thinking: 0,
+  spentUsd: 0,
+  capUsd: 1,
+  capReached: false,
+};
 
 export const useWorld = create<WorldRuntime>((set, get) => ({
   worldId: null,

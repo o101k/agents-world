@@ -24,7 +24,10 @@ test('create, view, switch and delete worlds', async ({ page }) => {
   await expect(page.locator('.topbar-title')).toHaveText('Bravo Town');
   await page.getByRole('button', { name: '← Worlds' }).click();
   await expect(page.locator('.world-card')).toHaveCount(2);
-  await page.locator('.world-card', { hasText: 'Alpha Village' }).getByRole('button', { name: 'Open' }).click();
+  await page
+    .locator('.world-card', { hasText: 'Alpha Village' })
+    .getByRole('button', { name: 'Open' })
+    .click();
   await expect(page.locator('.topbar-title')).toHaveText('Alpha Village');
 
   // The active world survives a reload.
@@ -33,7 +36,10 @@ test('create, view, switch and delete worlds', async ({ page }) => {
 
   // Delete one world (with confirmation).
   await page.getByRole('button', { name: '← Worlds' }).click();
-  await page.locator('.world-card', { hasText: 'Bravo Town' }).getByRole('button', { name: 'Delete' }).click();
+  await page
+    .locator('.world-card', { hasText: 'Bravo Town' })
+    .getByRole('button', { name: 'Delete' })
+    .click();
   await page.getByRole('button', { name: 'Delete world' }).click();
   await expect(page.locator('.world-card')).toHaveCount(1);
   await expect(page.locator('.world-card')).toContainText('Alpha Village');
@@ -71,4 +77,31 @@ test('time runs, villagers live, and the world resumes where it was', async ({ p
   const clock = await page.locator('.topbar-clock').innerText();
   await page.reload();
   await expect(page.locator('.topbar-clock')).toHaveText(clock);
+});
+
+test('observer powers: spawn a person and set up AI settings', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.world-screen, .worlds-screen')).toBeVisible();
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+
+  // Settings open and show the providers; keys are never displayed.
+  await page.getByRole('button', { name: '⚙ AI settings' }).click();
+  await expect(page.locator('.provider-card', { hasText: 'Anthropic' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
+
+  await page.getByLabel('Name').fill('Spawn Village');
+  await page.getByRole('button', { name: 'Create world' }).click();
+  await expect(page.locator('.topbar-title')).toHaveText('Spawn Village');
+
+  await page.getByRole('button', { name: '+ Spawn' }).click();
+  await page
+    .getByLabel('Description')
+    .fill('A weary pedlar with a cart of pots and a head full of tall tales.');
+  await page.getByLabel(/^Name/).fill('Hob');
+  await page.getByRole('button', { name: 'Spawn', exact: true }).click();
+  await expect(page.locator('.inspector')).toContainText('Hob');
+  await page.getByRole('tab', { name: 'People' }).click();
+  await expect(page.locator('.person-row')).toHaveCount(9);
+  await expect(page.locator('.spend-meter')).toContainText('$0');
 });

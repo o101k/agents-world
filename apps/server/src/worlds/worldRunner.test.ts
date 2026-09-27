@@ -77,3 +77,40 @@ describe('WorldRunner', () => {
     await wm2.closeAll();
   });
 });
+
+describe('spending cap', () => {
+  it('pauses the world before a paid decision once the cap is reached', async () => {
+    const paid = {
+      id: 'anthropic' as const,
+      decide: async () => ({
+        decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+        usage: { inputTokens: 1000, outputTokens: 100, costUsd: 0.01 },
+      }),
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([paid]) });
+    const w = wm.create({ name: 'Cap', seed: 'cap', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'anthropic', model: 'x', effort: 'standard' },
+      applyToAll: true,
+    });
+    runner.setCap(0.05);
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    for (let i = 0; i < 200 && !runner.status().capReached; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const status = runner.status();
+    expect(status.capReached).toBe(true);
+    expect(status.running).toBe(false);
+    expect(status.spentUsd).toBeGreaterThanOrEqual(0.05);
+    expect(status.spentUsd).toBeLessThan(0.05 + 8 * 0.01 + 1e-9); // at most one batch over
+    const events = wm.events(w.id, { limit: 20, minImportance: 5 });
+    expect(events.some((e) => e.kind === 'cap_reached')).toBe(true);
+    const calls = runner.state.agents.flatMap((a) => wm.calls(w.id, a.id));
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.reduce((s, c) => s + c.costUsd, 0)).toBeCloseTo(status.spentUsd);
+    await wm.closeAll();
+  });
+});

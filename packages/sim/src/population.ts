@@ -63,3 +63,20 @@ export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
   state.agents.push(agent);
   return agent;
 }
+
+/** Villagers who grew up together know each other; housemates know each other well. */
+export function introduceResidents(state: WorldState): void {
+  const residents = state.agents.filter(
+    (a) => a.alive && Object.keys(a.knowledge).length > 0 && a.homeId,
+  );
+  for (const a of residents) {
+    for (const b of residents) {
+      if (a === b || a.people[b.id]) continue;
+      a.people[b.id] = {
+        name: b.familyName ? `${b.name} ${b.familyName}` : b.name,
+        familiarity: a.homeId === b.homeId ? 90 : 30,
+        lastSeenTick: state.tick,
+      };
+    }
+  }
+}

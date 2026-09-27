@@ -1,13 +1,17 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BrainRouter } from '@aw/brain';
+import { BrainRouter, draftPerson } from '@aw/brain';
 import {
   CreateWorldRequest,
+  DEFAULT_CAP_USD,
   DEFAULT_SPEED,
   WORLD_ID_PATTERN,
   encodeMap,
   type AgentDetail,
+  type BrainConfig,
+  type LlmCallView,
+  type SpawnRequest,
   type WorldMeta,
   type WorldViewResponse,
 } from '@aw/shared';
@@ -98,9 +102,10 @@ export class WorldManager {
       population: state.agents.filter((a) => a.alive).length,
       running: false,
       speed: DEFAULT_SPEED,
+      spentUsd: 0,
+      capUsd: DEFAULT_CAP_USD,
     };
     const file = WorldFile.create(this.pathFor(id), meta, state);
-    file.writeMeta({ population: meta.population, running: false, speed: DEFAULT_SPEED });
     this.files.set(id, file);
     this.log(`Created world "${meta.name}" (${id}, seed ${seed})`);
     return meta;
@@ -162,6 +167,59 @@ export class WorldManager {
 
   async submit(worldId: string, input: TickInput): Promise<void> {
     await this.requireActive(worldId).submit(input);
+  }
+
+  async setBrain(worldId: string, agentId: string, brain: BrainConfig): Promise<void> {
+    const runner = this.requireActive(worldId);
+    if (!runner.state.agents.some((a) => a.id === agentId))
+      throw new NotFoundError(`No such person ${agentId}`);
+    await runner.submit({ kind: 'set_brain', agentId, brain });
+  }
+
+  async setDefaultBrain(worldId: string, brain: BrainConfig, applyToAll: boolean): Promise<void> {
+    await this.requireActive(worldId).submit({ kind: 'set_default_brain', brain, applyToAll });
+  }
+
+  setCap(worldId: string, capUsd: number): void {
+    this.requireActive(worldId).setCap(capUsd);
+  }
+
+  calls(worldId: string, agentId: string, limit = 10): LlmCallView[] {
+    return this.file(worldId).listCalls(agentId, limit);
+  }
+
+  /**
+   * Spawn a new person from the observer's description, fleshed out by the world's default AI
+   * (or offline if none is set up). They arrive on the road, knowing nobody.
+   */
+  async spawn(worldId: string, req: SpawnRequest): Promise<{ agentId: string; note?: string }> {
+    const runner = this.requireActive(worldId);
+    const { draft, usage, error } = await draftPerson(
+      req,
+      runner.state.settings.defaultBrain,
+      this.brains,
+    );
+    if (usage?.costUsd) runner.addSpend(usage.costUsd);
+    const before = runner.state.nextAgentNum;
+    await runner.submit({
+      kind: 'spawn_agent',
+      spec: {
+        name: draft.name,
+        familyName: draft.familyName,
+        sex: draft.sex,
+        age: draft.age,
+        occupation: draft.occupation,
+        traits: draft.traits,
+        background: draft.background,
+        personality: draft.personality,
+        knowsVillage: false,
+        homeId: null,
+      },
+    });
+    return {
+      agentId: `a${before}`,
+      note: error ? `The AI couldn't help (${error}); used a simple draft instead.` : undefined,
+    };
   }
 
   async closeAll(): Promise<void> {

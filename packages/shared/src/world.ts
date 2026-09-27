@@ -1,6 +1,10 @@
+import type { BrainConfig } from './agent.ts';
+
 export interface WorldSettings {
   /** In-game days per year of age (the aging slider). */
   daysPerYear: number;
+  /** Brain given to newborns and spawned people. */
+  defaultBrain: BrainConfig;
 }
 
 /** Summary of a saved world, shown on the worlds screen. */
@@ -19,7 +23,13 @@ export interface WorldMeta {
   running: boolean;
   /** Target speed in ticks per second (0 = as fast as possible). */
   speed: number;
+  /** AI spending so far in this world (USD). */
+  spentUsd: number;
+  /** Spending cap; the world pauses when it's reached (USD). */
+  capUsd: number;
 }
+
+export const DEFAULT_CAP_USD = 1;
 
 /** Speed presets in ticks (in-game minutes) per real second. 0 = as fast as possible. */
 export const SPEED_PRESETS = [1, 5, 20, 60, 200, 0] as const;
