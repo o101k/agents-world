@@ -61,6 +61,8 @@ export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
     }
   }
   agent.awaiting = { kind: 'spawned' };
+  // Babies live indoors at home from the start.
+  if (spec.age < 1 && home?.door) agent.indoorsId = home.id;
   state.agents.push(agent);
   return agent;
 }

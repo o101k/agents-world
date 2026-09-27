@@ -1,0 +1,118 @@
+import { useEffect, useState } from 'react';
+import type { FamilyNode } from '@aw/shared';
+import { api } from '../api.ts';
+
+/** Grandparents → parents → the person (and partner) → children → grandchildren. */
+export function FamilyTree({
+  worldId,
+  agentId,
+  onPick,
+  onClose,
+}: {
+  worldId: string;
+  agentId: string;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [tree, setTree] = useState<FamilyNode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .familyTree(worldId, agentId)
+      .then(setTree)
+      .catch((e: Error) => setError(e.message));
+  }, [worldId, agentId]);
+
+  const person = (
+    n: { id: string; name: string; alive: boolean; age?: number } | null | undefined,
+    cls = '',
+  ) =>
+    n ? (
+      <button
+        key={n.id}
+        className={`tree-person ${n.alive ? '' : 'is-dead'} ${cls}`}
+        onClick={() => onPick(n.id)}
+      >
+        <span>{n.name}</span>
+        {'age' in n && n.age !== undefined && (
+          <span className="muted small">{n.alive ? `${n.age}` : '†'}</span>
+        )}
+      </button>
+    ) : (
+      <span className="tree-person is-unknown">unknown</span>
+    );
+
+  const grandparents = tree
+    ? [tree.mother?.mother, tree.mother?.father, tree.father?.mother, tree.father?.father]
+    : [];
+  const grandchildren = tree?.children?.flatMap((c) => c.children ?? []) ?? [];
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal panel family-tree"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tree-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h2 id="tree-title">Family tree{tree ? ` — ${tree.name}` : ''}</h2>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        {error && <p className="warn">{error}</p>}
+        {tree && (
+          <div className="tree">
+            {grandparents.some(Boolean) && (
+              <div className="tree-row">
+                <span className="tree-label muted small">Grandparents</span>
+                <div className="tree-people">
+                  {grandparents.map((g, i) =>
+                    g ? (
+                      person(g)
+                    ) : (
+                      <span key={i} className="tree-person is-unknown">
+                        —
+                      </span>
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="tree-row">
+              <span className="tree-label muted small">Parents</span>
+              <div className="tree-people">
+                {person(tree.mother)}
+                {person(tree.father)}
+              </div>
+            </div>
+            <div className="tree-row">
+              <span className="tree-label muted small">{tree.partner ? 'Couple' : 'Person'}</span>
+              <div className="tree-people">
+                {person(tree, 'is-root')}
+                {tree.partner && person(tree.partner)}
+              </div>
+            </div>
+            <div className="tree-row">
+              <span className="tree-label muted small">Children</span>
+              <div className="tree-people">
+                {tree.children?.length ? (
+                  tree.children.map((c) => person(c))
+                ) : (
+                  <span className="muted small">none</span>
+                )}
+              </div>
+            </div>
+            {grandchildren.length > 0 && (
+              <div className="tree-row">
+                <span className="tree-label muted small">Grandchildren</span>
+                <div className="tree-people">{grandchildren.map((c) => person(c))}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

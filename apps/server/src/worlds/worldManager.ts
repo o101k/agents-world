@@ -10,6 +10,7 @@ import {
   encodeMap,
   type AgentDetail,
   type BrainConfig,
+  type FamilyNode,
   type LlmCallView,
   type MarketResponse,
   type SpawnRequest,
@@ -17,17 +18,21 @@ import {
   type WorldViewResponse,
 } from '@aw/shared';
 import {
+  SAMPLE_CAST,
   agentDetail,
   agentView,
   allQuotes,
   createWorldState,
+  generateCast,
   ownerNames,
+  type AgentSpec,
   type TickInput,
 } from '@aw/sim';
 import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
 
 export class NotFoundError extends Error {}
+export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 
 interface AppState {
@@ -92,11 +97,12 @@ export class WorldManager {
     return worlds.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  create(input: CreateWorldRequest): WorldMeta {
+  async create(input: CreateWorldRequest): Promise<WorldMeta> {
     const req = CreateWorldRequest.parse(input);
     const id = `w_${randomBytes(6).toString('hex')}`;
     const seed = req.seed || randomBytes(4).toString('hex');
-    const state = createWorldState({ seed, mapSize: req.mapSize });
+    const cast = await this.buildCast(req.cast, seed);
+    const state = createWorldState({ seed, mapSize: req.mapSize, cast });
     const now = new Date().toISOString();
     const meta: WorldMeta = {
       id,
@@ -117,6 +123,57 @@ export class WorldManager {
     this.files.set(id, file);
     this.log(`Created world "${meta.name}" (${id}, seed ${seed})`);
     return meta;
+  }
+
+  /** Turn the chosen cast option into people specs. */
+  private async buildCast(option: CreateWorldRequest['cast'], seed: string): Promise<AgentSpec[]> {
+    const opt = option ?? { mode: 'sample' };
+    if (opt.mode === 'sample') return SAMPLE_CAST;
+    if (opt.mode === 'custom') {
+      const names = new Set<string>();
+      for (const p of opt.people) {
+        if (names.has(p.name))
+          throw new ValidationError(
+            `Two people are both called ${p.name}; first names must be unique.`,
+          );
+        names.add(p.name);
+      }
+      return opt.people.map((p, i) => ({
+        ...p,
+        household: p.household ?? i,
+        occupation:
+          p.occupation ||
+          (p.age < 1 ? 'baby' : p.age < 3 ? 'toddler' : p.age < 13 ? 'child' : 'villager'),
+        parents: p.parents?.filter(Boolean),
+        partner: p.partner || undefined,
+      }));
+    }
+    const cast = generateCast(seed, { adults: opt.adults, children: opt.children });
+    if (!opt.useAi) return cast;
+    // Flesh out each adult with the first AI provider that's set up.
+    const order: BrainConfig['provider'][] = ['anthropic', 'openai', 'openai_compatible'];
+    const provider = order.find((p) => this.brains.has(p));
+    if (!provider) return cast;
+    const brain: BrainConfig = { provider, model: '', effort: 'frugal' };
+    for (const spec of cast) {
+      if (spec.age < 16) continue;
+      const partner = spec.partner ? ` Partner: ${spec.partner}.` : '';
+      const kids = cast.filter((c) => c.parents?.includes(spec.name)).map((c) => c.name);
+      const { draft } = await draftPerson(
+        {
+          description: `A ${spec.age}-year-old ${spec.sex === 'female' ? 'woman' : 'man'} who works as a ${spec.occupation}. ${spec.traits}${partner}${kids.length ? ` Children: ${kids.join(', ')}.` : ''}`,
+          name: spec.name,
+          sex: spec.sex,
+          age: Math.max(16, Math.round(spec.age)),
+        },
+        brain,
+        this.brains,
+      );
+      spec.traits = draft.traits;
+      spec.background = draft.background;
+      spec.personality = draft.personality;
+    }
+    return cast;
   }
 
   /** Make a world the active one: the previous one is saved and stops; this one resumes. */
@@ -200,6 +257,52 @@ export class WorldManager {
 
   setCap(worldId: string, capUsd: number): void {
     this.requireActive(worldId).setCap(capUsd);
+  }
+
+  async setAging(worldId: string, daysPerYear: number): Promise<void> {
+    await this.requireActive(worldId).submit({ kind: 'set_days_per_year', value: daysPerYear });
+  }
+
+  /** A person with parents/grandparents above and children/grandchildren below. */
+  familyTree(worldId: string, agentId: string): FamilyNode {
+    const state = this.requireActive(worldId).state;
+    const find = (id: string | null) => (id ? state.agents.find((a) => a.id === id) : undefined);
+    const root = find(agentId);
+    if (!root) throw new NotFoundError(`No such person ${agentId}`);
+    const node = (
+      a: NonNullable<ReturnType<typeof find>>,
+      up: number,
+      down: number,
+    ): FamilyNode => {
+      const partner = find(a.partnerId);
+      const mother = find(a.motherId);
+      const father = find(a.fatherId);
+      return {
+        id: a.id,
+        name: agentView(a).name,
+        sex: a.sex,
+        age: Math.floor(a.age),
+        alive: a.alive,
+        ...(up > 0
+          ? {
+              mother: mother ? node(mother, up - 1, 0) : null,
+              father: father ? node(father, up - 1, 0) : null,
+            }
+          : {}),
+        partner: partner
+          ? { id: partner.id, name: agentView(partner).name, alive: partner.alive }
+          : null,
+        ...(down > 0
+          ? {
+              children: a.childrenIds
+                .map((id) => find(id))
+                .filter((c): c is NonNullable<typeof c> => Boolean(c))
+                .map((c) => node(c, 0, down - 1)),
+            }
+          : {}),
+      };
+    };
+    return node(root, 2, 2);
   }
 
   calls(worldId: string, agentId: string, limit = 10): LlmCallView[] {

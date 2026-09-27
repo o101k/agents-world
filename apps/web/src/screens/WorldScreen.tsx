@@ -49,6 +49,8 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const [spawning, setSpawning] = useState(false);
   const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
+  /** Map version currently shown (to know when to reload). */
+  const loadedVersion = useRef(0);
 
   // State starts fresh per world: App renders this screen with key={worldId}.
   useEffect(() => {
@@ -57,6 +59,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
       .then(([v, ev]) => {
         if (cancelled) return;
         useWorld.getState().load(worldId, v, ev.events);
+        loadedVersion.current = useWorld.getState().mapVersion;
         setView(v);
         setMap(decodeMap(v.map));
       })
@@ -66,6 +69,25 @@ export function WorldScreen({ worldId }: { worldId: string }) {
       useWorld.getState().reset();
     };
   }, [worldId]);
+
+  // The map changed on the helper (e.g. a house is being built): reload it in place.
+  const mapVersion = useWorld((s) => s.mapVersion);
+  useEffect(() => {
+    if (!view || mapVersion === loadedVersion.current) return;
+    loadedVersion.current = mapVersion;
+    let cancelled = false;
+    api
+      .worldView(worldId)
+      .then((v) => {
+        if (cancelled) return;
+        setMap(decodeMap(v.map));
+        setView(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mapVersion, view, worldId]);
 
   // Selecting something on the map shows it.
   useEffect(
@@ -192,6 +214,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                   selection={selection}
                   map={map}
                   ownersById={view?.owners ?? {}}
+                  onPick={pickAgent}
                 />
               ) : (
                 <p className="muted">Click a person or anything on the map.</p>
@@ -216,6 +239,7 @@ function WorldInfo({
 }) {
   const [settings, setSettings] = useState(view.settings);
   const [applyToAll, setApplyToAll] = useState(false);
+  const [daysPerYear, setDaysPerYear] = useState(view.settings.daysPerYear);
   const counts = new Map<MapObjectKind, number>();
   for (const o of map?.objects ?? []) counts.set(o.kind, (counts.get(o.kind) ?? 0) + 1);
   return (
@@ -230,11 +254,26 @@ function WorldInfo({
           {view.meta.mapWidth}×{view.meta.mapHeight} tiles
         </dd>
         <dt>Aging</dt>
-        <dd>{view.settings.daysPerYear} days per year</dd>
+        <dd>{daysPerYear} in-game days per year</dd>
         {(['house', 'field', 'tree', 'berry_bush'] as MapObjectKind[]).map((k) => (
           <FactRow key={k} label={`${OBJECT_LABELS[k]}s`} value={counts.get(k) ?? 0} />
         ))}
       </dl>
+      <h3>Aging speed</h3>
+      <input
+        type="range"
+        min={1}
+        max={30}
+        value={daysPerYear}
+        aria-label="In-game days per year of age"
+        onChange={(e) => setDaysPerYear(Number(e.target.value))}
+        onPointerUp={() => void api.setAging(worldId, daysPerYear)}
+        onKeyUp={() => void api.setAging(worldId, daysPerYear)}
+      />
+      <p className="muted small">
+        One year of age every {daysPerYear} in-game day{daysPerYear === 1 ? '' : 's'} (a lifetime of
+        ~70 years ≈ {Math.round(70 * daysPerYear)} days). Lower is faster.
+      </p>
       <h3>Town market</h3>
       <MarketPanel worldId={worldId} />
       <h3>Default brain</h3>
@@ -286,15 +325,17 @@ function SelectionDetails({
   selection,
   map,
   ownersById,
+  onPick,
 }: {
   worldId: string;
   selection: MapSelection;
   map: WorldMap | null;
   ownersById: Record<string, string[]>;
+  onPick: (id: string) => void;
 }) {
   const resources = useWorld((s) => s.resources);
   if (selection.kind === 'agent')
-    return <AgentInspector worldId={worldId} agentId={selection.id} />;
+    return <AgentInspector worldId={worldId} agentId={selection.id} onPick={onPick} />;
   if (selection.kind === 'object') {
     const object = map?.objects.find((o) => o.id === selection.id);
     if (!object) return null;

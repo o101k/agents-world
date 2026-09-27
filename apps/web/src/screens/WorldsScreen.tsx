@@ -1,5 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { MAP_SIZES, formatClock, type MapSize, type WorldMeta } from '@aw/shared';
+import {
+  MAP_SIZES,
+  formatClock,
+  type CastOption,
+  type MapSize,
+  type PersonInput,
+  type WorldMeta,
+} from '@aw/shared';
+import { CastEditor, STARTER_CAST } from '../components/CastEditor.tsx';
 import { api } from '../api.ts';
 import { formatDate } from '../format.ts';
 import { useSettings } from '../settingsStore.ts';
@@ -125,6 +133,8 @@ export function WorldsScreen() {
   );
 }
 
+type CastMode = 'sample' | 'custom' | 'generated';
+
 function CreateWorldForm({
   onCreated,
   onError,
@@ -135,13 +145,24 @@ function CreateWorldForm({
   const [name, setName] = useState('');
   const [seed, setSeed] = useState('');
   const [mapSize, setMapSize] = useState<MapSize>('medium');
+  const [mode, setMode] = useState<CastMode>('sample');
+  const [people, setPeople] = useState<PersonInput[]>(STARTER_CAST);
+  const [adults, setAdults] = useState(10);
+  const [children, setChildren] = useState(5);
+  const [useAi, setUseAi] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const { world } = await api.createWorld({ name, seed: seed || undefined, mapSize });
+      const cast: CastOption =
+        mode === 'custom'
+          ? { mode, people: people.filter((p) => p.name.trim()) }
+          : mode === 'generated'
+            ? { mode, adults, children, useAi }
+            : { mode: 'sample' };
+      const { world } = await api.createWorld({ name, seed: seed || undefined, mapSize, cast });
       setName('');
       setSeed('');
       onCreated(world.id);
@@ -153,7 +174,10 @@ function CreateWorldForm({
   };
 
   return (
-    <form className="panel create-form" onSubmit={(e) => void submit(e)}>
+    <form
+      className={`panel create-form ${mode === 'custom' ? 'is-wide' : ''}`}
+      onSubmit={(e) => void submit(e)}
+    >
       <h2>New world</h2>
       <label>
         Name
@@ -184,9 +208,63 @@ function CreateWorldForm({
           ))}
         </select>
       </label>
+      <fieldset className="cast-mode">
+        <legend>Starting villagers</legend>
+        <label className="check">
+          <input
+            type="radio"
+            name="cast"
+            checked={mode === 'sample'}
+            onChange={() => setMode('sample')}
+          />{' '}
+          Sample cast (11 people, five households)
+        </label>
+        <label className="check">
+          <input
+            type="radio"
+            name="cast"
+            checked={mode === 'custom'}
+            onChange={() => setMode('custom')}
+          />{' '}
+          Write your own
+        </label>
+        <label className="check">
+          <input
+            type="radio"
+            name="cast"
+            checked={mode === 'generated'}
+            onChange={() => setMode('generated')}
+          />{' '}
+          Generate from the seed
+        </label>
+      </fieldset>
+      {mode === 'generated' && (
+        <div className="cast-row">
+          <label>
+            Adults
+            <input
+              value={adults}
+              inputMode="numeric"
+              onChange={(e) => setAdults(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+            />
+          </label>
+          <label>
+            Children
+            <input
+              value={children}
+              inputMode="numeric"
+              onChange={(e) => setChildren(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+            />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />{' '}
+            Flesh out with AI
+          </label>
+        </div>
+      )}
+      {mode === 'custom' && <CastEditor people={people} onChange={setPeople} />}
       <p className="muted small">
-        Choosing the starting villagers (sample cast, your own, or generated) arrives with the
-        life-cycle phase.
+        Everyone starts on the free Mock brain; give them AI brains in the world’s World tab.
       </p>
       <button className="btn btn-primary" type="submit" disabled={busy || !name.trim()}>
         {busy ? 'Creating…' : 'Create world'}

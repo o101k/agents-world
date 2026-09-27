@@ -15,3 +15,4 @@ export * from './walkability.ts';
 export * from './world.ts';
 export * from './market.ts';
 export * from './life.ts';
+export * from './generate.ts';

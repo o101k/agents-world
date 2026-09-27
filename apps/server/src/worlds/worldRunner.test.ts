@@ -26,7 +26,7 @@ async function runUntil(runner: WorldRunner, tick: number) {
 describe('WorldRunner', () => {
   it('advances time and records events', async () => {
     const wm = new WorldManager(dir);
-    const w = wm.create({ name: 'Run', seed: 'run', mapSize: 'small' });
+    const w = await wm.create({ name: 'Run', seed: 'run', mapSize: 'small' });
     await wm.activate(w.id);
     const runner = wm.active!;
     await runUntil(runner, w.tick + 600);
@@ -39,7 +39,7 @@ describe('WorldRunner', () => {
 
   it('resumes exactly where it left off, even without a clean shutdown', async () => {
     const wm = new WorldManager(dir);
-    const w = wm.create({ name: 'Resume', seed: 'resume', mapSize: 'small' });
+    const w = await wm.create({ name: 'Resume', seed: 'resume', mapSize: 'small' });
     await wm.activate(w.id);
     const runner = wm.active!;
     await runUntil(runner, w.tick + 700); // crosses a 6-hour snapshot boundary
@@ -60,8 +60,8 @@ describe('WorldRunner', () => {
   it('continues identically after a restart', async () => {
     // World A runs 900 ticks straight; world B (same seed) runs 400, restarts, then 500 more.
     const wm = new WorldManager(dir);
-    const a = wm.create({ name: 'A', seed: 'same', mapSize: 'small' });
-    const b = wm.create({ name: 'B', seed: 'same', mapSize: 'small' });
+    const a = await wm.create({ name: 'A', seed: 'same', mapSize: 'small' });
+    const b = await wm.create({ name: 'B', seed: 'same', mapSize: 'small' });
     await wm.activate(a.id);
     await wm.active!.advance(900);
     const straight = hash(wm.active!);
@@ -88,7 +88,7 @@ describe('spending cap', () => {
       }),
     };
     const wm = new WorldManager(dir, { brains: new BrainRouter([paid]) });
-    const w = wm.create({ name: 'Cap', seed: 'cap', mapSize: 'small' });
+    const w = await wm.create({ name: 'Cap', seed: 'cap', mapSize: 'small' });
     await wm.activate(w.id);
     const runner = wm.active!;
     await runner.submit({

@@ -13,7 +13,12 @@ import {
   type WorldsResponse,
 } from '@aw/shared';
 import type { Hub } from '../hub.ts';
-import { ConflictError, NotFoundError, type WorldManager } from '../worlds/worldManager.ts';
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+  type WorldManager,
+} from '../worlds/worldManager.ts';
 
 type IdParams = { Params: { id: string } };
 
@@ -30,6 +35,7 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     }
     if (err instanceof NotFoundError) return reply.code(404).send({ error: err.message });
     if (err instanceof ConflictError) return reply.code(409).send({ error: err.message });
+    if (err instanceof ValidationError) return reply.code(400).send({ error: err.message });
     app.log.error(err);
     const status = (err as { statusCode?: number }).statusCode ?? 500;
     return reply
@@ -40,7 +46,7 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
   app.get('/api/worlds', async (): Promise<WorldsResponse> => snapshot());
 
   app.post('/api/worlds', async (req, reply): Promise<WorldResponse> => {
-    const world = worlds.create((req.body ?? {}) as never);
+    const world = await worlds.create((req.body ?? {}) as never);
     notifyChanged();
     reply.code(201);
     return { world };
@@ -101,6 +107,20 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     notifyChanged();
     return { runner: worlds.active!.status() };
   });
+
+  app.put<IdParams>('/api/worlds/:id/aging', async (req) => {
+    const { daysPerYear } = (req.body ?? {}) as { daysPerYear?: unknown };
+    const value = Number(daysPerYear);
+    if (!Number.isFinite(value) || value < 1 || value > 60)
+      throw new ValidationError('Days per year must be between 1 and 60.');
+    await worlds.setAging(req.params.id, value);
+    return worlds.view(req.params.id).settings;
+  });
+
+  app.get<{ Params: { id: string; agentId: string } }>(
+    '/api/worlds/:id/family/:agentId',
+    async (req) => worlds.familyTree(req.params.id, req.params.agentId),
+  );
 
   app.post<IdParams>('/api/worlds/:id/spawn', async (req) =>
     worlds.spawn(req.params.id, SpawnRequest.parse(req.body)),

@@ -4,10 +4,10 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 3 (work, trade, money).** Villagers live in a generated village with needs (food,
-water, sleep, warmth); they farm, fish, forage and chop wood, bake bread and make planks and tools,
-buy and sell at the town market, give gifts, make trade offers, talk and remember — and can also
-steal, fight and die.
+**Status: Phase 4 (life cycle).** Villagers are born, grow up, learn to talk, work, trade, fall in
+love, have children, build houses, grow old and die; children inherit looks, temperament and
+aptitudes from their parents, and estates pass to heirs. They farm, fish, forage, chop wood, bake,
+make tools, trade at the market, and can also steal and fight.
 Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
 such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
@@ -35,8 +35,9 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 
 ### Using it
 
-- **Worlds screen**: create a world (name, optional seed, map size), open it, or delete it.
-  The same seed always makes the same map.
+- **Worlds screen**: create a world (name, optional seed, map size, and the starting villagers:
+  the sample cast, your own cast written on cards, or a cast generated from the seed — optionally
+  fleshed out by an AI), open it, or delete it. The same seed always makes the same map.
 - **World screen**: drag or two-finger scroll to pan; pinch or ⌘+scroll to zoom; arrow keys/WASD
   pan, `+`/`−` zoom, `F` fits the map. **← Worlds** goes back.
 - **Time**: ▶ Play / ❚❚ Pause (or Space) and a speed picker (1× = one in-game minute per second, up
@@ -81,6 +82,11 @@ and open **Raw AI exchanges** to see the exact prompt and reply behind recent de
 and the workshop turns wood into planks and tools. The town market (click it, or see the World tab)
 buys and sells everything at prices that follow supply and demand. Villagers can give things to each
 other and make trade offers; they only know market prices they've seen themselves.
+
+**Families**: each person's inspector shows their family, relationships (how they feel about whom),
+pregnancy, will, inborn aptitudes and a **Family tree** (grandparents to grandchildren). Babies stay
+at home and must be fed; children learn from what they're taught and what they watch. The **World**
+tab has the **aging speed** slider (in-game days per year of age).
 
 **+ Spawn** brings a new person into the world from your description (the world's default AI fleshes
 them out). They arrive on the road knowing no one.

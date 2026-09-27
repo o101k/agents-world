@@ -105,3 +105,23 @@ test('observer powers: spawn a person and set up AI settings', async ({ page }) 
   await expect(page.locator('.person-row')).toHaveCount(12);
   await expect(page.locator('.spend-meter')).toContainText('$0');
 });
+
+test('write your own cast and see the family tree', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.world-screen, .worlds-screen')).toBeVisible();
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+
+  await page.getByLabel('Name').first().fill('Family Village');
+  await page.getByLabel('Write your own').check();
+  await expect(page.locator('.cast-card')).toHaveCount(5); // starter cast to edit
+  await page.getByRole('button', { name: 'Create world' }).click();
+  await expect(page.locator('.topbar-title')).toHaveText('Family Village');
+  await page.getByRole('tab', { name: 'People' }).click();
+  await expect(page.locator('.person-row')).toHaveCount(5);
+  await page.locator('.person-row', { hasText: 'Anna Berg' }).click();
+  await expect(page.locator('.inspector')).toContainText('Erik Berg');
+  await page.getByRole('button', { name: 'Family tree' }).click();
+  await expect(page.locator('.family-tree')).toContainText('Lotta Berg');
+  await expect(page.locator('.tree-person.is-root')).toContainText('Anna Berg');
+});

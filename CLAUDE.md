@@ -297,6 +297,31 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — Phase 4 details.** (a) Stages: baby < 1, toddler < 3, child < 13, teen < 18, adult
+  < 60, elder. Each stage has an allowed action list enforced by the sim (babies: rest, sleep,
+  babble; toddlers add walking, eating, drinking, simple gathering; children can't craft, fight or
+  do adult-only things; teens can't start partnerships or families, build, or make wills).
+  (b) Babies live indoors at home and must be fed (feeding covers thirst for babies); little ones cry
+  when hungry and family members within earshot (or at home with them) are alerted. (c) Language
+  ability rises with age (baseline ≈ 28 points per year after the first) and with speech heard;
+  speech is simplified for young speakers and garbled for young listeners. (d) Relationships:
+  familiarity, affection, trust, romance, family role; changed by events and by the `feelings` the
+  brain reports (±3 units of 5 points). (e) Partnership: propose → respond; accepter/homeless partner
+  moves in. Conception needs a mutual yes (`try_for_child` + `respond_child_request`), partners of
+  opposite sex, mother 18–45 (fertility declines after 35), health; ~35% per try at best; pregnancy
+  0.75 years (tracked in age-years, so the aging slider applies); ~3% of births harm the mother.
+  Same-sex couples can partner but not conceive (adoption not implemented yet). (f) Genetics: skin
+  from either parent or blended, hair from a parent (5% new), temperament = parents' average pulled
+  25% to the middle ± noise, aptitude and constitution averaged ± noise. Family name: the father's if
+  the parents are partners, else the mother's. Babies get a name from their parents (or an automatic
+  one after a day). (g) Old age: annual death risk 0.3% at 50 doubling every 8 years, divided by
+  constitution. (h) Estates: will heir → partner → children (money split, goods dealt out, buildings
+  co-owned) → housemates. (i) Houses: `build_house` picks a free plot near the market, 3 planks and
+  an hour per stretch, ~10 stretches; map changes bump `mapVersion` so viewers reload the map.
+  (j) Starting cast per world: sample (11 people), write your own (card editor), or generated from
+  the seed (optionally fleshed out by the first configured AI provider). (k) Bug found and fixed:
+  the decide tool's action list had silently missed the Phase 3 actions; a test now checks it
+  matches the simulation's actions.
 - **2026-09-27 — Phase 3 details.** (a) Fields are common land anyone may harvest; odd-numbered
   fields grow wheat, even ones vegetables. Trees give wood (4 each, regrowing 1/day). (b) Recipes:
   bread (3 wheat → 2) at the bakery, planks (2 wood → 2) and tools (3 planks → 1, building skill ≥ 15)

@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   NEED_LABELS,
+  STAGE_LABELS,
   formatClock,
   type AgentDetail,
   type LlmCallView,
   type NeedName,
+  type RelationshipView,
 } from '@aw/shared';
+import { FamilyTree } from './FamilyTree.tsx';
 import { api } from '../api.ts';
 import { BrainEditor } from './BrainEditor.tsx';
 import { formatUsd } from './SpendMeter.tsx';
@@ -34,7 +37,16 @@ const BIG_FIVE: [keyof AgentDetail['personality'], string][] = [
   ['neuroticism', 'Neuroticism'],
 ];
 
-export function AgentInspector({ worldId, agentId }: { worldId: string; agentId: string }) {
+export function AgentInspector({
+  worldId,
+  agentId,
+  onPick,
+}: {
+  worldId: string;
+  agentId: string;
+  onPick?: (id: string) => void;
+}) {
+  const [treeOpen, setTreeOpen] = useState(false);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const followId = useWorld((s) => s.followId);
@@ -77,7 +89,7 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
         <div className="inspector-id">
           <div className="selection-title">{agent.name}</div>
           <div className="muted small">
-            {agent.age} · {agent.sex} · {agent.occupation}
+            {STAGE_LABELS[agent.stage]} · {agent.age} · {agent.sex} · {agent.occupation}
           </div>
           <div className={`status-pill ${agent.alive ? '' : 'is-dead'}`}>{status}</div>
         </div>
@@ -116,6 +128,51 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
           )}
         </section>
       )}
+
+      <section>
+        <h3>Family</h3>
+        <dl className="facts">
+          {agent.family.partner && (
+            <PersonRow label="Partner" p={agent.family.partner} onPick={onPick} />
+          )}
+          {agent.family.mother && (
+            <PersonRow label="Mother" p={agent.family.mother} onPick={onPick} />
+          )}
+          {agent.family.father && (
+            <PersonRow label="Father" p={agent.family.father} onPick={onPick} />
+          )}
+          {agent.family.children.map((c) => (
+            <PersonRow key={c.id} label="Child" p={c} onPick={onPick} />
+          ))}
+        </dl>
+        {!agent.family.partner &&
+          !agent.family.mother &&
+          !agent.family.father &&
+          agent.family.children.length === 0 && (
+            <p className="muted small">No family in the village.</p>
+          )}
+        {agent.pregnancy && (
+          <p className="small">
+            Expecting a child with {agent.pregnancy.fatherName} (
+            {Math.round(agent.pregnancy.progress * 100)}% along).
+          </p>
+        )}
+        {agent.will && <p className="small">Will: everything goes to {agent.will.heirName}.</p>}
+        <button className="btn btn-small" onClick={() => setTreeOpen(true)}>
+          Family tree
+        </button>
+        {treeOpen && (
+          <FamilyTree
+            worldId={worldId}
+            agentId={agentId}
+            onClose={() => setTreeOpen(false)}
+            onPick={(id) => {
+              setTreeOpen(false);
+              onPick?.(id);
+            }}
+          />
+        )}
+      </section>
 
       <section>
         <h3>Body</h3>
@@ -173,6 +230,15 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
       </section>
 
       <section>
+        <h3>Inborn</h3>
+        <Bar label="Physical aptitude" value={agent.aptitude.physical * 50} tone="neutral" />
+        <Bar label="Craft aptitude" value={agent.aptitude.craft * 50} tone="neutral" />
+        <Bar label="Social aptitude" value={agent.aptitude.social * 50} tone="neutral" />
+        <Bar label="Mind aptitude" value={agent.aptitude.intellectual * 50} tone="neutral" />
+        <Bar label="Constitution" value={agent.constitution * 50} tone="neutral" />
+      </section>
+
+      <section>
         <h3>Skills</h3>
         {Object.entries(agent.skills)
           .sort((a, b) => b[1] - a[1])
@@ -202,13 +268,10 @@ export function AgentInspector({ worldId, agentId }: { worldId: string; agentId:
 
       {agent.people.length > 0 && (
         <section>
-          <h3>People they know</h3>
-          <ul className="recent">
-            {agent.people.slice(0, 12).map((p) => (
-              <li key={p.id} className="person-known">
-                <span>{p.name}</span>
-                <span className="muted small">familiarity {p.familiarity}</span>
-              </li>
+          <h3>Relationships</h3>
+          <ul className="relationships">
+            {agent.people.slice(0, 14).map((p) => (
+              <RelationRow key={p.id} r={p} onPick={onPick} />
             ))}
           </ul>
         </section>
@@ -283,5 +346,55 @@ function AiExchanges({ worldId, agentId }: { worldId: string; agentId: string })
           ))
         ))}
     </div>
+  );
+}
+
+function PersonRow({
+  label,
+  p,
+  onPick,
+}: {
+  label: string;
+  p: { id: string; name: string; alive: boolean };
+  onPick?: (id: string) => void;
+}) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>
+        <button className="linkish" onClick={() => onPick?.(p.id)}>
+          {p.name}
+          {p.alive ? '' : ' †'}
+        </button>
+      </dd>
+    </>
+  );
+}
+
+function feelingLabel(r: RelationshipView): string {
+  const like =
+    r.affection >= 60
+      ? 'loves'
+      : r.affection >= 25
+        ? 'likes'
+        : r.affection > -25
+          ? 'neutral'
+          : r.affection > -60
+            ? 'dislikes'
+            : 'hates';
+  const trust = r.trust >= 40 ? ', trusts' : r.trust <= -20 ? ', distrusts' : '';
+  const rom = r.romance >= 50 ? ', in love' : r.romance >= 20 ? ', attracted' : '';
+  return `${like}${trust}${rom}`;
+}
+
+function RelationRow({ r, onPick }: { r: RelationshipView; onPick?: (id: string) => void }) {
+  return (
+    <li>
+      <button className="linkish" onClick={() => onPick?.(r.id)}>
+        {r.name}
+      </button>
+      {r.role && <span className="tag">{r.role}</span>}
+      <span className="muted small"> {feelingLabel(r)}</span>
+    </li>
   );
 }

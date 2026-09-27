@@ -107,7 +107,14 @@ export function createWorldState({
 }: CreateWorldOptions): WorldState {
   const size = MAP_SIZES[mapSize];
   const rng = Rng.fromSeed(`${seed}:world`);
-  const map = generateVillageMap(seed, { width: size, height: size });
+  // Enough houses for every household in the cast.
+  const households = new Set(cast.map((c) => c.household).filter((h) => h !== undefined)).size;
+  const defaultHouses = Math.max(6, Math.round((size * size) / 512));
+  const map = generateVillageMap(seed, {
+    width: size,
+    height: size,
+    houses: Math.max(defaultHouses, households + 1),
+  });
   const state: WorldState = {
     version: WORLD_STATE_VERSION,
     seed,

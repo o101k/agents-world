@@ -14,8 +14,8 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe('WorldManager', () => {
   it('creates, lists, activates and deletes worlds', async () => {
     const wm = new WorldManager(dir);
-    const a = wm.create({ name: 'Alpha', seed: 'a', mapSize: 'small' });
-    const b = wm.create({ name: 'Bravo', mapSize: 'small' });
+    const a = await wm.create({ name: 'Alpha', seed: 'a', mapSize: 'small' });
+    const b = await wm.create({ name: 'Bravo', mapSize: 'small' });
     expect(
       wm
         .list()
@@ -40,7 +40,7 @@ describe('WorldManager', () => {
 
   it('persists worlds and the active world across restarts', async () => {
     const first = new WorldManager(dir);
-    const w = first.create({ name: 'Persist', seed: 'keep', mapSize: 'small' });
+    const w = await first.create({ name: 'Persist', seed: 'keep', mapSize: 'small' });
     await first.activate(w.id);
     const before = first.view(w.id);
     await first.closeAll();
@@ -57,8 +57,8 @@ describe('WorldManager', () => {
 
   it('only one world runs at a time', async () => {
     const wm = new WorldManager(dir);
-    const a = wm.create({ name: 'A', seed: 'twin', mapSize: 'small' });
-    const b = wm.create({ name: 'B', seed: 'twin', mapSize: 'small' });
+    const a = await wm.create({ name: 'A', seed: 'twin', mapSize: 'small' });
+    const b = await wm.create({ name: 'B', seed: 'twin', mapSize: 'small' });
     await wm.activate(a.id);
     expect(() => wm.view(b.id)).toThrow(/Open this world first/);
     await wm.activate(b.id);
@@ -68,9 +68,68 @@ describe('WorldManager', () => {
 
   it('rejects invalid input and unknown ids', async () => {
     const wm = new WorldManager(dir);
-    expect(() => wm.create({ name: '   ' })).toThrow();
+    await expect(wm.create({ name: '   ' })).rejects.toThrow();
     await expect(wm.activate('w_doesnotexist')).rejects.toThrow(/not found/);
     await expect(wm.delete('../../etc/passwd')).rejects.toThrow(/Invalid world id/);
+    await wm.closeAll();
+  });
+});
+
+describe('starting casts', () => {
+  it('creates worlds from a written cast and from a generated one', async () => {
+    const wm = new WorldManager(dir);
+    const custom = await wm.create({
+      name: 'Custom',
+      mapSize: 'small',
+      cast: {
+        mode: 'custom',
+        people: [
+          {
+            name: 'Ada',
+            familyName: 'Stone',
+            sex: 'female',
+            age: 30,
+            household: 0,
+            partner: 'Ben',
+          },
+          { name: 'Ben', familyName: 'Stone', sex: 'male', age: 32, household: 0, partner: 'Ada' },
+          {
+            name: 'Cal',
+            familyName: 'Stone',
+            sex: 'male',
+            age: 0.4,
+            household: 0,
+            parents: ['Ada', 'Ben'],
+          },
+        ],
+      },
+    });
+    expect(custom.population).toBe(3);
+    await wm.activate(custom.id);
+    const ada = wm.view(custom.id).agents.find((a) => a.name === 'Ada Stone')!;
+    const tree = wm.familyTree(custom.id, ada.id);
+    expect(tree.partner?.name).toBe('Ben Stone');
+    expect(tree.children?.map((c) => c.name)).toEqual(['Cal Stone']);
+
+    const gen = await wm.create({
+      name: 'Gen',
+      seed: 'g',
+      mapSize: 'small',
+      cast: { mode: 'generated', adults: 10, children: 5, useAi: false },
+    });
+    expect(gen.population).toBe(15);
+    await expect(
+      wm.create({
+        name: 'Dup',
+        cast: {
+          mode: 'custom',
+          people: [
+            { name: 'X', sex: 'male', age: 20 },
+            { name: 'X', sex: 'female', age: 20 },
+          ],
+        },
+      }),
+    ).rejects.toThrow(/unique/);
     await wm.closeAll();
   });
 });

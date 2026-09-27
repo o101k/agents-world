@@ -17,6 +17,7 @@ export interface RunnerHooks {
     runner: RunnerStatus;
     agents: AgentView[];
     resources: Record<string, number>;
+    mapVersion: number;
   }) => void;
   onEvents?: (events: WorldEvent[]) => void;
   onStatus?: (meta: WorldMeta) => void;
@@ -384,6 +385,7 @@ export class WorldRunner {
       resources[id] = Math.floor(this.state.resources[id]?.amount ?? 0);
     this.changedResources.clear();
     this.hooks.onFrame({
+      mapVersion: this.state.mapVersion,
       tick: this.state.tick,
       runner: this.status(),
       agents: this.agentViews(),

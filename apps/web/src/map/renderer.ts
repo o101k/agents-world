@@ -81,6 +81,8 @@ interface AgentSprite {
   moveStart: number;
   moveDuration: number;
   grave: Sprite | null;
+  /** Smaller for children. */
+  baseScale: number;
 }
 
 /** Night darkness (0–1) and tint for an in-game time. */
@@ -171,11 +173,14 @@ export class WorldRenderer {
     if (this.map) this.buildScene();
   }
 
-  setMap(map: WorldMap): void {
+  /** Show a map. `keepCamera` for live updates (e.g. a house going up) so the view doesn't jump. */
+  setMap(map: WorldMap, keepCamera = false): void {
     this.map = map;
-    this.selected = null;
-    this.hovered = null;
-    if (this.ready) this.buildScene();
+    if (!keepCamera) {
+      this.selected = null;
+      this.hovered = null;
+    }
+    if (this.ready) this.buildScene(keepCamera);
   }
 
   setClock(tick: number): void {
@@ -303,7 +308,7 @@ export class WorldRenderer {
 
   // ------------------------------------------------------------------ scene
 
-  private buildScene(): void {
+  private buildScene(keepCamera = false): void {
     const map = this.map;
     const tex = this.textures;
     if (!map || !tex) return;
@@ -378,6 +383,11 @@ export class WorldRenderer {
       const bottom = (o.y + o.h) * TILE_PX;
       s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
       s.zIndex = bottom;
+      if (o.progress !== undefined) {
+        // Under construction: fades in as the work progresses.
+        s.alpha = 0.3 + 0.6 * o.progress;
+        s.tint = 0xd8c8a8;
+      }
       this.objects.addChild(s);
       this.objectSprites.set(o.id, s);
     }
@@ -387,7 +397,7 @@ export class WorldRenderer {
       if (a.grave) this.objects.addChild(a.grave);
     }
 
-    this.cam = fitCamera(this.worldSize(), this.screenSize());
+    if (!keepCamera) this.cam = fitCamera(this.worldSize(), this.screenSize());
     this.drawNight();
     this.drawSelection();
     this.drawHover();
@@ -475,6 +485,7 @@ export class WorldRenderer {
       moveStart: 0,
       moveDuration: 0,
       grave: null,
+      baseScale: 1,
     };
     this.retexture(a, v);
     return a;
@@ -510,6 +521,8 @@ export class WorldRenderer {
       return;
     }
     a.sprite.visible = !v.indoors;
+    a.baseScale =
+      v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
     const sleeping = v.activity === 'sleeping';
     a.sprite.rotation = sleeping ? -Math.PI / 2 : 0;
     a.sprite.anchor.set(sleeping ? 0.5 : 0.5, sleeping ? 0.6 : 1);
@@ -519,7 +532,7 @@ export class WorldRenderer {
     const step = moving ? Math.floor(now / 160) % 2 : 0;
     const dir = a.view.facing;
     const base = dir === 'up' ? 2 : dir === 'down' ? 0 : 4;
-    a.sprite.scale.x = dir === 'left' ? -1 : 1;
+    a.sprite.scale.set(dir === 'left' ? -a.baseScale : a.baseScale, a.baseScale);
     return a.frames[base + step] ?? a.frames[0]!;
   }
 

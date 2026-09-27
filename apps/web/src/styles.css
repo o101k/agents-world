@@ -829,3 +829,112 @@ textarea {
   overflow: auto;
   font-size: 11px;
 }
+
+/* ---------- phase 4: families */
+.create-form.is-wide {
+  grid-column: 1 / -1;
+}
+.cast-mode {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cast-mode legend {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+.cast-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+.cast-row label,
+.cast-card > label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.cast-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 8px 0;
+}
+.cast-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--bg-2);
+}
+.cast-card .btn {
+  align-self: flex-start;
+}
+.relationships {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+.relationships li {
+  padding: 2px 0;
+}
+.relationships .tag {
+  margin-left: 6px;
+}
+input[type='range'] {
+  width: 100%;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.family-tree {
+  max-width: 760px;
+}
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tree-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.tree-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tree-person {
+  appearance: none;
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.tree-person.is-root {
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.tree-person.is-dead {
+  opacity: 0.6;
+  font-style: italic;
+}
+.tree-person.is-unknown {
+  cursor: default;
+  color: var(--muted);
+  border-style: dashed;
+}

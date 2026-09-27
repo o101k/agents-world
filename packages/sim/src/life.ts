@@ -1008,7 +1008,7 @@ export function settleEstate(ctx: Ctx, dead: Agent): void {
     const a = id ? byId(state, id) : undefined;
     return a?.alive ? a : undefined;
   };
-  let heirs: Agent[] = [];
+  let heirs: Agent[];
   const willHeir = alive(dead.will?.heirId);
   const partner =
     alive(dead.partnerId) ??

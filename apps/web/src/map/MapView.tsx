@@ -45,8 +45,10 @@ export function MapView({ map, rendererRef }: Props) {
     };
   }, [rendererRef]);
 
+  const shownOnce = useRef(false);
   useEffect(() => {
-    rendererRef.current?.setMap(map);
+    rendererRef.current?.setMap(map, shownOnce.current);
+    shownOnce.current = true;
   }, [map, rendererRef]);
 
   useEffect(() => {

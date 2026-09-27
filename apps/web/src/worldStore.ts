@@ -17,6 +17,8 @@ interface WorldRuntime {
   events: WorldEvent[];
   selection: MapSelection | null;
   followId: string | null;
+  /** Bumped by the helper when the map changes (e.g. a house is built). */
+  mapVersion: number;
 
   load: (worldId: string, view: WorldViewResponse, events: WorldEvent[]) => void;
   applyFrame: (
@@ -26,6 +28,7 @@ interface WorldRuntime {
       runner: RunnerStatus;
       agents: AgentView[];
       resources: Record<string, number>;
+      mapVersion: number;
     },
   ) => void;
   addEvents: (worldId: string, events: WorldEvent[]) => void;
@@ -54,6 +57,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
   events: [],
   selection: null,
   followId: null,
+  mapVersion: 0,
 
   load: (worldId, view, events) =>
     set({
@@ -75,6 +79,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       agents: f.agents,
       resources: Object.keys(f.resources).length ? { ...s.resources, ...f.resources } : s.resources,
       resourceChanges: f.resources,
+      mapVersion: f.mapVersion ?? s.mapVersion,
     }));
   },
   addEvents: (worldId, events) => {
