@@ -37,7 +37,8 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 npm install          # once
 npm start            # build UI, start helper, open browser (http://127.0.0.1:4747)
 npm run dev          # hot-reload dev mode (UI at http://localhost:5173)
-npm run check        # typecheck + lint + unit tests — run before every commit
+npm run check        # typecheck + lint + unit/integration tests — run before every commit
+npm run format:check # Prettier check (CI runs it; `npm run format` fixes)
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
 npm run stress       # headless big-village stress test (args: adults children days mapSize)
 ```
@@ -297,6 +298,14 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-09-27 — Tests and CI (owner request).** GitHub Actions workflow `.github/workflows/ci.yml`
+  on every push and PR: format check, typecheck, lint and all Vitest tests on Ubuntu and macOS
+  (the owner plays on a Mac, and the SQLite driver is native), a small stress run, then Playwright
+  end-to-end on Ubuntu (report uploaded on failure). New simple tests: the helper end to end over a
+  real port (HTTP + WebSocket, restart and resume, replay, observer powers, the origin guard),
+  shared request validation and time helpers, and the browser's world store. Tests never call a
+  real AI provider. No retries on e2e, so flaky tests show up rather than hide.
 
 - **2026-09-27 — Phase 6 details.** (a) Replay rebuilds any past tick from the nearest daily
   snapshot plus logged inputs (no AI calls, nothing written), cached so scrubbing forward is cheap.

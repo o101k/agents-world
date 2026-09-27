@@ -2,6 +2,7 @@
  * Stress test: a large generated village run headless with the free Mock brain.
  *   npm run stress -- [adults=100] [children=50] [days=3] [mapSize=huge]
  * Prints simulation speed, survival, and the sizes of what gets saved and sent to the browser.
+ * Exits with an error if fewer than half the villagers survive (used as a smoke test in CI).
  */
 import { gzipSync } from 'node:zlib';
 import { mockDecide } from '@aw/brain';
@@ -77,3 +78,9 @@ console.log({
   snapshotGzKB: Math.round(gzipSync(json).length / 1024),
   frameKB: Math.round(frame.length / 1024),
 });
+const starting = adults + children;
+const alive = state.agents.filter((a) => a.alive).length;
+if (alive < starting / 2) {
+  console.error(`Only ${alive} of ${starting} villagers survived — something is wrong.`);
+  process.exitCode = 1;
+}

@@ -276,6 +276,15 @@ agent views, changed resources, map version, active conditions, calendar) and `e
 sets an agent's state or decisions; changing someone's brain changes how they think, not what they
 decide.
 
+## Tests and CI
+
+Vitest runs unit tests beside the code and integration tests in `apps/server` (the real helper on
+a real port over HTTP + WebSocket; exact resume and replay; mock-brain village life). Playwright
+drives the built UI (`tests/e2e`). GitHub Actions (`.github/workflows/ci.yml`): formatting,
+typecheck, lint and Vitest on Ubuntu and macOS, a small `npm run stress` smoke run (fails if fewer
+than half survive), then Playwright on Ubuntu with the report uploaded on failure. No AI provider
+is ever called in tests: everything uses the Mock brain or a fake HTTP server.
+
 ## Rendering (`apps/web/src/map/`)
 
 - `pixelArt.ts` paints every sprite in code (16 px tiles) into one atlas; people get a sprite strip

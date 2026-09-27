@@ -11,6 +11,9 @@ process.env.AW_E2E_DATA = dataDir;
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 30_000,
+  // In CI: fail on a stray test.only, and keep an HTML report to download when something fails.
+  forbidOnly: Boolean(process.env.CI),
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     viewport: { width: 1280, height: 800 },
