@@ -123,3 +123,66 @@ export function findPath(
   }
   return path.reverse();
 }
+
+/**
+ * A* to the nearest of several goal tiles (e.g. any tile next to a well).
+ * Returns null if none is reachable. If start is a goal, returns [start].
+ */
+export function findPathToAny(
+  width: number,
+  height: number,
+  start: Point,
+  goals: Point[],
+  cost: CostFn,
+): Point[] | null {
+  if (goals.length === 0) return null;
+  if (goals.some((g) => g.x === start.x && g.y === start.y)) return [start];
+  const goalSet = new Set(goals.map((g) => g.y * width + g.x));
+  const n = width * height;
+  const g = new Float64Array(n).fill(Infinity);
+  const from = new Int32Array(n).fill(-1);
+  const closed = new Uint8Array(n);
+  const h = (x: number, y: number) => {
+    let best = Infinity;
+    for (const goal of goals) best = Math.min(best, Math.abs(x - goal.x) + Math.abs(y - goal.y));
+    return best;
+  };
+  const s = start.y * width + start.x;
+  g[s] = 0;
+  const open = new MinHeap();
+  open.push(s, h(start.x, start.y));
+  let found = -1;
+  while (open.size > 0) {
+    const cur = open.pop();
+    if (goalSet.has(cur)) {
+      found = cur;
+      break;
+    }
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    const cx = cur % width;
+    const cy = (cur - cx) / width;
+    for (const [dx, dy] of DIRS) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const ni = ny * width + nx;
+      if (closed[ni]) continue;
+      const step = cost(nx, ny);
+      if (!Number.isFinite(step)) continue;
+      const ng = (g[cur] as number) + step;
+      if (ng < (g[ni] as number)) {
+        g[ni] = ng;
+        from[ni] = cur;
+        open.push(ni, ng + h(nx, ny));
+      }
+    }
+  }
+  if (found < 0) return null;
+  const path: Point[] = [];
+  for (let cur = found; cur !== -1; cur = from[cur] as number) {
+    const x = cur % width;
+    path.push({ x, y: (cur - x) / width });
+  }
+  return path.reverse();
+}

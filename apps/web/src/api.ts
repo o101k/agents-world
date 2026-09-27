@@ -1,4 +1,9 @@
 import type {
+  AgentResponse,
+  ControlRequest,
+  EventsQuery,
+  EventsResponse,
+  RunnerStatus,
   CreateWorldRequest,
   WorldResponse,
   WorldViewResponse,
@@ -29,4 +34,13 @@ export const api = {
   activateWorld: (id: string) => request<WorldResponse>('POST', `/api/worlds/${id}/activate`),
   deleteWorld: (id: string) => request<void>('DELETE', `/api/worlds/${id}`),
   worldView: (id: string) => request<WorldViewResponse>('GET', `/api/worlds/${id}/view`),
+  control: (id: string, req: ControlRequest) =>
+    request<{ runner: RunnerStatus }>('POST', `/api/worlds/${id}/control`, req),
+  events: (id: string, q: EventsQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+    return request<EventsResponse>('GET', `/api/worlds/${id}/events?${params}`);
+  },
+  agent: (id: string, agentId: string) =>
+    request<AgentResponse>('GET', `/api/worlds/${id}/agents/${agentId}`),
 };

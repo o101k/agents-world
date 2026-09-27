@@ -1,30 +1,45 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import type { WorldMap } from '@aw/shared';
-import { WorldRenderer, type MapSelection } from './renderer.ts';
+import { useWorld } from '../worldStore.ts';
+import { WorldRenderer } from './renderer.ts';
 
 interface Props {
   map: WorldMap;
-  onSelect: (sel: MapSelection | null) => void;
   rendererRef: RefObject<WorldRenderer | null>;
 }
 
 const PAN_STEP = 96;
 
-export function MapView({ map, onSelect, rendererRef }: Props) {
+/** Hosts the PixiJS renderer and feeds it live world state from the store (outside React renders). */
+export function MapView({ map, rendererRef }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const onSelectRef = useRef(onSelect);
-  useEffect(() => {
-    onSelectRef.current = onSelect;
-  }, [onSelect]);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const renderer = new WorldRenderer();
-    renderer.onSelect = (sel) => onSelectRef.current(sel);
+    renderer.onSelect = (sel) => useWorld.getState().select(sel);
+    renderer.onFollowBroken = () => useWorld.getState().setFollow(null);
     rendererRef.current = renderer;
-    void renderer.init(host);
+    let cancelled = false;
+    void renderer.init(host).then(() => {
+      if (cancelled) return;
+      const s = useWorld.getState();
+      renderer.setResources(s.resources);
+      renderer.setAgents(s.agents);
+      renderer.setClock(s.tick);
+      renderer.setFollow(s.followId);
+    });
+    const unsub = useWorld.subscribe((s, prev) => {
+      if (s.resourceChanges !== prev.resourceChanges) renderer.setResources(s.resourceChanges);
+      if (s.agents !== prev.agents) renderer.setAgents(s.agents);
+      if (s.tick !== prev.tick) renderer.setClock(s.tick);
+      if (s.followId !== prev.followId) renderer.setFollow(s.followId);
+      if (s.selection !== prev.selection) renderer.select(s.selection);
+    });
     return () => {
+      cancelled = true;
+      unsub();
       renderer.destroy();
       if (rendererRef.current === renderer) rendererRef.current = null;
     };

@@ -1,5 +1,6 @@
 import type { ServerMessage } from '@aw/shared';
 import { useApp } from './store.ts';
+import { useWorld } from './worldStore.ts';
 
 /** Keeps a WebSocket open to the local helper, reconnecting with backoff if it goes away. */
 export function connect(): void {
@@ -19,6 +20,12 @@ export function connect(): void {
           break;
         case 'worlds_changed':
           useApp.getState().setWorlds(msg.worlds, msg.activeWorldId);
+          break;
+        case 'frame':
+          useWorld.getState().applyFrame(msg.worldId, msg);
+          break;
+        case 'events':
+          useWorld.getState().addEvents(msg.worldId, msg.events);
           break;
       }
     };

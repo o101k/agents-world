@@ -23,8 +23,20 @@ export interface BuildOptions {
 
 export async function buildApp(config: ServerConfig, options: BuildOptions = {}): Promise<App> {
   const server = Fastify({ logger: options.logger ?? false });
-  const worlds = new WorldManager(config.dataDir, options.log);
   const hub = new Hub();
+  const worlds: WorldManager = new WorldManager(config.dataDir, {
+    log: options.log,
+    hooks: (worldId) => ({
+      onFrame: (frame) => hub.broadcast({ type: 'frame', worldId, ...frame }),
+      onEvents: (events) => hub.broadcast({ type: 'events', worldId, events }),
+      onStatus: () =>
+        hub.broadcast({
+          type: 'worlds_changed',
+          worlds: worlds.list(),
+          activeWorldId: worlds.activeWorldId,
+        }),
+    }),
+  });
 
   registerLocalOnlyGuard(server, config.dev ? [config.port, DEV_WEB_PORT] : [config.port]);
 
@@ -69,7 +81,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
 
   server.addHook('onClose', async () => {
     hub.closeAll();
-    worlds.closeAll();
+    await worlds.closeAll();
   });
 
   return { server, worlds, hub };

@@ -11,9 +11,11 @@ describe('world state', () => {
     expect(back.map.tiles).toEqual(state.map.tiles);
   });
 
-  it('starts at tick 0 with default settings', () => {
+  it('starts at 07:00 on day 1 with the sample cast and default settings', () => {
     const state = createWorldState({ seed: 'x' });
-    expect(state.tick).toBe(0);
+    expect(state.tick).toBe(7 * 60);
+    expect(state.agents.length).toBe(8);
+    expect(state.agents.every((a) => a.homeId)).toBe(true);
     expect(state.map.width).toBe(64);
     expect(state.settings.daysPerYear).toBe(4);
   });

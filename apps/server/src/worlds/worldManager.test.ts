@@ -12,7 +12,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('WorldManager', () => {
-  it('creates, lists, activates and deletes worlds', () => {
+  it('creates, lists, activates and deletes worlds', async () => {
     const wm = new WorldManager(dir);
     const a = wm.create({ name: 'Alpha', seed: 'a', mapSize: 'small' });
     const b = wm.create({ name: 'Bravo', mapSize: 'small' });
@@ -23,24 +23,27 @@ describe('WorldManager', () => {
         .sort(),
     ).toEqual(['Alpha', 'Bravo']);
     expect(a.mapWidth).toBe(48);
+    expect(a.population).toBe(8);
     expect(b.seed).toMatch(/^[0-9a-f]{8}$/);
 
-    wm.activate(a.id);
+    await wm.activate(a.id);
     expect(wm.activeWorldId).toBe(a.id);
+    expect(wm.active?.id).toBe(a.id);
 
-    wm.delete(a.id);
+    await wm.delete(a.id);
     expect(wm.activeWorldId).toBeNull();
+    expect(wm.active).toBeNull();
     expect(wm.list().map((w) => w.name)).toEqual(['Bravo']);
     expect(readdirSync(join(dir, 'worlds')).filter((f) => f.startsWith(a.id))).toEqual([]);
-    wm.closeAll();
+    await wm.closeAll();
   });
 
-  it('persists worlds and the active world across restarts', () => {
+  it('persists worlds and the active world across restarts', async () => {
     const first = new WorldManager(dir);
     const w = first.create({ name: 'Persist', seed: 'keep', mapSize: 'small' });
-    first.activate(w.id);
+    await first.activate(w.id);
     const before = first.view(w.id);
-    first.closeAll();
+    await first.closeAll();
 
     const second = new WorldManager(dir);
     expect(second.activeWorldId).toBe(w.id);
@@ -48,22 +51,26 @@ describe('WorldManager', () => {
     expect(after.meta.name).toBe('Persist');
     expect(after.map.tiles).toBe(before.map.tiles);
     expect(decodeMap(after.map).objects.length).toBe(before.map.objects.length);
-    second.closeAll();
+    expect(after.agents.map((a) => a.name)).toEqual(before.agents.map((a) => a.name));
+    await second.closeAll();
   });
 
-  it('same seed gives the same map', () => {
+  it('only one world runs at a time', async () => {
     const wm = new WorldManager(dir);
     const a = wm.create({ name: 'A', seed: 'twin', mapSize: 'small' });
     const b = wm.create({ name: 'B', seed: 'twin', mapSize: 'small' });
-    expect(wm.view(a.id).map.tiles).toBe(wm.view(b.id).map.tiles);
-    wm.closeAll();
+    await wm.activate(a.id);
+    expect(() => wm.view(b.id)).toThrow(/Open this world first/);
+    await wm.activate(b.id);
+    expect(wm.view(b.id).map.tiles).toBeTruthy();
+    await wm.closeAll();
   });
 
-  it('rejects invalid input and unknown ids', () => {
+  it('rejects invalid input and unknown ids', async () => {
     const wm = new WorldManager(dir);
     expect(() => wm.create({ name: '   ' })).toThrow();
-    expect(() => wm.activate('w_doesnotexist')).toThrow(/not found/);
-    expect(() => wm.delete('../../etc/passwd')).toThrow(/Invalid world id/);
-    wm.closeAll();
+    await expect(wm.activate('w_doesnotexist')).rejects.toThrow(/not found/);
+    await expect(wm.delete('../../etc/passwd')).rejects.toThrow(/Invalid world id/);
+    await wm.closeAll();
   });
 });

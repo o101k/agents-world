@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { AgentDetail, AgentView } from './agent.ts';
+import type { WorldEvent } from './events.ts';
 import type { WireMap } from './map.ts';
 import type { WorldMeta, WorldSettings } from './world.ts';
 
@@ -21,10 +23,51 @@ export interface WorldResponse {
   world: WorldMeta;
 }
 
+export interface RunnerStatus {
+  running: boolean;
+  /** Target ticks per second (0 = as fast as possible). */
+  speed: number;
+  /** Measured ticks per second over the last moment. */
+  actualSpeed: number;
+  /** Number of agents the world is currently waiting on to decide. */
+  thinking: number;
+}
+
 export interface WorldViewResponse {
   meta: WorldMeta;
   settings: WorldSettings;
   map: WireMap;
+  tick: number;
+  runner: RunnerStatus;
+  agents: AgentView[];
+  /** Visible resource amounts by object id (berries on bushes, crops in fields). */
+  resources: Record<string, number>;
+}
+
+export const ControlRequest = z.object({
+  running: z.boolean().optional(),
+  speed: z.number().int().min(0).max(2000).optional(),
+});
+export type ControlRequest = z.infer<typeof ControlRequest>;
+
+export const EventsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+  beforeId: z.coerce.number().int().optional(),
+  agentId: z.string().max(40).optional(),
+  minImportance: z.coerce.number().int().min(1).max(5).default(1),
+});
+export type EventsQuery = z.input<typeof EventsQuery>;
+
+export interface EventsResponse {
+  events: WorldEvent[];
+}
+
+export interface AgentResponse {
+  agent: AgentDetail;
+}
+
+export interface AgentsResponse {
+  agents: AgentView[];
 }
 
 export interface ApiError {
@@ -34,7 +77,17 @@ export interface ApiError {
 /** Messages the helper pushes to the browser over the WebSocket. */
 export type ServerMessage =
   | { type: 'hello'; serverVersion: string; worlds: WorldMeta[]; activeWorldId: string | null }
-  | { type: 'worlds_changed'; worlds: WorldMeta[]; activeWorldId: string | null };
+  | { type: 'worlds_changed'; worlds: WorldMeta[]; activeWorldId: string | null }
+  | {
+      type: 'frame';
+      worldId: string;
+      tick: number;
+      runner: RunnerStatus;
+      agents: AgentView[];
+      /** Only resources that changed since the previous frame. */
+      resources: Record<string, number>;
+    }
+  | { type: 'events'; worldId: string; events: WorldEvent[] };
 
 /** Messages the browser sends to the helper. Observer commands are added here in later phases. */
 export const ClientMessage = z.discriminatedUnion('type', [z.object({ type: z.literal('ping') })]);

@@ -315,6 +315,32 @@ const berryBush: SpriteDef = {
   },
 };
 
+const berryBushEmpty: SpriteDef = {
+  w: 16,
+  h: 16,
+  paint: (p) => {
+    p.ellipse(8, 14, 6, 1.5, 'rgba(0,0,0,0.22)');
+    p.ellipse(8, 10, 6.5, 5, '#2c5e28');
+    p.ellipse(8, 9.6, 5.8, 4.4, '#4a9a3e');
+    p.ellipse(6, 8, 2.5, 1.8, '#63b152');
+  },
+};
+
+const grave: SpriteDef = {
+  w: 16,
+  h: 16,
+  paint: (p) => {
+    p.ellipse(8, 14, 5, 1.5, 'rgba(0,0,0,0.25)');
+    p.rect(5, 12, 7, 2, '#6b4a2a');
+    p.ellipse(8, 6.5, 3.5, 3, '#5a5a58');
+    p.rect(5, 6, 7, 7, '#5a5a58');
+    p.ellipse(8, 6.5, 2.8, 2.4, '#9a9a94');
+    p.rect(6, 6, 5, 6, '#9a9a94');
+    p.rect(8, 7, 1, 4, '#5a5a58');
+    p.rect(7, 8, 3, 1, '#5a5a58');
+  },
+};
+
 const rock: SpriteDef = {
   w: 16,
   h: 16,
@@ -529,6 +555,8 @@ export const SPRITES = {
   tree2: tree(['#367a3e', '#285e30', '#4f9a52']),
   pine,
   berry_bush: berryBush,
+  berry_bush_empty: berryBushEmpty,
+  grave,
   rock,
   house0: house(0),
   house1: house(1),
@@ -581,4 +609,138 @@ export function buildAtlas(): {
     rowH = Math.max(rowH, def.h);
   }
   return { canvas, frames };
+}
+
+// ---------------------------------------------------------------- people
+
+export interface CharacterLook {
+  skin: string;
+  hair: string;
+  shirt: string;
+  pants: string;
+  hairStyle: number;
+}
+
+/** Frame order in a character strip: down0, down1, up0, up1, side0, side1 (side faces right). */
+export const CHARACTER_FRAMES = 6;
+export const CHARACTER_PX = 16;
+
+function shade(hex: string, amount: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (c: number) => Math.max(0, Math.min(255, Math.round(c * (1 + amount))));
+  const r = f(n >> 16);
+  const g = f((n >> 8) & 255);
+  const b = f(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+function paintCharacterFrame(
+  p: Painter,
+  look: CharacterLook,
+  dir: 'down' | 'up' | 'side',
+  frame: number,
+) {
+  const hairDark = shade(look.hair, -0.25);
+  const shirtDark = shade(look.shirt, -0.25);
+  const skinDark = shade(look.skin, -0.18);
+  const long = look.hairStyle === 1;
+  const bald = look.hairStyle === 2;
+  // Legs & shoes (walk frame swaps which leg is forward)
+  const legA = frame === 1 ? 1 : 0;
+  const legB = frame === 1 ? 0 : 1;
+  if (dir === 'side') {
+    p.rect(6, 12, 2, 3 - legA, look.pants);
+    p.rect(8, 12, 2, 3 - legB, shade(look.pants, -0.2));
+    p.rect(frame === 1 ? 5 : 6, 15 - legA, 3, 1, '#2a1e16');
+    p.rect(frame === 1 ? 9 : 8, 15 - legB, 3, 1, '#2a1e16');
+  } else {
+    p.rect(5, 12, 3, 3 - legA, look.pants);
+    p.rect(8, 12, 3, 3 - legB, look.pants);
+    p.rect(5, 15 - legA, 3, 1, '#2a1e16');
+    p.rect(8, 15 - legB, 3, 1, '#2a1e16');
+  }
+  // Body
+  p.rect(4, 7, 8, 5, look.shirt);
+  p.rect(4, 11, 8, 1, shirtDark);
+  if (dir === 'side') {
+    p.rect(7, 8, 2, 3, shirtDark);
+    p.rect(7, 11, 2, 1, look.skin);
+  } else {
+    p.rect(3, 8, 1, 3, look.shirt);
+    p.rect(12, 8, 1, 3, look.shirt);
+    p.px(3, 11, look.skin);
+    p.px(12, 11, look.skin);
+  }
+  // Head
+  p.rect(5, 2, 6, 5, look.skin);
+  p.rect(5, 6, 6, 1, skinDark);
+  if (dir === 'down') {
+    p.px(6, 4, '#2a1e16');
+    p.px(9, 4, '#2a1e16');
+    p.px(7, 6, skinDark);
+    p.px(8, 6, skinDark);
+    if (!bald) {
+      p.rect(5, 1, 6, 2, look.hair);
+      p.rect(4, 2, 1, long ? 6 : 3, look.hair);
+      p.rect(11, 2, 1, long ? 6 : 3, look.hair);
+      p.rect(5, 1, 6, 1, hairDark);
+    }
+  } else if (dir === 'up') {
+    if (!bald) {
+      p.rect(5, 1, 6, 5, look.hair);
+      p.rect(4, 2, 1, long ? 6 : 3, look.hair);
+      p.rect(11, 2, 1, long ? 6 : 3, look.hair);
+      if (long) p.rect(5, 6, 6, 2, look.hair);
+      p.rect(5, 1, 6, 1, hairDark);
+    }
+  } else {
+    p.px(9, 4, '#2a1e16');
+    p.px(11, 5, look.skin);
+    if (!bald) {
+      p.rect(5, 1, 6, 2, look.hair);
+      p.rect(4, 2, 3, long ? 6 : 4, look.hair);
+      p.rect(5, 1, 6, 1, hairDark);
+    }
+  }
+}
+
+/** Paints a strip of CHARACTER_FRAMES frames for one person, with a dark outline for contrast. */
+export function characterCanvas(look: CharacterLook): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = CHARACTER_PX * CHARACTER_FRAMES;
+  canvas.height = CHARACTER_PX;
+  const frames: ['down' | 'up' | 'side', number][] = [
+    ['down', 0],
+    ['down', 1],
+    ['up', 0],
+    ['up', 1],
+    ['side', 0],
+    ['side', 1],
+  ];
+  frames.forEach(([dir, f], i) =>
+    paintCharacterFrame(new Painter(canvas, i * CHARACTER_PX, 0, 16, 16), look, dir, f),
+  );
+  // Outline pass
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  const w = canvas.width;
+  const filled = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < w && y < canvas.height && d[(y * w + x) * 4 + 3]! > 0;
+  const outline: number[] = [];
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < w; x++) {
+      if (filled(x, y)) continue;
+      const fx = x % CHARACTER_PX;
+      const n =
+        (fx > 0 && filled(x - 1, y)) ||
+        (fx < CHARACTER_PX - 1 && filled(x + 1, y)) ||
+        filled(x, y - 1) ||
+        filled(x, y + 1);
+      if (n) outline.push(x, y);
+    }
+  }
+  ctx.fillStyle = 'rgba(20,14,10,0.85)';
+  for (let i = 0; i < outline.length; i += 2) ctx.fillRect(outline[i]!, outline[i + 1]!, 1, 1);
+  return canvas;
 }

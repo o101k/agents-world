@@ -9,7 +9,9 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 
 ## How we work (from the owner)
 
-1. Build phase by phase. **Stop at the end of each phase** so the owner can test it.
+1. Build phase by phase, committing and pushing at the end of each phase. **Don't stop between
+   phases and don't ask questions** (owner instruction, 2026-09-27): make sensible decisions,
+   record them in the Decision log, and keep going.
 2. Keep the README (how to run) and `docs/DESIGN.md` (short design doc) up to date.
 3. Keep this file updated whenever a decision changes.
 4. Development branch: `claude/life-sim-architecture-dd85a8`. Don't open PRs unless asked.
@@ -273,15 +275,15 @@ teacher and a closer relationship).
 
 ## Roadmap (each phase ends with something runnable)
 
-| Phase                             | What gets built                                                                                                                                                                                                                                                                             | What the owner sees                                                                |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| **0 – Skeleton** ✅               | Repo setup; `npm start` launches helper + opens browser; worlds screen (create/switch/delete); generated village map; pan/zoom; CLAUDE.md, README, DESIGN.md                                                                                                                                | Make two worlds with different maps, delete one                                    |
-| **1 – A world that runs (no AI)** | Ticks, clock, day/night, needs, health and death, gather/eat/drink/sleep, Mock brains, play/pause/speed, click agents/objects for details, live event log, follow a person, exact save and resume                                                                                           | Villagers survive (or don't) on autopilot; stop and restart the helper → same tick |
-| **2 – Minds**                     | Provider layer + key settings, per-agent model/effort + world default, request queue, world waits, cost tracking + cap, perception limits, thoughts/goals/plans, memory stream + recall, conversations + overhearing, mind inspector (incl. raw prompt/reply), spawn agent from description | Real AI villagers plan, talk, remember; read their minds; watch spending           |
-| **3 – Work, trade, money**        | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
-| **4 – Life cycle**                | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
-| **5 – A long life**               | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
-| **6 – Replay and scale**          | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
+| Phase                                | What gets built                                                                                                                                                                                                                                                                             | What the owner sees                                                                |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **0 – Skeleton** ✅                  | Repo setup; `npm start` launches helper + opens browser; worlds screen (create/switch/delete); generated village map; pan/zoom; CLAUDE.md, README, DESIGN.md                                                                                                                                | Make two worlds with different maps, delete one                                    |
+| **1 – A world that runs (no AI)** ✅ | Ticks, clock, day/night, needs, health and death, gather/eat/drink/sleep, Mock brains, play/pause/speed, click agents/objects for details, live event log, follow a person, exact save and resume                                                                                           | Villagers survive (or don't) on autopilot; stop and restart the helper → same tick |
+| **2 – Minds**                        | Provider layer + key settings, per-agent model/effort + world default, request queue, world waits, cost tracking + cap, perception limits, thoughts/goals/plans, memory stream + recall, conversations + overhearing, mind inspector (incl. raw prompt/reply), spawn agent from description | Real AI villagers plan, talk, remember; read their minds; watch spending           |
+| **3 – Work, trade, money**           | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
+| **4 – Life cycle**                   | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
+| **5 – A long life**                  | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
+| **6 – Replay and scale**             | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
 
 ### Known risks
 
@@ -294,6 +296,16 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-09-27 — Phase 1 details.** (a) Full snapshots every 6 in-game hours (not every hour) plus
+  on pause/stop; resume replays at most 360 ticks, which takes milliseconds. Old snapshots are pruned
+  to one per in-game day after two days. (b) Inputs are logged the moment they are queued (tagged
+  with the tick they apply to), so decisions received just before a shutdown aren't re-asked.
+  (c) Phase 1 starts every world with the eight adults of the sample cast; babies, children and the
+  three cast options arrive in Phase 4. (d) Observer commands sent while paused advance the world
+  by one tick so they take effect immediately. (e) World starts at 07:00 on day 1.
+- **2026-09-27 — Don't stop between phases.** The owner asked me to keep building without stopping
+  at phase ends or asking questions. Each phase is still committed and pushed separately.
 
 - **2026-09-27 — Art: procedural pixel art for now.** kenney.nl and opengameart.org are blocked from
   the development container, so all sprites are painted in code (`apps/web/src/map/pixelArt.ts`).

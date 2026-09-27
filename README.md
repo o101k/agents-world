@@ -4,8 +4,9 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 0 (skeleton).** You can create, open, switch between and delete worlds, and explore
-each world's generated village map. Villagers and time arrive in Phase 1. See
+**Status: Phase 1 (a world that runs).** Villagers live in a generated village with needs (food,
+water, sleep, warmth), gather berries, vegetables and fish, drink, sleep at home, and can die of
+neglect. They're driven by a free rule-based "mock brain" for now; AI brains arrive in Phase 2. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
 
 ## Requirements
@@ -34,8 +35,16 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 - **Worlds screen**: create a world (name, optional seed, map size), open it, or delete it.
   The same seed always makes the same map.
 - **World screen**: drag or two-finger scroll to pan; pinch or ⌘+scroll to zoom; arrow keys/WASD
-  pan, `+`/`−` zoom, `F` fits the map. Click anything to see what it is. **← Worlds** goes back.
-- The world you had open is reopened automatically next time.
+  pan, `+`/`−` zoom, `F` fits the map. **← Worlds** goes back.
+- **Time**: ▶ Play / ❚❚ Pause (or Space) and a speed picker (1× = one in-game minute per second, up
+  to Max). The world keeps running while the helper runs, even with the browser closed.
+- **People**: the People tab lists everyone; click a person (on the map or in the list) to inspect
+  their thoughts, plan, needs, belongings, recent experiences, personality and skills. **Follow**
+  keeps the camera on them.
+- **Timeline** (bottom): everything that happens, newest first. Filter to important events or to
+  the selected person; click an entry to jump to that person.
+- Stopping the helper (Ctrl+C) or even a crash loses nothing: the world resumes at the exact
+  in-game minute it had reached.
 
 ### Where your worlds are saved
 

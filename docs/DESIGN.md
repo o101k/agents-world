@@ -3,7 +3,7 @@
 A short technical design of what is built so far. The full plan, decisions and roadmap live in
 [`../CLAUDE.md`](../CLAUDE.md). Updated at the end of every phase.
 
-_Last updated: Phase 0._
+_Last updated: Phase 1._
 
 ## Processes
 
@@ -88,7 +88,7 @@ World file schema (migrations tracked with `PRAGMA user_version`; WAL mode):
 | `tick_inputs(id, tick, kind, payload)`    | everything the sim consumes each tick (from Phase 1)               |
 | `events(id, tick, kind, actors, payload)` | readable history for the timeline                                  |
 
-Resume = load the latest snapshot, then re-apply `tick_inputs` after it (Phase 1). Deleting a
+Snapshots are pruned to the last two in-game days plus one per day and the first. Deleting a
 world removes its `.sqlite`, `-wal` and `-shm` files. World ids match `^w_[a-z0-9]{8,32}$`,
 which also prevents path tricks.
 
@@ -115,3 +115,9 @@ stays in sync. Client → server messages are validated with Zod (only `ping` ex
   **on demand** (no continuous loop) so an idle map uses no CPU/GPU.
 - `camera.ts` is pure maths (tested): zoom snaps to fixed steps and keeps the point under the
   cursor fixed; the camera can't lose the map off-screen.
+- People: each person's sprite strip (down/up/side × 2 walk frames) is painted from their
+  appearance colours. Positions tween between frames (duration = observed frame interval), so
+  walking looks smooth at any speed. Sleepers lie down with "z z"; people asleep indoors are
+  hidden; the dead become gravestones. Name labels live in a screen-space overlay (shown at zoom ≥ 2
+  or when selected). A world-sized overlay darkens the map at night.
+- The animation loop runs only while something moves or the camera follows someone.

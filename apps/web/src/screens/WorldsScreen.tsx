@@ -41,7 +41,8 @@ export function WorldsScreen() {
       <header className="worlds-header">
         <h1>Agents World</h1>
         <p className="muted">
-          Each world is a separate village, saved on this computer. Create one, then watch it live.
+          Each world is a separate village, saved on this computer. Only the open world runs; it
+          keeps living while the helper is running, even with this tab closed.
         </p>
       </header>
 
@@ -64,7 +65,9 @@ export function WorldsScreen() {
                   <div className="world-card-main">
                     <div className="world-card-title">
                       {w.name}
-                      {w.id === activeWorldId && <span className="tag">Active</span>}
+                      {w.id === activeWorldId && (
+                        <span className="tag">{w.running ? 'Running' : 'Active'}</span>
+                      )}
                     </div>
                     <div className="world-card-meta">
                       {formatClock(w.tick)} · {w.mapWidth}×{w.mapHeight} tiles · seed{' '}
