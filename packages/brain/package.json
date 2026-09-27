@@ -1,0 +1,18 @@
+{
+  "name": "@aw/brain",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@aw/shared": "*",
+    "@anthropic-ai/sdk": "^0.128.0",
+    "openai": "^7.23.0",
+    "zod": "^4.6.5"
+  }
+}

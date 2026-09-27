@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+test-results/
+playwright-report/
+.env
+.DS_Store
+
+# scratch scripts
+apps/server/src/_*.ts
