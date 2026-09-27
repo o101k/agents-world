@@ -280,7 +280,7 @@ decide.
 
 Vitest runs unit tests beside the code and integration tests in `apps/server` (the real helper on
 a real port over HTTP + WebSocket; exact resume and replay; mock-brain village life). Playwright
-drives the built UI (`tests/e2e`). GitHub Actions (`.github/workflows/ci.yml`): formatting,
+drives the built UI (`tests/e2e`). GitHub Actions (`.github/workflows/ci.yml`):
 typecheck, lint and Vitest on Ubuntu and macOS, a small `npm run stress` smoke run (fails if fewer
 than half survive), then Playwright on Ubuntu with the report uploaded on failure. No AI provider
 is ever called in tests: everything uses the Mock brain or a fake HTTP server.

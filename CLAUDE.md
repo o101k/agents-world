@@ -38,7 +38,7 @@ npm install          # once
 npm start            # build UI, start helper, open browser (http://127.0.0.1:4747)
 npm run dev          # hot-reload dev mode (UI at http://localhost:5173)
 npm run check        # typecheck + lint + unit/integration tests — run before every commit
-npm run format:check # Prettier check (CI runs it; `npm run format` fixes)
+
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
 npm run stress       # headless big-village stress test (args: adults children days mapSize)
 ```
@@ -299,9 +299,14 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — No formatting check (owner).** The owner doesn't care about formatting: CI no
+  longer checks it and `format:check` is gone. `npm run format` (Prettier) stays as an optional
+  tool. Lint stays in CI because it enforces code rules (deterministic sim, UI imports), not style.
+
+
 - **2026-09-27 — Tests and CI (owner request).** GitHub Actions workflow `.github/workflows/ci.yml`
   on pushes to `master` and every PR (not every branch push, which ran everything twice for a
-  branch with an open PR): format check, typecheck, lint and all Vitest tests on Ubuntu and macOS
+  branch with an open PR): typecheck, lint and all Vitest tests on Ubuntu and macOS
   (the owner plays on a Mac, and the SQLite driver is native), a small stress run, then Playwright
   end-to-end on Ubuntu (report uploaded on failure). New simple tests: the helper end to end over a
   real port (HTTP + WebSocket, restart and resume, replay, observer powers, the origin guard),

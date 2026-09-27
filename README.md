@@ -168,7 +168,7 @@ npm run dev        # hot reload: helper on :4747, UI on http://localhost:5173
 npm run check      # typecheck + lint + unit and integration tests
 npm test           # unit and integration tests only (Vitest)
 npm run test:e2e   # end-to-end browser tests (Playwright)
-npm run format     # Prettier (npm run format:check only checks)
+npm run format     # Prettier (optional; CI doesn't check formatting)
 ```
 
 For the end-to-end tests, install a browser once with `npx playwright install chromium`
@@ -184,7 +184,7 @@ For the end-to-end tests, install a browser once with `npx playwright install ch
   check exact resume/replay and a few in-game days of mock-brain village life.
 - **End-to-end** (`tests/e2e`): Playwright drives the built UI in Chromium.
 - **GitHub Actions** (`.github/workflows/ci.yml`) runs on pushes to `master` and on every pull
-  request (and by hand from the Actions tab): formatting,
+  request (and by hand from the Actions tab):
   typecheck, lint and all Vitest tests on Linux and macOS, a small stress run, then the
   end-to-end tests on Linux (the Playwright report is attached to the run if they fail).
 

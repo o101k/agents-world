@@ -37,8 +37,7 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Formatting
-        run: npm run format:check
+      
 
       - name: Typecheck
         run: npm run typecheck
