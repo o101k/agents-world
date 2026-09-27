@@ -578,3 +578,49 @@ describe('a long life: reflection, sickness and world events', () => {
     expect(d.plan[0]).toEqual({ type: 'drink', sourceId: 'well-1' });
   });
 });
+
+describe('adoption', () => {
+  const orphaned = (tick: number) =>
+    perception({
+      tick,
+      trigger: { kind: 'orphaned', childId: 'a9', childName: 'Mira Venn' },
+    });
+
+  it('parses adopt_child and respond_adoption', () => {
+    const d = parseDecision(
+      {
+        plan: [
+          { action: 'adopt_child', target: 'a9' },
+          { action: 'respond_adoption', target: 'a2', accept: 'true' },
+          { action: 'adopt_child' },
+        ],
+      },
+      perception(),
+    );
+    expect(d.plan).toEqual([
+      { type: 'adopt_child', childId: 'a9' },
+      { type: 'respond_adoption', fromId: 'a2', accept: true },
+    ]);
+  });
+
+  it('tells the person about an orphan and about an adoption offer', () => {
+    expect(userPrompt(orphaned(600))).toContain('Mira Venn [a9] has lost their last parent');
+    const offer = perception({
+      trigger: { kind: 'adoption_offer', fromId: 'a2', fromName: 'Tobias Holt' },
+      requests: [{ kind: 'adoption', fromId: 'a2', fromName: 'Tobias Holt' }],
+    });
+    expect(userPrompt(offer)).toContain('respond_adoption');
+    expect(userPrompt(offer)).toContain('has offered to adopt you');
+    expect(priorityOf(offer.trigger)).toBe(0);
+  });
+
+  it('mock brain: a grown-up with a home sometimes takes an orphan in', () => {
+    let adopted = false;
+    for (let tick = 600; tick < 640 && !adopted; tick++) {
+      adopted = mockDecide(orphaned(tick)).plan.some(
+        (i) => i.type === 'adopt_child' && i.childId === 'a9',
+      );
+    }
+    expect(adopted).toBe(true);
+  });
+});

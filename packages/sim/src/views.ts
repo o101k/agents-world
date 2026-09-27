@@ -141,6 +141,13 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
       father: person(state, agent.fatherId),
       partner: person(state, agent.partnerId),
       children: agent.childrenIds
+        .map((id) => {
+          const p = person(state, id);
+          const adopted = findAgent(state, id)?.adoptiveParentIds.includes(agent.id);
+          return p && adopted ? { ...p, adopted: true } : p;
+        })
+        .filter((p): p is NonNullable<typeof p> => Boolean(p)),
+      adoptiveParents: agent.adoptiveParentIds
         .map((id) => person(state, id))
         .filter((p): p is NonNullable<typeof p> => Boolean(p)),
     },

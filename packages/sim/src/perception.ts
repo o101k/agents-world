@@ -277,9 +277,15 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         nearby: sees(c),
         ...(sees(c) ? { needs: { ...c.needs } } : {}),
       })),
-    parents: [find(agent.motherId), find(agent.fatherId)]
-      .filter((p): p is Agent => Boolean(p))
-      .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive })),
+    parents: [
+      ...[find(agent.motherId), find(agent.fatherId)]
+        .filter((p): p is Agent => Boolean(p))
+        .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive })),
+      ...agent.adoptiveParentIds
+        .map(find)
+        .filter((p): p is Agent => Boolean(p))
+        .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive, adoptive: true })),
+    ],
   };
   const requests = state.requests
     .filter((r) => r.to === agent.id)

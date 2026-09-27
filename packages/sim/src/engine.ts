@@ -49,6 +49,7 @@ import {
   lifeAction,
   lifeTick,
   mournDeath,
+  noticeOrphans,
   observeWork,
   relation,
   settleEstate,
@@ -459,6 +460,7 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
   );
   mournDeath(ctx, agent);
   settleEstate(ctx, agent);
+  noticeOrphans(ctx, agent);
 }
 
 export function wake(ctx: Ctx, agent: Agent, requestDecision: boolean): void {
@@ -796,6 +798,8 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
     case 'try_for_child':
     case 'respond_child_request':
     case 'name_child':
+    case 'adopt_child':
+    case 'respond_adoption':
     case 'declare_will':
       return lifeAction(ctx, agent, intent);
     case 'build_house':

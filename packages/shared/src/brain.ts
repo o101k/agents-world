@@ -33,6 +33,9 @@ export type DecisionTrigger =
   | { kind: 'child_request'; fromId: string; fromName: string }
   | { kind: 'child_born'; childId: string; childLabel: string }
   | { kind: 'child_needs'; childId: string; childName: string; need: NeedName }
+  | { kind: 'orphaned'; childId: string; childName: string }
+  | { kind: 'adoption_offer'; fromId: string; fromName: string }
+  | { kind: 'adoption_answered'; childName: string; accepted: boolean }
   | { kind: 'grew_up'; stage: LifeStage }
   | { kind: 'reflect'; scope: 'day' | 'year' }
   | { kind: 'unwell' }
@@ -151,6 +154,8 @@ export type Intent =
   | { type: 'try_for_child'; agentId: string; tries?: number }
   | { type: 'respond_child_request'; fromId: string; accept: boolean }
   | { type: 'name_child'; childId: string; name: string }
+  | { type: 'adopt_child'; childId: string; tries?: number }
+  | { type: 'respond_adoption'; fromId: string; accept: boolean }
   | { type: 'declare_will'; agentId: string }
   | { type: 'build_house' }
   | { type: 'tend'; agentId: string; tries?: number };
@@ -257,14 +262,15 @@ export interface Perception {
   family: {
     partner: { id: string; name: string } | null;
     children: { id: string; name: string; age: number; nearby: boolean; needs?: Needs }[];
-    parents: { id: string; name: string; alive: boolean }[];
+    /** Birth parents, then adoptive parents (`adoptive`). */
+    parents: { id: string; name: string; alive: boolean; adoptive?: boolean }[];
   };
   /** Pregnant, and knows it. */
   pregnant: boolean;
   /** Language ability 0–100 (shapes how they speak and understand). */
   language: number;
-  /** Pending requests addressed to this agent (partnership, child). */
-  requests: { kind: 'proposal' | 'child_request'; fromId: string; fromName: string }[];
+  /** Pending requests addressed to this agent (partnership, child, adoption). */
+  requests: { kind: RequestKind; fromId: string; fromName: string }[];
   /** What's going on around them that they can sense (season, weather, drought, sickness, fire). */
   conditions: string[];
   season?: Season;
@@ -292,6 +298,9 @@ export interface Perception {
   /** Trees within sight (for chopping wood). */
   treesNearby: number;
 }
+
+/** Questions one person puts to another that wait for an answer. */
+export type RequestKind = 'proposal' | 'child_request' | 'adoption';
 
 export interface DecisionRequest {
   agentId: string;
@@ -374,6 +383,8 @@ export const IntentSchema = z.discriminatedUnion('type', [
     childId: z.string(),
     name: z.string().trim().min(1).max(40),
   }),
+  z.object({ type: z.literal('adopt_child'), childId: z.string() }),
+  z.object({ type: z.literal('respond_adoption'), fromId: z.string(), accept: z.boolean() }),
   z.object({ type: z.literal('declare_will'), agentId: z.string() }),
   z.object({ type: z.literal('build_house') }),
   z.object({ type: z.literal('tend'), agentId: z.string() }),
@@ -454,6 +465,10 @@ export function describeIntent(intent: Intent, names: (id: string) => string = (
       return `${intent.accept ? 'Agree' : 'Decline'} to try for a child with ${names(intent.fromId)}`;
     case 'name_child':
       return `Name the baby ${intent.name}`;
+    case 'adopt_child':
+      return `Offer to adopt ${names(intent.childId)}`;
+    case 'respond_adoption':
+      return `${intent.accept ? 'Agree' : 'Decline'} to be adopted by ${names(intent.fromId)}`;
     case 'declare_will':
       return `Leave everything to ${names(intent.agentId)}`;
     case 'build_house':

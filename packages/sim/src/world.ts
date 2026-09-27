@@ -9,6 +9,7 @@ import {
   type WorldMap,
   type Bundle,
   type ItemName,
+  type RequestKind,
   type WorldSettings,
   stageOf,
 } from '@aw/shared';
@@ -23,7 +24,7 @@ import { addAgent, introduceResidents, linkFamilies } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 7;
+export const WORLD_STATE_VERSION = 8;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -66,8 +67,8 @@ export interface WorldState {
   nextOfferNum: number;
   /** Owners of buildings by object id (houses: the household; bakery/workshop: their keepers). */
   owners: Record<string, string[]>;
-  /** Partnership proposals and requests to try for a child, awaiting an answer. */
-  requests: { kind: 'proposal' | 'child_request'; from: string; to: string; tick: number }[];
+  /** Partnership proposals, requests to try for a child and adoption offers, awaiting an answer. */
+  requests: { kind: RequestKind; from: string; to: string; tick: number }[];
   /** Bumped whenever the map changes (e.g. a new house), so viewers reload it. */
   mapVersion: number;
   /** World events in progress (drought, storm, disease, fires, plenty). */
@@ -215,6 +216,11 @@ export function deserializeWorldState(data: SerializedWorldState | LegacyV1State
     // Phase 6 (state v7): seasons.
     state.version = WORLD_STATE_VERSION;
     state.calendar ??= calendarFromTick(state.tick, state.settings.daysPerYear);
+  }
+  if (from <= 7) {
+    // State v8: adoption.
+    state.version = WORLD_STATE_VERSION;
+    for (const a of state.agents as Partial<AgentT>[]) a.adoptiveParentIds ??= [];
   }
   return state;
 }

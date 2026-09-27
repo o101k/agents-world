@@ -27,6 +27,8 @@ export type EventKind =
   | 'pregnant'
   | 'born'
   | 'named'
+  | 'orphaned'
+  | 'adopted'
   | 'grew_up'
   | 'inherited'
   | 'built'
