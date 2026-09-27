@@ -35,7 +35,8 @@ export type EventKind =
   | 'recovered'
   | 'tended'
   | 'reflected'
-  | 'fire';
+  | 'fire'
+  | 'season';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

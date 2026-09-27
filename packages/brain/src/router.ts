@@ -1,4 +1,11 @@
-import type { BrainConfig, Decision, DecisionRequest, Perception, ProviderId } from '@aw/shared';
+import type {
+  BrainConfig,
+  Decision,
+  DecisionRequest,
+  DecisionTrigger,
+  Perception,
+  ProviderId,
+} from '@aw/shared';
 import { MockBrain, mockDecide } from './mock.ts';
 import { RefusalError, type BrainProvider, type BrainResult } from './types.ts';
 
@@ -15,20 +22,56 @@ export interface RoutedResult {
   timedOut?: boolean;
 }
 
-/** Simple counting semaphore: limits simultaneous requests per provider. */
-class Semaphore {
-  private queue: (() => void)[] = [];
+/**
+ * Counting semaphore with priorities: limits simultaneous requests per provider, and when requests
+ * queue up (a big village), the most time-sensitive go first (lower number = sooner; FIFO within).
+ */
+export class PrioritySemaphore {
+  private queue: { priority: number; seq: number; go: () => void }[] = [];
   private active = 0;
+  private seq = 0;
   constructor(private readonly limit: number) {}
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.limit) await new Promise<void>((r) => this.queue.push(r));
+  get waiting(): number {
+    return this.queue.length;
+  }
+  async run<T>(fn: () => Promise<T>, priority = 2): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((go) => {
+        this.queue.push({ priority, seq: this.seq++, go });
+        this.queue.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
+      });
+    }
     this.active++;
     try {
       return await fn();
     } finally {
       this.active--;
-      this.queue.shift()?.();
+      this.queue.shift()?.go();
     }
+  }
+}
+
+/** Conversation replies and emergencies first; routine planning next; night reflection last. */
+export function priorityOf(trigger: DecisionTrigger): number {
+  switch (trigger.kind) {
+    case 'spoken_to':
+    case 'offer_received':
+    case 'proposal':
+    case 'child_request':
+    case 'attacked':
+    case 'robbed':
+      return 0;
+    case 'urgent_need':
+    case 'child_needs':
+    case 'world_event':
+    case 'unwell':
+    case 'action_failed':
+    case 'child_born':
+      return 1;
+    case 'reflect':
+      return 3;
+    default:
+      return 2;
   }
 }
 
@@ -57,7 +100,7 @@ const CONCURRENCY: Record<ProviderId, number> = {
 export class BrainRouter {
   private providers = new Map<ProviderId, BrainProvider>();
   private readonly mock = new MockBrain();
-  private readonly limits = new Map<ProviderId, Semaphore>();
+  private readonly limits = new Map<ProviderId, PrioritySemaphore>();
 
   constructor(providers: BrainProvider[] = []) {
     this.providers.set('mock', this.mock);
@@ -111,7 +154,7 @@ export class BrainRouter {
       };
     }
     let sem = this.limits.get(provider.id);
-    if (!sem) this.limits.set(provider.id, (sem = new Semaphore(CONCURRENCY[provider.id])));
+    if (!sem) this.limits.set(provider.id, (sem = new PrioritySemaphore(CONCURRENCY[provider.id])));
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,7 +166,14 @@ export class BrainRouter {
     });
     try {
       const out = await Promise.race([
-        sem.run(() => provider.decide(request, config, controller.signal)),
+        sem.run<BrainResult | 'timeout'>(
+          // A request that timed out while still queued is dropped, never sent (and never paid for).
+          () =>
+            controller.signal.aborted
+              ? Promise.resolve('timeout')
+              : provider.decide(request, config, controller.signal),
+          priorityOf(p.trigger),
+        ),
         timeout,
       ]);
       if (out === 'timeout')

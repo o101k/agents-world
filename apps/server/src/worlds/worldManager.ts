@@ -14,6 +14,7 @@ import {
   type FamilyNode,
   type LlmCallView,
   type MarketResponse,
+  type ReplayResponse,
   type SpawnRequest,
   type StoryEntry,
   type WorldEventRequest,
@@ -25,12 +26,14 @@ import {
   agentDetail,
   agentView,
   allQuotes,
+  calendarView,
   createWorldState,
   generateCast,
   ownerNames,
   type AgentSpec,
   type TickInput,
 } from '@aw/sim';
+import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
 
@@ -59,6 +62,8 @@ export class WorldManager {
   private readonly files = new Map<string, WorldFile>();
   private appState: AppState;
   private runner: WorldRunner | null = null;
+  /** Replay of the active world's past (cached between scrubs). */
+  private replayer: { worldId: string; replayer: Replayer } | null = null;
   private readonly log: (msg: string) => void;
   readonly brains: BrainRouter;
 
@@ -215,6 +220,7 @@ export class WorldManager {
       resources: runner.resourceAmounts(),
       owners: ownerNames(state),
       conditions: state.conditions.map((c) => ({ ...c })),
+      calendar: calendarView(state),
     };
   }
 
@@ -258,6 +264,45 @@ export class WorldManager {
       kind: e.kind,
       source: e.kind === 'reflected' ? ('memory' as const) : ('event' as const),
     }));
+  }
+
+  /** The world as it was at a past tick (replayed from its history; costs nothing). */
+  replay(worldId: string, tick: number, viewerMapVersion?: number): ReplayResponse {
+    const { state, firstTick, lastTick } = this.replayState(worldId, tick);
+    const resources: Record<string, number> = {};
+    for (const [id, r] of Object.entries(state.resources)) resources[id] = Math.floor(r.amount);
+    return {
+      tick: state.tick,
+      firstTick,
+      lastTick,
+      agents: state.agents.map(agentView),
+      resources,
+      conditions: state.conditions.map((c) => ({ ...c })),
+      calendar: calendarView(state),
+      owners: ownerNames(state),
+      mapVersion: state.mapVersion,
+      ...(viewerMapVersion === state.mapVersion ? {} : { map: encodeMap(state.map) }),
+    };
+  }
+
+  /** One person as they were at a past tick. */
+  replayAgent(worldId: string, tick: number, agentId: string): AgentDetail {
+    const { state } = this.replayState(worldId, tick);
+    const agent = state.agents.find((a) => a.id === agentId);
+    if (!agent) throw new NotFoundError(`${agentId} wasn't born yet at that time`);
+    return agentDetail(state, agent);
+  }
+
+  private replayState(worldId: string, tick: number) {
+    const runner = this.requireActive(worldId);
+    runner.persist();
+    const file = this.file(worldId);
+    const lastTick = runner.state.tick;
+    const firstTick = file.firstSnapshotTick();
+    if (this.replayer?.worldId !== worldId)
+      this.replayer = { worldId, replayer: new Replayer(file) };
+    const state = this.replayer.replayer.at(Math.min(Math.max(tick, firstTick), lastTick));
+    return { state, firstTick, lastTick };
   }
 
   /** Observer power: start a drought, storm, disease, fire or bumper harvest. */
@@ -395,6 +440,7 @@ export class WorldManager {
   private async stopRunner(): Promise<void> {
     const r = this.runner;
     this.runner = null;
+    this.replayer = null;
     await r?.stop();
   }
 

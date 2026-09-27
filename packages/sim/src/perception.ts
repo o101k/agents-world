@@ -10,10 +10,12 @@ import { conditionLevel, sensedConditions } from './conditions.ts';
 import { ABILITIES } from './life.ts';
 import type { Agent, Memory } from './agent.ts';
 import { lifeStory, reflectionMaterial } from './memory.ts';
-import { distanceToObject, mapCache, objectsNear } from './spatial.ts';
-import type { WorldState } from './world.ts';
+import { seasonOf } from './seasons.ts';
+import { distanceToObject, mapCache, objectsNear, treesNear } from './spatial.ts';
+import { findAgent, type WorldState } from './world.ts';
 
 const MAX_PLACES = 40;
+const UNIQUE_PLACES = new Set(['market', 'well', 'bakery', 'workshop', 'dock']);
 const HEARING_RADIUS = 8;
 
 function activityOf(a: Agent): string {
@@ -109,6 +111,7 @@ export function recall(
       .filter((w) => w.length > 3),
   );
   const presentSet = new Set(present);
+  const words = [...goalWords];
   const scored = agent.memories
     .filter((m) => !recentTicks.has(m.tick) && m.kind !== 'chapter' && m.kind !== 'belief')
     .map((m) => {
@@ -116,14 +119,10 @@ export function recall(
       // Vivid (strong) memories come to mind more easily than faded ones.
       let score = (m.strength ?? m.importance) / 10 + Math.pow(0.99, hoursAgo);
       if (m.people.some((p) => presentSet.has(p))) score += 1;
-      if (
-        goalWords.size &&
-        m.text
-          .toLowerCase()
-          .split(/[^a-z]+/)
-          .some((w) => goalWords.has(w))
-      )
-        score += 0.5;
+      if (words.length) {
+        const text = m.text.toLowerCase();
+        if (words.some((w) => text.includes(w))) score += 0.5;
+      }
       return { m, score };
     });
   scored.sort((a, b) => b.score - a.score || b.m.tick - a.m.tick);
@@ -184,11 +183,7 @@ export function describeLocation(state: WorldState, agent: Agent): string {
   if (t === Tile.Bridge) return 'on the bridge';
   if (t === Tile.Sand) return 'on the riverbank';
   if (t === Tile.Farmland) return 'in a field';
-  let trees = 0;
-  for (const o of state.map.objects) {
-    if (o.kind === 'tree' && Math.abs(o.x - agent.x) <= 2 && Math.abs(o.y - agent.y) <= 2) trees++;
-  }
-  return trees >= 5 ? 'in the forest' : 'in a meadow';
+  return treesNear(state.map, agent, 2).length >= 5 ? 'in the forest' : 'in a meadow';
 }
 
 /** Everything one agent senses and knows right now — and nothing else. */
@@ -219,6 +214,16 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     });
   }
   knownPlaces.sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
+  // In a big village the nearest places crowd out the ones that matter most: always keep home,
+  // what they own, and the village's one-of-a-kind places.
+  const vital = (k: KnownPlace) =>
+    k.id === agent.homeId || k.owner === 'you' || UNIQUE_PLACES.has(k.kind);
+  const shownPlaces = [
+    ...knownPlaces.filter(vital),
+    ...knownPlaces.filter((k) => !vital(k)).slice(0, MAX_PLACES),
+  ]
+    .slice(0, MAX_PLACES + 10)
+    .sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
 
   const senses = agent.alive && !agent.asleep;
   const radius = senseRadius(state, agent);
@@ -241,7 +246,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
   const memories = recallFor(state, agent).map((m) => `${stamp(m.tick)} ${m.text}`);
   const story = lifeStory(agent);
   const knownPeople = Object.entries(agent.people)
-    .filter(([id, p]) => p.name && state.agents.find((a) => a.id === id)?.alive)
+    .filter(([id, p]) => p.name && findAgent(state, id)?.alive)
     .map(([id, p]) => ({
       id,
       name: p.name!,
@@ -254,7 +259,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     }))
     .sort((a, b) => (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity)
     .slice(0, 30);
-  const find = (id: string | null) => (id ? state.agents.find((a) => a.id === id) : undefined);
+  const find = (id: string | null) => (id ? findAgent(state, id) : undefined);
   const partner = find(agent.partnerId);
   const sees = (o: Agent) =>
     senses &&
@@ -303,7 +308,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     },
     location: describeLocation(state, agent),
     visibleAgents,
-    knownPlaces: knownPlaces.slice(0, MAX_PLACES),
+    knownPlaces: shownPlaces,
     recent: agent.recent.map((r) => `${stamp(r.tick)} ${r.text}`),
     memories,
     knownPeople,
@@ -316,8 +321,8 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     offers: state.offers
       .filter((o) => o.to === agent.id || o.from === agent.id)
       .map((o) => {
-        const from = state.agents.find((a) => a.id === o.from)!;
-        const to = state.agents.find((a) => a.id === o.to)!;
+        const from = findAgent(state, o.from)!;
+        const to = findAgent(state, o.to)!;
         return {
           id: o.id,
           fromId: o.from,
@@ -337,6 +342,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     language: Math.round(agent.skills.language ?? 100),
     requests,
     conditions: sensedConditions(state, agent),
+    season: seasonOf(state.calendar),
     sick: Boolean(agent.sickness?.known),
     ...(trigger.kind === 'reflect'
       ? { reflectOn: reflectionMaterial(state, agent, trigger.scope) }
@@ -347,12 +353,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
 }
 
 function countTrees(state: WorldState, agent: Agent, radius: number): number {
-  let n = 0;
-  for (const o of state.map.objects) {
-    if (o.kind === 'tree' && Math.abs(o.x - agent.x) <= radius && Math.abs(o.y - agent.y) <= radius)
-      n++;
-  }
-  return n;
+  return treesNear(state.map, agent, radius).length;
 }
 
 /** Who owns a building, as this agent would name them. */
@@ -361,7 +362,7 @@ function ownerLabel(state: WorldState, agent: Agent, objectId: string): string |
   if (!owners?.length) return null;
   if (owners.includes(agent.id)) return 'you';
   const names = owners
-    .map((id) => state.agents.find((a) => a.id === id))
+    .map((id) => findAgent(state, id))
     .filter((a): a is Agent => Boolean(a))
     .map((a) => agent.people[a.id]?.name ?? null)
     .filter(Boolean);

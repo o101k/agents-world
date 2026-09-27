@@ -21,12 +21,20 @@ export function EventLog({ onPickAgent }: { onPickAgent: (id: string) => void })
     const t = setTimeout(() => setQ(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
+  // Replay: show the history up to the moment being replayed (debounced while scrubbing).
+  const replayTarget = useWorld((s) => s.replay?.target ?? null);
+  const [until, setUntil] = useState<number | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => setUntil(replayTarget), replayTarget === null ? 0 : 250);
+    return () => clearTimeout(t);
+  }, [replayTarget]);
+  const fromHistory = importantOnly || agentFilter || q || until !== null;
   // Which filters the fetched history belongs to (so we know when a search is still running).
-  const historyKey = JSON.stringify([importantOnly, agentFilter, q]);
+  const historyKey = JSON.stringify([importantOnly, agentFilter, q, until]);
   const [loadedKey, setLoadedKey] = useState('');
   const searching = loadedKey !== historyKey;
   useEffect(() => {
-    if (!worldId || (!importantOnly && !agentFilter && !q)) return;
+    if (!worldId || !fromHistory) return;
     let cancelled = false;
     api
       .events(worldId, {
@@ -34,33 +42,35 @@ export function EventLog({ onPickAgent }: { onPickAgent: (id: string) => void })
         minImportance: importantOnly ? 3 : 1,
         ...(agentFilter ? { agentId: agentFilter } : {}),
         ...(q ? { q } : {}),
+        ...(until !== null ? { atOrBeforeTick: until } : {}),
       })
       .then((r) => {
         if (cancelled) return;
         setHistory(r.events);
-        setLoadedKey(JSON.stringify([importantOnly, agentFilter, q]));
+        setLoadedKey(JSON.stringify([importantOnly, agentFilter, q, until]));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [worldId, importantOnly, agentFilter, q]);
+  }, [worldId, importantOnly, agentFilter, q, until, fromHistory]);
 
   const shown = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return mergeEvents(events, importantOnly || agentFilter || q ? history : []).filter(
+    const source = until !== null ? history : mergeEvents(events, fromHistory ? history : []);
+    return source.filter(
       (e) =>
         (!importantOnly || e.importance >= 3) &&
         (!selectedOnly || !selectedAgent || e.actors.includes(selectedAgent)) &&
         words.every((w) => e.text.toLowerCase().includes(w)) &&
         (importantOnly || q || e.kind !== 'decided' || (selectedOnly && selectedAgent)),
     );
-  }, [events, history, importantOnly, selectedOnly, selectedAgent, agentFilter, q]);
+  }, [events, history, importantOnly, selectedOnly, selectedAgent, q, until, fromHistory]);
 
   return (
     <section className="event-log" aria-label="Event log">
       <div className="event-log-head">
-        <h2>Timeline</h2>
+        <h2>{until !== null ? `Timeline to ${formatClock(until)}` : 'Timeline'}</h2>
         <input
           type="search"
           className="event-search"
@@ -99,7 +109,13 @@ export function EventLog({ onPickAgent }: { onPickAgent: (id: string) => void })
         )}
         {shown.slice(0, 300).map((e) => (
           <li key={e.id ?? `${e.tick}-${e.text}`} className={`event imp-${e.importance}`}>
-            <span className="event-time">{formatClock(e.tick)}</span>
+            <button
+              className="event-time linkish"
+              title="Replay this moment on the map"
+              onClick={() => useWorld.getState().setReplayTarget(e.tick)}
+            >
+              {formatClock(e.tick)}
+            </button>
             {e.actors[0] ? (
               <button className="event-text linkish" onClick={() => onPickAgent(e.actors[0]!)}>
                 {e.text}

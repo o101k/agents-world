@@ -18,3 +18,4 @@ export * from './life.ts';
 export * from './generate.ts';
 export * from './conditions.ts';
 export * from './memory.ts';
+export * from './seasons.ts';

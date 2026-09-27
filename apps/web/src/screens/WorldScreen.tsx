@@ -16,6 +16,7 @@ import { MarketPanel } from '../components/MarketPanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
 import { ConditionsBar, WorldEventsDialog } from '../components/WorldEventsDialog.tsx';
+import { ReplayBar } from '../components/ReplayBar.tsx';
 import { SpendMeter } from '../components/SpendMeter.tsx';
 import { TimeControls } from '../components/TimeControls.tsx';
 import { useSettings } from '../settingsStore.ts';
@@ -50,6 +51,22 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const capReached = useWorld((s) => s.runner.capReached);
   const [spawning, setSpawning] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const replaying = useWorld((s) => s.replay !== null);
+  // The map as it was, when replaying a moment before the map changed (e.g. before a house).
+  const [pastMap, setPastMap] = useState<{ version: number; map: WorldMap } | null>(null);
+  useEffect(
+    () =>
+      useWorld.subscribe((s, prev) => {
+        if (!s.replay && prev.replay) setPastMap(null);
+        const view = s.replay?.view;
+        if (view && view !== prev.replay?.view && view.map)
+          setPastMap({ version: view.mapVersion, map: decodeMap(view.map) });
+        if (view && !view.map && view.mapVersion === s.mapVersion) setPastMap(null);
+      }),
+    [],
+  );
+  const shownMap = pastMap?.map ?? map;
+  const pastOwners = useWorld((s) => s.replay?.view?.owners);
   const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
   /** Map version currently shown (to know when to reload). */
@@ -134,6 +151,17 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         <div className="topbar-spacer" />
         {view && <SpendMeter worldId={worldId} />}
         <button
+          className={`btn btn-small ${replaying ? 'btn-primary' : ''}`}
+          onClick={() =>
+            useWorld
+              .getState()
+              .setReplayTarget(replaying ? null : Math.max(0, useWorld.getState().tick - 60))
+          }
+          title="Scrub back through the world's history"
+        >
+          {replaying ? '⏵ Live' : '⏪ Replay'}
+        </button>
+        <button
           className="btn btn-small"
           onClick={() => setEventsOpen(true)}
           title="Trigger a drought, storm, sickness, fire or bumper harvest"
@@ -162,7 +190,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
           or switch people to the free Mock brain, then press Play.
         </div>
       )}
-      <ConditionsBar map={map} />
+      <ConditionsBar map={shownMap} />
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
@@ -178,7 +206,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         <main className="map-area">
           {error && <div className="banner banner-error">{error}</div>}
           <div className="map-wrap">
-            {map && <MapView map={map} rendererRef={rendererRef} />}
+            {shownMap && <MapView map={shownMap} rendererRef={rendererRef} />}
             <div className="map-controls" aria-label="Map controls">
               <button
                 className="btn btn-icon"
@@ -203,6 +231,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
               </button>
             </div>
           </div>
+          <ReplayBar worldId={worldId} />
           <EventLog onPickAgent={pickAgent} />
         </main>
 
@@ -226,8 +255,8 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                 <SelectionDetails
                   worldId={worldId}
                   selection={selection}
-                  map={map}
-                  ownersById={view?.owners ?? {}}
+                  map={shownMap}
+                  ownersById={pastOwners ?? view?.owners ?? {}}
                   onPick={pickAgent}
                 />
               ) : (
@@ -347,9 +376,18 @@ function SelectionDetails({
   ownersById: Record<string, string[]>;
   onPick: (id: string) => void;
 }) {
-  const resources = useWorld((s) => s.resources);
+  const liveResources = useWorld((s) => s.resources);
+  const past = useWorld((s) => s.replay?.view);
+  const resources = past?.resources ?? liveResources;
   if (selection.kind === 'agent')
-    return <AgentInspector worldId={worldId} agentId={selection.id} onPick={onPick} />;
+    return (
+      <AgentInspector
+        worldId={worldId}
+        agentId={selection.id}
+        onPick={onPick}
+        atTick={past?.tick}
+      />
+    );
   if (selection.kind === 'object') {
     const object = map?.objects.find((o) => o.id === selection.id);
     if (!object) return null;

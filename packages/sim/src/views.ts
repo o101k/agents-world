@@ -8,14 +8,14 @@ import {
 } from '@aw/shared';
 import { fullName, type Agent } from './agent.ts';
 import { mapCache } from './spatial.ts';
-import type { WorldState } from './world.ts';
+import { findAgent, type WorldState } from './world.ts';
 
 /** Owners' display names for every owned building. */
 export function ownerNames(state: WorldState): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [id, ids] of Object.entries(state.owners)) {
     out[id] = ids
-      .map((aid) => state.agents.find((a) => a.id === aid))
+      .map((aid) => findAgent(state, aid))
       .filter((a): a is Agent => Boolean(a))
       .map(
         (a) => (a.familyName ? `${a.name} ${a.familyName}` : a.name) + (a.alive ? '' : ' (dead)'),
@@ -164,6 +164,6 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
 }
 
 function person(state: WorldState, id: string | null) {
-  const a = id ? state.agents.find((x) => x.id === id) : undefined;
+  const a = id ? findAgent(state, id) : undefined;
   return a ? { id: a.id, name: fullName(a), alive: a.alive } : null;
 }

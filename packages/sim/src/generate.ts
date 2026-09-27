@@ -26,6 +26,16 @@ const FIRST: Record<Sex, string[]> = {
     'Ulla',
     'Vera',
     'Wilma',
+    'Alva',
+    'Berit',
+    'Elke',
+    'Greta',
+    'Irma',
+    'Linnea',
+    'Maja',
+    'Rosa',
+    'Signe',
+    'Tove',
   ],
   male: [
     'Albrecht',
@@ -50,6 +60,16 @@ const FIRST: Record<Sex, string[]> = {
     'Ulrich',
     'Viktor',
     'Wendel',
+    'Arne',
+    'Bo',
+    'Erik',
+    'Gunnar',
+    'Hugo',
+    'Ivar',
+    'Leif',
+    'Mikkel',
+    'Oskar',
+    'Tor',
   ],
 };
 const FAMILY = [
@@ -73,6 +93,26 @@ const FAMILY = [
   'Rook',
   'Stave',
   'Thorne',
+  'Underhill',
+  'Vance',
+  'Wick',
+  'Yarrow',
+  'Alder',
+  'Birch',
+  'Cobb',
+  'Dunmore',
+  'Elling',
+  'Frost',
+  'Gale',
+  'Hollis',
+  'Innes',
+  'Keel',
+  'Loft',
+  'Marsh',
+  'Nye',
+  'Orme',
+  'Penn',
+  'Reeve',
 ];
 const OCCUPATIONS = [
   'farmer',
@@ -122,33 +162,34 @@ export interface GenerateOptions {
  */
 export function generateCast(seed: string, { adults, children }: GenerateOptions): AgentSpec[] {
   const rng = Rng.fromSeed(`${seed}:cast`);
+  // Full names are unique; first names may repeat across families (as in any real village).
   const used = new Set<string>();
-  const name = (sex: Sex) => {
-    for (let i = 0; i < 50; i++) {
+  const name = (sex: Sex, family: string) => {
+    for (let i = 0; i < 80; i++) {
       const n = rng.pick(FIRST[sex]);
-      if (!used.has(n)) {
-        used.add(n);
+      if (!used.has(`${n} ${family}`)) {
+        used.add(`${n} ${family}`);
         return n;
       }
     }
-    return `${rng.pick(FIRST[sex])} ${used.size}`;
+    return rng.pick(FIRST[sex]);
   };
   const specs: AgentSpec[] = [];
   const households: { members: AgentSpec[]; family: string; parents: AgentSpec[] }[] = [];
   let remaining = Math.max(1, adults);
   while (remaining > 0) {
-    const family =
-      rng.pick(FAMILY.filter((f) => !households.some((h) => h.family === f))) ?? rng.pick(FAMILY);
+    const unused = FAMILY.filter((f) => !households.some((h) => h.family === f));
+    const family = rng.pick(unused.length ? unused : FAMILY);
     const couple = remaining >= 2 && rng.chance(0.65);
     const members: AgentSpec[] = [];
     const firstSex: Sex = rng.chance(0.5) ? 'female' : 'male';
     const age = rng.int(20, 62);
-    members.push(makeAdult(rng, name(firstSex), family, firstSex, age, households.length));
+    members.push(makeAdult(rng, name(firstSex, family), family, firstSex, age, households.length));
     if (couple) {
       const sex: Sex = firstSex === 'female' ? 'male' : 'female';
       const partner = makeAdult(
         rng,
-        name(sex),
+        name(sex, family),
         family,
         sex,
         Math.max(18, age + rng.int(-6, 6)),
@@ -172,7 +213,7 @@ export function generateCast(seed: string, { adults, children }: GenerateOptions
     const home = options.length ? rng.pick(options) : households[0]!;
     const sex: Sex = rng.chance(0.5) ? 'female' : 'male';
     const kid: AgentSpec = {
-      name: name(sex),
+      name: name(sex, home.family),
       familyName: home.family,
       sex,
       age: childAge,

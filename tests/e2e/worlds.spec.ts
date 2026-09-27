@@ -164,3 +164,36 @@ test('world events, timeline search and a life story', async ({ page }) => {
   await page.getByRole('button', { name: 'Life story' }).click();
   await expect(page.locator('.modal.story')).toContainText('The life of Maren Holt');
 });
+
+test('replay: scrub the map back in time and return to live', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.world-screen, .worlds-screen')).toBeVisible();
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+  await page.getByLabel('Name').first().fill('Replay Village');
+  await page.getByRole('button', { name: 'Create world' }).click();
+  await expect(page.locator('.topbar-title')).toHaveText('Replay Village');
+
+  // Let some time pass.
+  await page.getByRole('button', { name: 'Max' }).click();
+  await page.getByTestId('play-pause').click();
+  await expect(page.locator('.topbar-clock')).toContainText('Day 2', { timeout: 20_000 });
+  await page.getByTestId('play-pause').click();
+
+  // Replay starts an hour ago; go back to the very beginning, then step forward an hour.
+  await page.getByRole('button', { name: '⏪ Replay' }).click();
+  await expect(page.getByTestId('replay-clock')).toContainText('Day');
+  await page.getByLabel('Moment in history').press('Home');
+  await expect(page.getByTestId('replay-clock')).toHaveText('Day 1, 07:00 · spring');
+  await page.getByRole('button', { name: '+1h' }).click();
+  await expect(page.getByTestId('replay-clock')).toHaveText('Day 1, 08:00 · spring');
+  await expect(page.locator('.event-log h2')).toContainText('Timeline to Day 1, 08:00');
+  // People can be inspected as they were.
+  await page.getByRole('tab', { name: 'People' }).click();
+  await page.locator('.person-row', { hasText: 'Maren Holt' }).click();
+  await expect(page.locator('.inspector')).toContainText('(replay)');
+
+  await page.getByRole('button', { name: 'Back to live' }).click();
+  await expect(page.locator('.replay-bar')).toHaveCount(0);
+  await expect(page.locator('.event-log h2')).toHaveText('Timeline');
+});

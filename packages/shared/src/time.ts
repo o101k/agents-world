@@ -8,6 +8,17 @@ export const DEFAULT_DAYS_PER_YEAR = 4;
 export const MIN_DAYS_PER_YEAR = 1;
 export const MAX_DAYS_PER_YEAR = 60;
 
+export const SEASONS = ['spring', 'summer', 'autumn', 'winter'] as const;
+export type Season = (typeof SEASONS)[number];
+
+/** Where a world is in its year (a year lasts as long as a year of age). */
+export interface CalendarView {
+  year: number;
+  season: Season;
+  /** 0–1 through the year. */
+  progress: number;
+}
+
 export interface GameClock {
   day: number;
   hour: number;

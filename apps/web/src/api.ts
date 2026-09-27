@@ -18,6 +18,7 @@ import type {
   WorldViewResponse,
   WorldsResponse,
   StoryResponse,
+  ReplayResponse,
   WorldEventRequest,
 } from '@aw/shared';
 
@@ -76,6 +77,13 @@ export const api = {
     request<FamilyNode>('GET', `/api/worlds/${id}/family/${agentId}`),
   worldEvent: (id: string, req: WorldEventRequest) =>
     request<{ ok: true }>('POST', `/api/worlds/${id}/world-event`, req),
+  replay: (id: string, tick: number, mapVersion: number) =>
+    request<ReplayResponse>(
+      'GET',
+      `/api/worlds/${id}/replay?tick=${tick}&mapVersion=${mapVersion}`,
+    ),
+  replayAgent: (id: string, tick: number, agentId: string) =>
+    request<AgentResponse>('GET', `/api/worlds/${id}/replay/agents/${agentId}?tick=${tick}`),
   story: (id: string, agentId: string) =>
     request<StoryResponse>('GET', `/api/worlds/${id}/agents/${agentId}/story`),
   providerModels: (provider: string) =>

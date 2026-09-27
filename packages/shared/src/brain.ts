@@ -14,6 +14,7 @@ import type {
   SkillName,
 } from './agent.ts';
 import type { MapObjectKind, Point } from './map.ts';
+import type { Season } from './time.ts';
 
 export type DecisionTrigger =
   | { kind: 'spawned' }
@@ -264,8 +265,9 @@ export interface Perception {
   language: number;
   /** Pending requests addressed to this agent (partnership, child). */
   requests: { kind: 'proposal' | 'child_request'; fromId: string; fromName: string }[];
-  /** What's going on around them that they can sense (weather, drought, sickness, fire). */
+  /** What's going on around them that they can sense (season, weather, drought, sickness, fire). */
   conditions: string[];
+  season?: Season;
   /** Feeling ill (and knows it). */
   sick: boolean;
   /** For reflection: the memories to look back over (today's, or this year's diary). */

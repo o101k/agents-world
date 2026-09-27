@@ -118,5 +118,6 @@ export const MAP_SIZES = {
   small: 48,
   medium: 64,
   large: 96,
+  huge: 128,
 } as const;
 export type MapSize = keyof typeof MAP_SIZES;

@@ -17,6 +17,7 @@ import {
   tileAt,
   type ActiveCondition,
   type AgentView,
+  type Season,
   type MapObject,
   type Point,
   type WorldMap,
@@ -65,6 +66,8 @@ function hashString(s: string): number {
 }
 
 interface AgentSprite {
+  /** Current label colour (to avoid restyling every frame). */
+  labelFill?: string;
   view: AgentView;
   sprite: Sprite;
   frames: Texture[];
@@ -115,6 +118,7 @@ export class WorldRenderer {
   /** Falling rain in a storm (screen space). */
   private readonly rain = new Graphics();
   private conditions: ActiveCondition[] = [];
+  private season: Season = 'spring';
   private readonly hoverBox = new Graphics();
   private readonly selectBox = new Graphics();
   private readonly overlay = new Container();
@@ -202,6 +206,14 @@ export class WorldRenderer {
     this.requestRender();
   }
 
+  /** The season tints the land (frosty winters, golden autumns). */
+  setSeason(season: Season): void {
+    if (season === this.season) return;
+    this.season = season;
+    this.drawNight();
+    this.requestRender();
+  }
+
   /** World events in progress: weather tints, rain, flames. */
   setConditions(conditions: ActiveCondition[]): void {
     this.conditions = conditions;
@@ -259,6 +271,7 @@ export class WorldRenderer {
         a.moveStart = now;
         a.moveDuration = far ? 0 : interval;
       }
+      if (a.label.text !== v.name) a.label.text = v.name; // e.g. a baby was named
       a.view = v;
       this.styleAgent(a);
     }
@@ -405,6 +418,9 @@ export class WorldRenderer {
             }
           }
         }
+        // The ground never changes between map reloads: draw each chunk once into a texture
+        // (one sprite instead of ~1,000 per chunk; matters on big maps).
+        chunk.cacheAsTexture({ scaleMode: 'nearest', resolution: 1 });
         this.ground.addChild(chunk);
       }
     }
@@ -611,11 +627,17 @@ export class WorldRenderer {
       const screen = this.toScreen(a.shown.x, a.shown.y - 17);
       a.label.visible = visible && (showLabels || selected);
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
-      a.label.style.fill = selected ? '#ffd84a' : '#ffffff';
+      // Only touch text styles when they change (restyling re-renders the text).
+      const fill = selected ? '#ffd84a' : '#ffffff';
+      if (a.labelFill !== fill) {
+        a.labelFill = fill;
+        a.label.style.fill = fill;
+      }
       const thinking = a.view.activity === 'thinking';
       a.zzz.visible =
         visible && (a.view.activity === 'sleeping' || thinking) && this.cam.zoom >= 1.5;
-      a.zzz.text = thinking ? '…' : 'z z';
+      const marker = thinking ? '…' : 'z z';
+      if (a.zzz.text !== marker) a.zzz.text = marker;
       a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
       this.updateBubble(a, visible && (this.cam.zoom >= 1.5 || selected), screen);
     }
@@ -784,6 +806,10 @@ export class WorldRenderer {
     const { width, height } = this.worldSize();
     const level = nightLevel(this.tick);
     if (level > 0) g.rect(0, 0, width, height).fill({ color: 0x0b1640, alpha: 0.5 * level });
+    if (this.season === 'winter')
+      g.rect(0, 0, width, height).fill({ color: 0xdfe8f5, alpha: 0.28 });
+    else if (this.season === 'autumn')
+      g.rect(0, 0, width, height).fill({ color: 0xc87830, alpha: 0.12 });
     // Weather: storms darken the sky; droughts bleach the land.
     const storm = this.level('storm');
     if (storm > 0) g.rect(0, 0, width, height).fill({ color: 0x1e2a3a, alpha: 0.2 + 0.3 * storm });

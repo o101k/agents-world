@@ -10,6 +10,8 @@ interface MapCache {
   byId: Map<string, MapObject>;
   /** Non-tree objects bucketed by 8×8 cell for fast "what's near me" queries. */
   cells: Map<number, MapObject[]>;
+  /** Trees, bucketed the same way (there are thousands on a big map). */
+  treeCells: Map<number, MapObject[]>;
 }
 
 const CELL = 8;
@@ -20,15 +22,17 @@ export function mapCache(map: WorldMap): MapCache {
   if (!c) {
     const byId = new Map(map.objects.map((o) => [o.id, o]));
     const cells = new Map<number, MapObject[]>();
+    const treeCells = new Map<number, MapObject[]>();
     const cols = Math.ceil(map.width / CELL);
     for (const o of map.objects) {
-      if (o.kind === 'tree' || o.kind === 'rock') continue;
+      if (o.kind === 'rock') continue;
+      const grid = o.kind === 'tree' ? treeCells : cells;
       const key = Math.floor(o.y / CELL) * cols + Math.floor(o.x / CELL);
-      const list = cells.get(key);
+      const list = grid.get(key);
       if (list) list.push(o);
-      else cells.set(key, [o]);
+      else grid.set(key, [o]);
     }
-    c = { walk: buildWalkability(map), byId, cells };
+    c = { walk: buildWalkability(map), byId, cells, treeCells };
     caches.set(map, c);
   }
   return c;
@@ -68,6 +72,29 @@ export function objectsNear(map: WorldMap, p: Point, radius: number): MapObject[
     for (let c = Math.max(0, c0); c <= Math.min(cols - 1, c1); c++) {
       for (const o of cells.get(r * cols + c) ?? []) {
         if (distanceToObject(o, p) <= radius) out.push(o);
+      }
+    }
+  }
+  return out;
+}
+
+/** Trees whose tile is within `radius` (Chebyshev) of a point. */
+export function treesNear(map: WorldMap, p: Point, radius: number): MapObject[] {
+  const { treeCells } = mapCache(map);
+  const cols = Math.ceil(map.width / CELL);
+  const out: MapObject[] = [];
+  for (
+    let r = Math.max(0, Math.floor((p.y - radius) / CELL));
+    r <= Math.floor((p.y + radius) / CELL);
+    r++
+  ) {
+    for (
+      let c = Math.max(0, Math.floor((p.x - radius) / CELL));
+      c <= Math.min(cols - 1, Math.floor((p.x + radius) / CELL));
+      c++
+    ) {
+      for (const o of treeCells.get(r * cols + c) ?? []) {
+        if (Math.abs(o.x - p.x) <= radius && Math.abs(o.y - p.y) <= radius) out.push(o);
       }
     }
   }

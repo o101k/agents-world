@@ -7,6 +7,8 @@ import {
   EventsQuery,
   SpawnRequest,
   WorldEventRequest,
+  ReplayQuery,
+  type ReplayResponse,
   type StoryResponse,
   type CallsResponse,
   type AgentResponse,
@@ -126,6 +128,19 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
 
   app.post<IdParams>('/api/worlds/:id/spawn', async (req) =>
     worlds.spawn(req.params.id, SpawnRequest.parse(req.body)),
+  );
+
+  app.get<IdParams>('/api/worlds/:id/replay', async (req): Promise<ReplayResponse> => {
+    const q = ReplayQuery.parse(req.query ?? {});
+    return worlds.replay(req.params.id, q.tick, q.mapVersion);
+  });
+
+  app.get<AgentParams>(
+    '/api/worlds/:id/replay/agents/:agentId',
+    async (req): Promise<AgentResponse> => {
+      const q = ReplayQuery.parse(req.query ?? {});
+      return { agent: worlds.replayAgent(req.params.id, q.tick, req.params.agentId) };
+    },
   );
 
   app.post<IdParams>('/api/worlds/:id/world-event', async (req) => {

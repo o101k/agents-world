@@ -9,9 +9,17 @@ import {
 import { fullName, remember, type Agent } from './agent.ts';
 import { approach, emit, fail, wake, type Ctx } from './engine.ts';
 import { feel, train } from './life.ts';
+import { describeSeason } from './seasons.ts';
 import { nameAsKnown } from './perception.ts';
-import { distanceToObject, isDrinkSpot, isWalkable, mapCache, nearestWalkable } from './spatial.ts';
-import type { WorldState } from './world.ts';
+import {
+  distanceToObject,
+  isDrinkSpot,
+  isWalkable,
+  mapCache,
+  nearestWalkable,
+  objectsNear,
+} from './spatial.ts';
+import { findAgent, type WorldState } from './world.ts';
 
 const H = TICKS_PER_HOUR;
 
@@ -59,7 +67,9 @@ export function usable(state: WorldState, objectId: string): boolean {
 export function canDrinkAt(state: WorldState, p: Point): boolean {
   if (!isDrinkSpot(state.map, p)) return false;
   if (conditionLevel(state, 'drought') < 0.5) return true;
-  return state.map.objects.some((o) => o.kind === 'well' && distanceToObject(o, p) === 1);
+  return objectsNear(state.map, p, 1).some(
+    (o) => o.kind === 'well' && distanceToObject(o, p) === 1,
+  );
 }
 
 const cheb = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -133,7 +143,8 @@ export function startWorldEvent(ctx: Ctx, spec: WorldEventSpec): void {
     }
     case 'disease': {
       add('disease', tick + hours * H);
-      const target = state.agents.find((a) => a.id === spec.targetId && a.alive);
+      const chosen = findAgent(state, spec.targetId);
+      const target = chosen?.alive ? chosen : undefined;
       const pool = state.agents.filter((a) => a.alive && !a.sickness && a.immuneUntil <= tick);
       const count = Math.max(1, Math.round(pool.length * 0.15 * intensity));
       const patients = target ? [target] : rng.shuffle([...pool]).slice(0, count);
@@ -351,7 +362,7 @@ export function tendAction(
 ): void {
   const { state } = ctx;
   const tick = state.tick;
-  const other = state.agents.find((a) => a.id === intent.agentId);
+  const other = findAgent(state, intent.agentId);
   if (!other) return fail(ctx, agent, "The person I meant to look after isn't here.");
   if (other === agent) return fail(ctx, agent, "I can't nurse myself — I should rest instead.");
   const who = nameAsKnown(agent, other);
@@ -392,6 +403,7 @@ export function sensedConditions(state: WorldState, agent: Agent): string[] {
   const out: string[] = [];
   if (!agent.alive) return out;
   const awake = !agent.asleep;
+  if (awake && agent.age >= 3) out.push(describeSeason(state));
   const storm = conditionLevel(state, 'storm');
   if (storm > 0)
     out.push(

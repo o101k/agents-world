@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { instinctApplies, type BrainRouter } from '@aw/brain';
 import type {
   ActiveCondition,
+  CalendarView,
   AgentView,
   DecisionRequest,
   RunnerStatus,
@@ -9,7 +10,14 @@ import type {
   WorldMeta,
 } from '@aw/shared';
 import { TICKS_PER_HOUR } from '@aw/shared';
-import { agentView, pendingRequests, step, type TickInput, type WorldState } from '@aw/sim';
+import {
+  agentView,
+  calendarView,
+  pendingRequests,
+  step,
+  type TickInput,
+  type WorldState,
+} from '@aw/sim';
 import type { CallRecord, WorldFile } from './worldFile.ts';
 
 /** Full snapshot every 6 in-game hours (and on pause/stop). Resume replays at most that many ticks. */
@@ -26,6 +34,7 @@ export interface RunnerHooks {
     resources: Record<string, number>;
     mapVersion: number;
     conditions: ActiveCondition[];
+    calendar: CalendarView;
   }) => void;
   onEvents?: (events: WorldEvent[]) => void;
   onStatus?: (meta: WorldMeta) => void;
@@ -181,6 +190,11 @@ export class WorldRunner {
     }
     this.flush();
     this.emitFrame(true);
+  }
+
+  /** Write everything logged so far (so readers of the file, like replay, see it all). */
+  persist(): void {
+    this.flush();
   }
 
   /** Stop the loop and write a final snapshot. */
@@ -399,6 +413,7 @@ export class WorldRunner {
       agents: this.agentViews(),
       resources,
       conditions: this.state.conditions.map((c) => ({ ...c })),
+      calendar: calendarView(this.state),
     });
   }
 }

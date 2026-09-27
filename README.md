@@ -4,13 +4,14 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 5 (a long life).** Villagers are born, grow up, learn to talk, work, trade, fall in
+**Status: Phase 6 (replay and scale) — all planned phases are built.** Villagers are born, grow up, learn to talk, work, trade, fall in
 love, have children, build houses, grow old and die; children inherit looks, temperament and
 aptitudes from their parents, and estates pass to heirs. They farm, fish, forage, chop wood, bake,
 make tools, trade at the market, and can also steal and fight. Over a long life they keep a diary,
 write a chapter of their life story every year, form beliefs and forget what didn't matter. You can
 send droughts, storms, sickness, fires and bumper harvests, search the whole history, and read
-anyone's life story.
+anyone's life story. The year turns through spring, summer, autumn and winter; you can scrub the
+map back to any moment of a world's history; and villages of 150+ people run on the huge map.
 Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
 such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
@@ -40,11 +41,20 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 
 - **Worlds screen**: create a world (name, optional seed, map size, and the starting villagers:
   the sample cast, your own cast written on cards, or a cast generated from the seed — optionally
-  fleshed out by an AI), open it, or delete it. The same seed always makes the same map.
+  fleshed out by an AI), open it, or delete it. The same seed always makes the same map. For a big
+  village choose the **Huge** map and generate up to 150 adults and 100 children.
 - **World screen**: drag or two-finger scroll to pan; pinch or ⌘+scroll to zoom; arrow keys/WASD
   pan, `+`/`−` zoom, `F` fits the map. **← Worlds** goes back.
 - **Time**: ▶ Play / ❚❚ Pause (or Space) and a speed picker (1× = one in-game minute per second, up
-  to Max). The world keeps running while the helper runs, even with the browser closed.
+  to Max). The world keeps running while the helper runs, even with the browser closed. The top
+  bar shows the **season** and year: a year lasts as long as a year of age (the aging slider), so
+  by default each in-game day is a season. Winter nights are bitter and almost nothing grows;
+  summer is warm and bountiful.
+- **⏪ Replay**: scrub the map back to any moment of the world's history with the slider (or
+  ±1 hour / ±1 day, or play history at 10×/60×/600×). The map, the people list, the timeline and
+  each person's inspector show that moment; click any time in the timeline to jump there. It's
+  rebuilt from the saved history (no AI calls, no cost) while the live world carries on. **Back
+  to live** returns.
 - **People**: the People tab lists everyone; click a person (on the map or in the list) to inspect
   their thoughts, plan, needs, belongings, recent experiences, personality and skills. **Follow**
   keeps the camera on them.
@@ -111,6 +121,11 @@ only for the yearly chapter; Standard/Deep villagers use their AI for both.
 **+ Spawn** brings a new person into the world from your description (the world's default AI fleshes
 them out). They arrive on the road knowing no one.
 
+**Big villages**: the helper handles 150+ people comfortably with the Mock brain (about 300
+in-game minutes per second on a laptop). With AI brains, the AI's speed and your budget set the
+pace: requests queue per provider, conversation replies go first, and a request that waits too
+long is dropped rather than sent late. To see how your machine copes: `npm run stress` (below).
+
 ### Where your worlds are saved
 
 In `~/.agents-world/` (a hidden folder in your home directory):
@@ -133,6 +148,16 @@ folder: `AGENTS_WORLD_HOME=/path/to/folder npm start`.
 | `AGENTS_WORLD_HOME` | `~/.agents-world` | Where worlds and settings are stored                 |
 | `AW_PORT`           | `4747`            | Port for the local helper                            |
 | `AW_NO_OPEN`        | unset             | Set to `1` to stop the browser opening automatically |
+
+## Stress test
+
+```bash
+npm run stress                    # 100 adults + 50 children, 3 in-game days, huge map
+npm run stress -- 120 60 8 huge   # adults, children, days, map size
+```
+
+Runs a big village headless with the free Mock brain and prints the simulation speed, survival,
+and the sizes of snapshots and per-frame updates.
 
 ## Development
 

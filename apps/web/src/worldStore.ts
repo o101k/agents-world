@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type {
   ActiveCondition,
+  CalendarView,
+  ReplayResponse,
   AgentView,
   RunnerStatus,
   WorldEvent,
@@ -27,6 +29,15 @@ interface WorldRuntime {
   mapVersion: number;
   /** World events in progress (drought, storm, sickness, fires, plenty). */
   conditions: ActiveCondition[];
+  calendar: CalendarView | null;
+
+  /**
+   * Replay mode: the tick asked for and the past view being shown (null = live). The live world
+   * keeps running meanwhile.
+   */
+  replay: { target: number; view: ReplayResponse | null } | null;
+  setReplayTarget: (tick: number | null) => void;
+  setReplayView: (view: ReplayResponse) => void;
 
   load: (worldId: string, view: WorldViewResponse, events: WorldEvent[]) => void;
   applyFrame: (
@@ -38,6 +49,7 @@ interface WorldRuntime {
       resources: Record<string, number>;
       mapVersion: number;
       conditions?: ActiveCondition[];
+      calendar?: CalendarView;
     },
   ) => void;
   addEvents: (worldId: string, events: WorldEvent[]) => void;
@@ -68,6 +80,16 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
   followId: null,
   mapVersion: 0,
   conditions: [],
+  calendar: null,
+  replay: null,
+  setReplayTarget: (tick) =>
+    set((s) =>
+      tick === null
+        ? { replay: null }
+        : { replay: { target: tick, view: s.replay?.view ?? null }, followId: null },
+    ),
+  setReplayView: (view) =>
+    set((s) => (s.replay ? { replay: { target: s.replay.target, view } } : {})),
 
   load: (worldId, view, events) =>
     set({
@@ -81,6 +103,8 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       selection: null,
       followId: null,
       conditions: view.conditions ?? [],
+      calendar: view.calendar ?? null,
+      replay: null,
     }),
   applyFrame: (worldId, f) => {
     if (get().worldId !== worldId) return;
@@ -92,6 +116,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       resourceChanges: f.resources,
       mapVersion: f.mapVersion ?? s.mapVersion,
       conditions: f.conditions ?? s.conditions,
+      calendar: f.calendar ?? s.calendar,
     }));
   },
   addEvents: (worldId, events) => {
@@ -109,5 +134,6 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       followId: null,
       resources: {},
       conditions: [],
+      replay: null,
     }),
 }));

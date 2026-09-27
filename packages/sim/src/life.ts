@@ -19,7 +19,7 @@ import { usable } from './conditions.ts';
 import { approach, emit, fail, meet, type Ctx } from './engine.ts';
 import { nameAsKnown } from './perception.ts';
 import { mapCache } from './spatial.ts';
-import type { WorldState } from './world.ts';
+import { findAgent, type WorldState } from './world.ts';
 
 // ------------------------------------------------------------------ stages & abilities
 
@@ -180,7 +180,7 @@ export function applyFeelings(
 ): void {
   const k = (v: unknown) => Math.max(-3, Math.min(3, Number(v) || 0)) * 5;
   for (const f of feelings.slice(0, 10)) {
-    const other = state.agents.find((a) => a.id === f.agentId);
+    const other = findAgent(state, f.agentId);
     if (!other || other === agent || !agent.people[other.id]) continue;
     feel(agent, other, state.tick, {
       affection: k(f.affection),
@@ -192,8 +192,7 @@ export function applyFeelings(
 
 // ------------------------------------------------------------------ per-tick life
 
-const byId = (state: WorldState, id: string | null) =>
-  id ? state.agents.find((a) => a.id === id) : undefined;
+const byId = (state: WorldState, id: string | null) => (id ? findAgent(state, id) : undefined);
 
 /** Annual chance of dying of old age. */
 export function oldAgeRisk(age: number, constitution: number): number {

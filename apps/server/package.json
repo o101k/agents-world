@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "cross-env AW_DEV=1 AW_NO_OPEN=1 tsx watch src/index.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "stress": "tsx scripts/stress.ts"
   },
   "dependencies": {
     "@aw/shared": "*",

@@ -1072,3 +1072,51 @@ input[type='range'] {
   color: #c9d8ff;
   font-style: italic;
 }
+
+/* ---------- replay */
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #2a2140;
+  border-top: 1px solid #5a4a8a;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.replay-badge {
+  font-weight: 700;
+  color: #d8c8ff;
+}
+.replay-clock {
+  min-width: 110px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  color: #fff;
+}
+.replay-slider {
+  flex: 1;
+  min-width: 160px;
+  margin: 0;
+}
+.event-time.linkish {
+  text-align: left;
+}
+.season {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.season-winter {
+  color: #d8e8ff;
+}
+.season-autumn {
+  color: #ffc98a;
+}
+.season-summer {
+  color: #ffe38a;
+}
+.season-spring {
+  color: #b8f0a0;
+}

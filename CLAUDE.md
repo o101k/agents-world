@@ -29,7 +29,7 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 | 3 – Work, trade, money        | Done   |
 | 4 – Life cycle                | Done   |
 | 5 – A long life               | Done   |
-| 6 – Replay and scale          | Next   |
+| 6 – Replay and scale          | Done   |
 
 ## Commands
 
@@ -39,6 +39,7 @@ npm start            # build UI, start helper, open browser (http://127.0.0.1:47
 npm run dev          # hot-reload dev mode (UI at http://localhost:5173)
 npm run check        # typecheck + lint + unit tests — run before every commit
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
+npm run stress       # headless big-village stress test (args: adults children days mapSize)
 ```
 
 Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port override: `AW_PORT`.
@@ -283,7 +284,7 @@ teacher and a closer relationship).
 | **3 – Work, trade, money** ✅        | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
 | **4 – Life cycle** ✅                | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
 | **5 – A long life** ✅               | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
-| **6 – Replay and scale**             | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
+| **6 – Replay and scale** ✅          | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
 
 ### Known risks
 
@@ -296,6 +297,26 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-09-27 — Phase 6 details.** (a) Replay rebuilds any past tick from the nearest daily
+  snapshot plus logged inputs (no AI calls, nothing written), cached so scrubbing forward is cheap.
+  The live world keeps running while you replay; the map, people list, timeline (events up to
+  that moment) and inspector show the past; clicking a time in the timeline jumps there. Replaying
+  stretches recorded before a rules change uses today's rules (documented, not fixed). (b) Seasons
+  follow the aging slider: a year of seasons = a year of age (so by default one in-game day per
+  season), starting in early spring; winter nearly stops growth and makes nights ~1.8× colder,
+  summer halves night cold and speeds growth. State v7 adds `calendar`. (c) Scale: a new **Huge**
+  map (128×128); generated casts up to 150 adults + 100 children with unique full names; big
+  villages get bigger fields, about one per six people; family links are matched within
+  households. Performance work: id index for people, a tree grid, cheaper recall, overheard chatter
+  between strangers kept only in working memory, ground chunks cached as textures, labels restyled
+  only on change. Result: 150 people ≈ 2–3 ms/tick with the Mock brain, population stable over two
+  years. (d) Bug found at scale: perception listed only the 40 nearest known places, so in a big
+  village people forgot where home was and slept outside; home, owned buildings and landmarks are
+  now always included (and in the prompt). (e) AI request queue: priorities (replies and
+  emergencies first, night reflections last), and a request that times out while queued is
+  dropped instead of being sent and paid for later. (f) `npm run stress` added for the owner's
+  ~150-person test.
 
 - **2026-09-27 — Phase 5 details.** (a) Memory strength starts at importance and each night keeps
   `0.85 + 0.014 × importance`; importance ≥ 9 (core) and life chapters never fade; memories from

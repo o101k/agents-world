@@ -3,7 +3,7 @@
 A short technical design of what is built so far. The full plan, decisions and roadmap live in
 [`../CLAUDE.md`](../CLAUDE.md). Updated at the end of every phase.
 
-_Last updated: Phase 5._
+_Last updated: Phase 6._
 
 ## Processes
 
@@ -48,16 +48,22 @@ the simulation understands.
 - **Resume** = latest snapshot + replay of logged inputs up to the saved tick; inputs already logged
   for the next tick are re-queued and outstanding decisions re-asked. Tests check that crash-resume
   and stop/restart both match an uninterrupted run exactly.
-- World state has a version; older saves are upgraded on load, step by step (v1 → v6).
+- World state has a version; older saves are upgraded on load, step by step (v1 → v7).
+- **Replay** (`apps/server/src/worlds/replayer.ts`) uses the same mechanism for any past tick: the
+  nearest earlier snapshot (one per in-game day is kept forever) plus the logged inputs since, run
+  through `step` with no brains and nothing written. The last replayed state is cached, so
+  scrubbing forward only steps the difference; going back reloads a snapshot. Worst case is one
+  in-game day of ticks (~1–3 s for 150 people). History from before a rules change replays under
+  the new rules, so very old stretches of an upgraded world may differ from what happened.
 
 World file (SQLite, WAL, migrations via `PRAGMA user_version`): `meta`, `snapshots` (gzipped JSON,
 pruned to one per day after two days), `tick_inputs`, `events`, `llm_calls`.
 
-## World state (v6)
+## World state (v7)
 
 `seed, tick, rng, settings {daysPerYear, defaultBrain}, map {width, height, tiles, objects},
 agents[], resources{}, market {stock}, offers[], requests[], owners{}, nextAgentNum, nextOfferNum,
-mapVersion, conditions[], nextConditionNum`. Agents are never removed (the dead stay for history
+mapVersion, conditions[], nextConditionNum, calendar {year, progress}`. Agents are never removed (the dead stay for history
 and family trees). Map objects may carry `progress` (being built or rebuilt) and `burntTick`.
 
 An **agent** holds identity (name, family name, sex, age in years), appearance, personality (Big
@@ -151,6 +157,32 @@ Shelter: resting (not just sleeping) at your own front door puts you indoors (wa
 visitors knock and the person comes out. Burnt or burning buildings give no shelter and can't be
 worked in.
 
+## Seasons (`packages/sim/src/seasons.ts`)
+
+The calendar advances every tick by the same step as age, so a year of seasons lasts one year of
+age (4 in-game days by default: a day per season) and the aging slider changes both. Worlds start
+in early spring. Each season sets growth (spring ×1.1, summer ×1.3, autumn ×0.9, winter ×0.15;
+wood regrows slower in winter), night cold (summer ×0.5, autumn ×1.25, winter ×1.8), daytime sun
+warmth outdoors (autumn ×0.8, winter ×0.4) and summer heat (+15% thirst outdoors by day). New
+seasons and years are announced as `season` events; everyone awake is told the season and what
+it means. The mock brain stocks more food in autumn and winter.
+
+## Scale
+
+- 150+ people run at ~2–3 ms per tick with the Mock brain (`npm run stress`). What made it fast:
+  an id → person index (`findAgent`), trees in their own spatial grid (`treesNear`), cheaper recall
+  scoring, and chit-chat overheard between strangers kept only in working memory (talk about
+  one's family or oneself is still remembered).
+- Big villages get bigger and more numerous fields (about one per six people), enough houses for
+  every household, and unique full names; family links are resolved within households.
+- Perception always includes home, one's own buildings and the landmarks (market, well, bakery,
+  workshop, dock) — in a big village the nearest 40 places used to crowd out home.
+- AI requests queue per provider with priorities: conversation replies and emergencies first,
+  routine planning next, night reflections last. A request that times out while still queued is
+  dropped and never sent (so never paid for).
+- The map caches each 32×32 ground chunk as a texture, and text labels are only restyled when they
+  change. Frames carry ~40 KB for 150 people; a snapshot is ~5–7 MB of JSON (~0.5–0.8 MB gzipped).
+
 ## Work, trade and conflict
 
 - Items with nutrition and base prices; recipes at the bakery (bread) and workshop (planks, tools);
@@ -211,34 +243,36 @@ the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event
 
 ## API
 
-| Method | Path                                    | Result                                                             |
-| ------ | --------------------------------------- | ------------------------------------------------------------------ |
-| GET    | `/api/health`                           | `{ ok, version }`                                                  |
-| GET    | `/api/worlds`                           | `{ worlds, activeWorldId }`                                        |
-| POST   | `/api/worlds`                           | create `{ name, seed?, mapSize?, cast? }` → `{ world }`            |
-| POST   | `/api/worlds/:id/activate`              | make it the active (running) world                                 |
-| GET    | `/api/worlds/:id/view`                  | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
-| POST   | `/api/worlds/:id/control`               | `{ running?, speed? }`                                             |
-| GET    | `/api/worlds/:id/events`                | `?limit&beforeId&agentId&minImportance&q` → `{ events }`           |
-| GET    | `/api/worlds/:id/agents/:agentId`       | inspector detail                                                   |
-| PUT    | `/api/worlds/:id/agents/:agentId/brain` | set a person's brain                                               |
-| GET    | `/api/worlds/:id/agents/:agentId/calls` | recent AI exchanges                                                |
-| GET    | `/api/worlds/:id/family/:agentId`       | family tree                                                        |
-| PUT    | `/api/worlds/:id/default-brain`         | `{ brain, applyToAll }`                                            |
-| PUT    | `/api/worlds/:id/cap`                   | `{ capUsd }`                                                       |
-| PUT    | `/api/worlds/:id/aging`                 | `{ daysPerYear }`                                                  |
-| GET    | `/api/worlds/:id/market`                | `{ stock, quotes, moneySupply }`                                   |
-| POST   | `/api/worlds/:id/spawn`                 | `{ description, name?, sex?, age? }` → `{ agentId }`               |
-| POST   | `/api/worlds/:id/world-event`           | `{ kind, intensity?, hours?, targetId? }`                          |
-| GET    | `/api/worlds/:id/agents/:agentId/story` | `{ entries }`: their events + diary/chapters, oldest first         |
-| DELETE | `/api/worlds/:id`                       | delete permanently                                                 |
-| GET    | `/api/settings`                         | providers (no keys), prices, data folder                           |
-| PUT    | `/api/settings/providers/:id`           | `{ apiKey?, baseUrl?, defaultModel? }`                             |
-| PUT    | `/api/settings/prices`                  | `{ model: { input, output } \| null }`                             |
-| GET    | `/api/providers/:id/models`             | model list (doubles as a connection test)                          |
+| Method | Path                                     | Result                                                             |
+| ------ | ---------------------------------------- | ------------------------------------------------------------------ |
+| GET    | `/api/health`                            | `{ ok, version }`                                                  |
+| GET    | `/api/worlds`                            | `{ worlds, activeWorldId }`                                        |
+| POST   | `/api/worlds`                            | create `{ name, seed?, mapSize?, cast? }` → `{ world }`            |
+| POST   | `/api/worlds/:id/activate`               | make it the active (running) world                                 |
+| GET    | `/api/worlds/:id/view`                   | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
+| POST   | `/api/worlds/:id/control`                | `{ running?, speed? }`                                             |
+| GET    | `/api/worlds/:id/events`                 | `?limit&beforeId&agentId&minImportance&q&atOrBeforeTick`           |
+| GET    | `/api/worlds/:id/agents/:agentId`        | inspector detail                                                   |
+| PUT    | `/api/worlds/:id/agents/:agentId/brain`  | set a person's brain                                               |
+| GET    | `/api/worlds/:id/agents/:agentId/calls`  | recent AI exchanges                                                |
+| GET    | `/api/worlds/:id/family/:agentId`        | family tree                                                        |
+| PUT    | `/api/worlds/:id/default-brain`          | `{ brain, applyToAll }`                                            |
+| PUT    | `/api/worlds/:id/cap`                    | `{ capUsd }`                                                       |
+| PUT    | `/api/worlds/:id/aging`                  | `{ daysPerYear }`                                                  |
+| GET    | `/api/worlds/:id/market`                 | `{ stock, quotes, moneySupply }`                                   |
+| POST   | `/api/worlds/:id/spawn`                  | `{ description, name?, sex?, age? }` → `{ agentId }`               |
+| POST   | `/api/worlds/:id/world-event`            | `{ kind, intensity?, hours?, targetId? }`                          |
+| GET    | `/api/worlds/:id/agents/:agentId/story`  | `{ entries }`: their events + diary/chapters, oldest first         |
+| GET    | `/api/worlds/:id/replay`                 | `?tick&mapVersion` → the world then (map only if it differs)       |
+| GET    | `/api/worlds/:id/replay/agents/:agentId` | `?tick` → a person as they were then                               |
+| DELETE | `/api/worlds/:id`                        | delete permanently                                                 |
+| GET    | `/api/settings`                          | providers (no keys), prices, data folder                           |
+| PUT    | `/api/settings/providers/:id`            | `{ apiKey?, baseUrl?, defaultModel? }`                             |
+| PUT    | `/api/settings/prices`                   | `{ model: { input, output } \| null }`                             |
+| GET    | `/api/providers/:id/models`              | model list (doubles as a connection test)                          |
 
 WebSocket `/ws` pushes `hello`, `worlds_changed`, `frame` (tick, runner status incl. spending,
-agent views, changed resources, map version, active conditions) and `events`. There is deliberately no endpoint that
+agent views, changed resources, map version, active conditions, calendar) and `events`. There is deliberately no endpoint that
 sets an agent's state or decisions; changing someone's brain changes how they think, not what they
 decide.
 
@@ -252,5 +286,6 @@ decide.
   bubbles, name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. Weather:
   storms darken the map and draw falling rain (screen space); droughts give a hot, bleached tint;
   burning buildings get flickering flames and smoke; ruins are drawn blackened; the sick look pale
-  green. It animates only while something moves (or burns, or rains).
+  green; winter frosts the land and autumn warms it. It animates only while something moves (or
+  burns, or rains). In replay mode it is fed the replayed moment instead of live frames.
 - `camera.ts`: pure camera maths (tested).

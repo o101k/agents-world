@@ -5,7 +5,7 @@ import { mockDecide } from './mock.ts';
 import { OpenAIProvider } from './openai.ts';
 import { DEFAULT_PRICES, costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
-import { BrainRouter, instinctApplies } from './router.ts';
+import { BrainRouter, PrioritySemaphore, instinctApplies, priorityOf } from './router.ts';
 import { IntentSchema } from '@aw/shared';
 import { ACTIONS, parseDecision } from './schema.ts';
 
@@ -296,6 +296,49 @@ describe('instinct and routing', () => {
     });
     expect(r.error).toContain('boom');
     expect(r.result?.decision.plan).toEqual([{ type: 'rest', minutes: 15 }]);
+  });
+
+  it('serves queued requests by priority: conversation replies first, reflection last', async () => {
+    const sem = new PrioritySemaphore(1);
+    const order: string[] = [];
+    let release!: () => void;
+    const first = sem.run(() => new Promise<void>((r) => (release = r)));
+    const queued = (
+      [
+        ['check_in', priorityOf({ kind: 'check_in' })],
+        ['reflect', priorityOf({ kind: 'reflect', scope: 'day' })],
+        ['reply', priorityOf({ kind: 'spoken_to', fromId: 'a2', fromName: 'T', message: 'hi' })],
+        ['hungry', priorityOf({ kind: 'urgent_need', need: 'food' })],
+      ] as const
+    ).map(([name, prio]) => sem.run(async () => void order.push(name), prio));
+    expect(sem.waiting).toBe(4);
+    release();
+    await Promise.all([first, ...queued]);
+    expect(order).toEqual(['reply', 'hungry', 'check_in', 'reflect']);
+  });
+
+  it('never sends a request that timed out while waiting in the queue', async () => {
+    let calls = 0;
+    const slow = {
+      id: 'openai_compatible' as const,
+      decide: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 120));
+        return { decision: { thought: '', goal: '', plan: [] } };
+      },
+    };
+    const router = new BrainRouter([slow]);
+    const config = {
+      provider: 'openai_compatible' as const,
+      model: 'm',
+      effort: 'standard' as const,
+    };
+    const results = await Promise.all(
+      [1, 2, 3, 4].map(() => router.decide(request(perception()), config, 40)),
+    );
+    expect(results.every((r) => r.timedOut)).toBe(true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls).toBe(2); // the provider's concurrency; the queued two were dropped
   });
 
   it('mock brain replies when spoken to', () => {

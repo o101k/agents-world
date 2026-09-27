@@ -13,6 +13,7 @@ import {
   stageOf,
 } from '@aw/shared';
 import type { Condition } from './conditions.ts';
+import { START_CALENDAR, calendarFromTick, type Calendar } from './seasons.ts';
 import { initialMarket, type MarketState } from './market.ts';
 import type { Agent } from './agent.ts';
 import { SAMPLE_CAST, type AgentSpec } from './cast.ts';
@@ -22,7 +23,7 @@ import { addAgent, introduceResidents, linkFamilies } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 6;
+export const WORLD_STATE_VERSION = 7;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -72,6 +73,8 @@ export interface WorldState {
   /** World events in progress (drought, storm, disease, fires, plenty). */
   conditions: Condition[];
   nextConditionNum: number;
+  /** Year and season (advances with the aging slider). */
+  calendar: Calendar;
 }
 
 /** JSON-safe form of WorldState, used for snapshots. */
@@ -118,6 +121,9 @@ export function createWorldState({
     width: size,
     height: size,
     houses: Math.max(defaultHouses, households + 1),
+    // Enough farmland to feed a big village (bigger fields, about one per six people).
+    fields: cast.length > 40 ? Math.ceil(cast.length / 6) : size >= 80 ? 5 : 3,
+    bigFields: cast.length > 40,
   });
   const state: WorldState = {
     version: WORLD_STATE_VERSION,
@@ -137,6 +143,7 @@ export function createWorldState({
     mapVersion: 0,
     conditions: [],
     nextConditionNum: 1,
+    calendar: { ...START_CALENDAR },
   };
   withRng(state, (r) => {
     state.resources = initialResources(map, r);
@@ -168,6 +175,19 @@ export function assignOwnership(state: WorldState): void {
   }
 }
 
+const agentIndexes = new WeakMap<Agent[], { size: number; byId: Map<string, Agent> }>();
+
+/** Look a person up by id (fast; people are only ever added, never removed). */
+export function findAgent(state: WorldState, id: string | null | undefined): Agent | undefined {
+  if (!id) return undefined;
+  let index = agentIndexes.get(state.agents);
+  if (!index || index.size !== state.agents.length) {
+    index = { size: state.agents.length, byId: new Map(state.agents.map((a) => [a.id, a])) };
+    agentIndexes.set(state.agents, index);
+  }
+  return index.byId.get(id);
+}
+
 /** Run `fn` with the world's RNG and store the advanced RNG state back. */
 export function withRng<T>(state: WorldState, fn: (rng: Rng) => T): T {
   const rng = new Rng(state.rng);
@@ -191,6 +211,11 @@ export function deserializeWorldState(data: SerializedWorldState | LegacyV1State
   if (from <= 3) state = upgradeV3(state);
   if (from <= 4) state = upgradeV4(state);
   if (from <= 5) state = upgradeV6(state);
+  if (from <= 6) {
+    // Phase 6 (state v7): seasons.
+    state.version = WORLD_STATE_VERSION;
+    state.calendar ??= calendarFromTick(state.tick, state.settings.daysPerYear);
+  }
   return state;
 }
 
@@ -309,6 +334,7 @@ function upgradeV1(old: LegacyV1State): WorldState {
     mapVersion: 0,
     conditions: [],
     nextConditionNum: 1,
+    calendar: { ...START_CALENDAR },
   };
   withRng(state, (r) => {
     state.resources = initialResources(state.map, r);

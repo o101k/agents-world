@@ -329,7 +329,16 @@ export function userPrompt(p: Perception): string {
   lines.push('');
   if (p.knownPlaces.length) {
     lines.push('Places you know (nearest first):');
-    for (const k of p.knownPlaces.slice(0, 24)) {
+    // Home, one's own places and the village's landmarks always; then the nearest others.
+    const vital = (k: (typeof p.knownPlaces)[number]) =>
+      k.id === s.homeId ||
+      k.owner === 'you' ||
+      ['market', 'well', 'bakery', 'workshop', 'dock'].includes(k.kind);
+    const places = [
+      ...p.knownPlaces.filter(vital),
+      ...p.knownPlaces.filter((k) => !vital(k)).slice(0, 20),
+    ].sort((a, b) => a.distance - b.distance);
+    for (const k of places) {
       const produce = k.produce ? ` (${ITEM_LABELS[k.produce].toLowerCase()})` : '';
       const amount =
         k.lastSeenAmount !== undefined ? `, last time you saw ${k.lastSeenAmount} to gather` : '';

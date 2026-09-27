@@ -11,6 +11,7 @@ import {
   createWorldState,
   deserializeWorldState,
   serializeWorldState,
+    WORLD_STATE_VERSION,
   type WorldState,
 } from './world.ts';
 
@@ -323,7 +324,8 @@ describe('world events', () => {
       for (const m of a.memories) delete m.strength;
     }
     const up = deserializeWorldState(old);
-    expect(up.version).toBe(6);
+        expect(up.version).toBe(WORLD_STATE_VERSION);
+    expect(up.calendar.year).toBeGreaterThanOrEqual(1);
     expect(up.conditions).toEqual([]);
     const maren = up.agents[0]!;
     expect(maren.forgotten).toEqual([]);

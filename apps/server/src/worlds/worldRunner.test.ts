@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BrainRouter } from '@aw/brain';
 import { fnv1a, serializeWorldState } from '@aw/sim';
+import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
 import { WorldManager } from './worldManager.ts';
 import { WorldRunner } from './worldRunner.ts';
@@ -82,6 +83,38 @@ describe('WorldRunner', () => {
     expect(hash(resumed)).toBe(expected);
     await resumed.stop();
     file.close();
+    await wm.closeAll();
+  });
+
+  it('replays any past moment exactly, backwards and forwards, without asking any brain', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Replay', seed: 'replay', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    const marks: [number, string][] = [];
+    for (const n of [90, 500, 1100, 1700]) {
+      await runner.advance(w.tick + n - runner.state.tick);
+      if (n === 500) await wm.worldEvent(w.id, { kind: 'storm', intensity: 0.7, hours: 4 });
+      marks.push([runner.state.tick, hash(runner)]);
+    }
+    runner.persist();
+    const file = WorldFile.open(join(dir, 'worlds', `${w.id}.sqlite`));
+    const replayer = new Replayer(file);
+    const stateHash = (t: number) => fnv1a(JSON.stringify(serializeWorldState(replayer.at(t))));
+    for (const [t, h] of [...marks].reverse()) expect(stateHash(t)).toBe(h);
+    for (const [t, h] of marks) expect(stateHash(t)).toBe(h);
+    file.close();
+
+    const view = wm.replay(w.id, marks[1]![0], -1);
+    expect(view.tick).toBe(marks[1]![0]);
+    expect(view.lastTick).toBe(runner.state.tick);
+    expect(view.map).toBeDefined();
+    expect(view.conditions.map((c) => c.kind)).toEqual(['storm']);
+    expect(wm.replay(w.id, 0, view.mapVersion).tick).toBe(view.firstTick);
+    expect(wm.replay(w.id, 0, view.mapVersion).map).toBeUndefined();
+    expect(wm.replayAgent(w.id, marks[0]![0], 'a1').name).toBe('Maren Holt');
+    const early = wm.events(w.id, { limit: 500, minImportance: 1, atOrBeforeTick: marks[0]![0] });
+    expect(early.every((e) => e.tick <= marks[0]![0])).toBe(true);
     await wm.closeAll();
   });
 

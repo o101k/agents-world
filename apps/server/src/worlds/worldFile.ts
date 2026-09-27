@@ -206,6 +206,47 @@ export class WorldFile {
     return deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')));
   }
 
+  /** The latest snapshot at or before `tick` (for replaying the past). */
+  loadSnapshotAtOrBefore(tick: number): WorldState {
+    const row = this.db
+      .prepare('SELECT state FROM snapshots WHERE tick <= ? ORDER BY tick DESC LIMIT 1')
+      .get(tick) as { state: Buffer } | undefined;
+    if (!row) throw new Error(`World file ${this.path} has no snapshot before tick ${tick}`);
+    return deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')));
+  }
+
+  /** Tick of the latest snapshot at or before `tick` (-1 if none). */
+  snapshotTickAtOrBefore(tick: number): number {
+    const row = this.db
+      .prepare('SELECT MAX(tick) AS t FROM snapshots WHERE tick <= ?')
+      .get(tick) as { t: number | null };
+    return row.t ?? -1;
+  }
+
+  /** The first tick the world's history can be replayed from. */
+  firstSnapshotTick(): number {
+    const row = this.db.prepare('SELECT MIN(tick) AS t FROM snapshots').get() as {
+      t: number | null;
+    };
+    return row.t ?? 0;
+  }
+
+  /** Logged inputs for ticks in (from, to], grouped by tick. */
+  readInputsBetween(from: number, to: number): Map<number, TickInput[]> {
+    const rows = this.db
+      .prepare(
+        'SELECT tick, payload FROM tick_inputs WHERE tick > ? AND tick <= ? ORDER BY tick, id',
+      )
+      .all(from, to) as { tick: number; payload: string }[];
+    const out = new Map<number, TickInput[]>();
+    for (const r of rows) {
+      const list = out.get(r.tick) ?? [];
+      list.push(JSON.parse(r.payload) as TickInput);
+      out.set(r.tick, list);
+    }
+    return out;
+  }
+
   appendInputs(rows: [tick: number, input: TickInput][]): void {
     const stmt = this.db.prepare('INSERT INTO tick_inputs (tick, kind, payload) VALUES (?, ?, ?)');
     for (const [tick, input] of rows) stmt.run(tick, input.kind, JSON.stringify(input));
@@ -252,6 +293,8 @@ export class WorldFile {
     beforeId?: number;
     agentId?: string;
     minImportance: number;
+    /** Only events up to this tick (replay). */
+    atOrBeforeTick?: number;
     /** Words to search for in the event text (case-insensitive). */
     q?: string;
     /** Life story: this person's important events and their own diary. */
@@ -259,6 +302,7 @@ export class WorldFile {
   }): WorldEvent[] {
     const where = ["json_extract(payload, '$.importance') >= @minImportance"];
     if (opts.beforeId !== undefined) where.push('id < @beforeId');
+    if (opts.atOrBeforeTick !== undefined) where.push('tick <= @atOrBeforeTick');
     if (opts.agentId)
       where.push('EXISTS (SELECT 1 FROM json_each(events.actors) WHERE value = @agentId)');
     if (opts.story)
@@ -278,6 +322,7 @@ export class WorldFile {
         minImportance: opts.minImportance,
         beforeId: opts.beforeId ?? null,
         agentId: opts.agentId ?? null,
+        atOrBeforeTick: opts.atOrBeforeTick ?? null,
         ...params,
       }) as {
       id: number;

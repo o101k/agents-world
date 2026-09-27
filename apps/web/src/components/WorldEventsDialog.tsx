@@ -194,8 +194,11 @@ export function WorldEventsDialog({
 
 /** What's going on in the world right now, with time left. */
 export function ConditionsBar({ map }: { map: WorldMap | null }) {
-  const conditions = useWorld((s) => s.conditions);
-  const tick = useWorld((s) => s.tick);
+  const past = useWorld((s) => s.replay?.view);
+  const liveConditions = useWorld((s) => s.conditions);
+  const liveTick = useWorld((s) => s.tick);
+  const conditions = past?.conditions ?? liveConditions;
+  const tick = past?.tick ?? liveTick;
   if (conditions.length === 0) return null;
   const left = (c: ActiveCondition) => {
     const m = Math.max(0, c.endTick - tick);

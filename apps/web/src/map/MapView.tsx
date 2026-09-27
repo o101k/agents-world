@@ -30,14 +30,36 @@ export function MapView({ map, rendererRef }: Props) {
       renderer.setClock(s.tick);
       renderer.setFollow(s.followId);
       renderer.setConditions(s.conditions);
+      if (s.calendar) renderer.setSeason(s.calendar.season);
     });
     const unsub = useWorld.subscribe((s, prev) => {
-      if (s.resourceChanges !== prev.resourceChanges) renderer.setResources(s.resourceChanges);
-      if (s.agents !== prev.agents) renderer.setAgents(s.agents);
-      if (s.tick !== prev.tick) renderer.setClock(s.tick);
+      const past = s.replay?.view;
+      if (past) {
+        // Replay: show the past moment; live updates wait.
+        if (past !== prev.replay?.view) {
+          renderer.setResources(past.resources);
+          renderer.setAgents(past.agents);
+          renderer.setClock(past.tick);
+          renderer.setConditions(past.conditions);
+          if (past.calendar) renderer.setSeason(past.calendar.season);
+        }
+      } else if (prev.replay?.view) {
+        // Back to live: catch up with everything at once.
+        renderer.setResources(s.resources);
+        renderer.setAgents(s.agents);
+        renderer.setClock(s.tick);
+        renderer.setConditions(s.conditions);
+        if (s.calendar) renderer.setSeason(s.calendar.season);
+      } else {
+        if (s.resourceChanges !== prev.resourceChanges) renderer.setResources(s.resourceChanges);
+        if (s.agents !== prev.agents) renderer.setAgents(s.agents);
+        if (s.tick !== prev.tick) renderer.setClock(s.tick);
+        if (s.conditions !== prev.conditions) renderer.setConditions(s.conditions);
+        if (s.calendar && s.calendar.season !== prev.calendar?.season)
+          renderer.setSeason(s.calendar.season);
+      }
       if (s.followId !== prev.followId) renderer.setFollow(s.followId);
       if (s.selection !== prev.selection) renderer.select(s.selection);
-      if (s.conditions !== prev.conditions) renderer.setConditions(s.conditions);
     });
     return () => {
       cancelled = true;

@@ -43,10 +43,13 @@ export function AgentInspector({
   worldId,
   agentId,
   onPick,
+  atTick,
 }: {
   worldId: string;
   agentId: string;
   onPick?: (id: string) => void;
+  /** Replay: show the person as they were at this tick. */
+  atTick?: number;
 }) {
   const [treeOpen, setTreeOpen] = useState(false);
   const [storyOpen, setStoryOpen] = useState(false);
@@ -56,25 +59,29 @@ export function AgentInspector({
   const setFollow = useWorld((s) => s.setFollow);
   const following = followId === agentId;
 
-  // Poll while shown: cheap on localhost and keeps the mind view live.
+  // Poll while shown: cheap on localhost and keeps the mind view live. In replay, load the past.
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      api
-        .agent(worldId, agentId)
+      (atTick === undefined
+        ? api.agent(worldId, agentId)
+        : api.replayAgent(worldId, atTick, agentId)
+      )
         .then((r) => {
           if (cancelled) return;
           setAgent(r.agent);
           setError(null);
         })
         .catch((e: Error) => !cancelled && setError(e.message));
-    void load();
-    const t = setInterval(() => void load(), 600);
+    const first = setTimeout(() => void load(), atTick === undefined ? 0 : 150);
+    const t = atTick === undefined ? setInterval(() => void load(), 600) : undefined;
     return () => {
       cancelled = true;
+      clearTimeout(first);
       clearInterval(t);
     };
-  }, [worldId, agentId]);
+  }, [worldId, agentId, atTick]);
+  const replaying = atTick !== undefined;
 
   if (error) return <p className="muted">{error}</p>;
   if (!agent || agent.id !== agentId) return <p className="muted">Loading…</p>;
@@ -97,7 +104,7 @@ export function AgentInspector({
           <div className={`status-pill ${agent.alive ? '' : 'is-dead'}`}>{status}</div>
           {agent.sickness && <div className="status-pill is-ill">Ill</div>}
         </div>
-        {agent.alive && (
+        {agent.alive && !replaying && (
           <button
             className={`btn btn-small ${following ? 'btn-primary' : ''}`}
             onClick={() => setFollow(following ? null : agentId)}
@@ -279,7 +286,10 @@ export function AgentInspector({
         <p className="muted small">
           {agent.decisions} decisions · {formatUsd(agent.spentUsd)} spent on AI
         </p>
-        {agent.alive && (
+        {replaying && (
+          <p className="muted small">As they were on {formatClock(atTick)} (replay).</p>
+        )}
+        {agent.alive && !replaying && (
           <BrainEditor
             key={JSON.stringify(agent.brain)}
             value={agent.brain}

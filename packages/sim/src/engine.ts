@@ -33,6 +33,7 @@ import {
   type WorldEventSpec,
 } from './conditions.ts';
 import { applyReflection, memoryTick, reinforceRecalled } from './memory.ts';
+import { calendarTick, seasonEffects } from './seasons.ts';
 import { NUTRITION, isFood } from './items.ts';
 import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
 import { findPathToAny } from './pathfinding.ts';
@@ -68,8 +69,9 @@ import {
   moveCost,
   nearestWalkable,
   objectsNear,
+  treesNear,
 } from './spatial.ts';
-import { withRng, type WorldState } from './world.ts';
+import { findAgent, withRng, type WorldState } from './world.ts';
 
 /** Everything the simulation consumes besides its own state. Logged per tick for exact replay. */
 export type TickInput =
@@ -170,6 +172,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
     }
     if (state.tick % TICKS_PER_DAY === 0) driftMarket(state.market);
     const ageStep = 1 / (TICKS_PER_DAY * state.settings.daysPerYear);
+    calendarTick(ctx, ageStep);
     for (let i = 0; i < state.agents.length; i++) {
       const agent = state.agents[i]!;
       if (!agent.alive) continue;
@@ -215,7 +218,7 @@ export function emit(
 ) {
   ctx.events.push({ tick: ctx.state.tick, kind, actors, text, importance });
   if (SUCCESS_EVENTS.has(kind) && actors[0]) {
-    const a = ctx.state.agents.find((x) => x.id === actors[0]);
+    const a = findAgent(ctx.state, actors[0]);
     if (a) a.failStreak = 0;
   }
 }
@@ -231,7 +234,7 @@ function applyInput(ctx: Ctx, input: TickInput): void {
   const { state } = ctx;
   switch (input.kind) {
     case 'decision': {
-      const agent = state.agents.find((a) => a.id === input.agentId);
+      const agent = findAgent(state, input.agentId);
       if (!agent?.alive) return;
       const trigger = agent.awaiting;
       agent.decisions += 1;
@@ -275,7 +278,7 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       return;
     }
     case 'decision_timeout': {
-      const agent = state.agents.find((a) => a.id === input.agentId);
+      const agent = findAgent(state, input.agentId);
       if (!agent?.alive) return;
       agent.awaiting = null;
       agent.nextCheckIn = state.tick + 30;
@@ -293,7 +296,7 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       return;
     }
     case 'set_brain': {
-      const agent = state.agents.find((a) => a.id === input.agentId);
+      const agent = findAgent(state, input.agentId);
       if (agent) agent.brain = { ...input.brain };
       return;
     }
@@ -315,15 +318,17 @@ function applyInput(ctx: Ctx, input: TickInput): void {
 function regrowResources(ctx: Ctx): void {
   const { state } = ctx;
   const ids = Object.keys(state.resources).sort();
-  // Droughts stunt growth; a bumper season doubles it.
+  // The season sets the pace; droughts stunt growth; a bumper season doubles it.
+  const season = seasonEffects(state);
   const growth =
+    season.growth *
     (1 - 0.9 * conditionLevel(state, 'drought')) *
     (conditionLevel(state, 'bumper_harvest') > 0 ? 2 : 1);
   for (const id of ids) {
     const r = state.resources[id]!;
     if (r.amount >= r.max) continue;
     const before = Math.floor(r.amount);
-    const rate = r.item === 'wood' ? 1 : growth;
+    const rate = r.item === 'wood' ? season.woodGrowth : growth;
     r.amount = Math.min(r.max, r.amount + (r.regenPerDay * rate) / 24);
     if (Math.floor(r.amount) !== before) ctx.changed.add(id);
     // Trees are tracked only while recovering from chopping, to keep the state small.
@@ -348,7 +353,8 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   const infant = agent.age < 1;
   const pregnant = agent.pregnancy ? 1.25 : 1;
   const storm = indoors ? 0 : conditionLevel(state, 'storm');
-  const heat = indoors || night ? 0 : 0.3 * conditionLevel(state, 'drought');
+  const season = seasonEffects(state);
+  const heat = indoors || night ? 0 : 0.3 * conditionLevel(state, 'drought') + season.heat;
   n.food = clamp(
     n.food - ((infant ? 3 : asleep ? RATES.foodAsleep : RATES.foodAwake) * pregnant) / H,
   );
@@ -363,14 +369,17 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     const tiring = (agent.age < 3 ? 1.6 : agent.age >= 70 ? 1.25 : 1) * (1 + 0.3 * storm);
     n.energy = clamp(n.energy - (RATES.energyAwake * tiring) / H);
   }
-  if (indoors || (!night && !isTwilight(state.tick)))
-    n.warmth = clamp(n.warmth + RATES.warmIndoors / H);
+  if (indoors) n.warmth = clamp(n.warmth + RATES.warmIndoors / H);
+  else if (!night && !isTwilight(state.tick))
+    n.warmth = clamp(n.warmth + (RATES.warmIndoors * season.dayWarmth) / H);
   else if (night)
-    n.warmth = clamp(n.warmth - (asleep ? RATES.coldNightAsleep : RATES.coldNightAwake) / H);
-  else n.warmth = clamp(n.warmth - RATES.coolTwilight / H);
+    n.warmth = clamp(
+      n.warmth - ((asleep ? RATES.coldNightAsleep : RATES.coldNightAwake) * season.nightCold) / H,
+    );
+  else n.warmth = clamp(n.warmth - (RATES.coolTwilight * season.nightCold) / H);
   // Wind and cold rain chill anyone caught outside.
   if (storm > 0) {
-    const noSun = !night && !isTwilight(state.tick) ? RATES.warmIndoors : 0;
+    const noSun = !night && !isTwilight(state.tick) ? RATES.warmIndoors * season.dayWarmth : 0;
     n.warmth = clamp(n.warmth - (noSun + 12 * storm) / H);
   }
 
@@ -756,7 +765,7 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       return;
     }
     case 'talk_to': {
-      const other = state.agents.find((a) => a.id === intent.agentId);
+      const other = findAgent(state, intent.agentId);
       if (!other || other === agent)
         return fail(ctx, agent, "I tried to talk to someone who isn't here.");
       if (!approach(ctx, agent, other, intent, TALK_RANGE, 'talk to')) return;
@@ -858,11 +867,15 @@ function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
       continue;
     const d = Math.max(Math.abs(other.x - speaker.x), Math.abs(other.y - speaker.y));
     if (d > OVERHEAR_RANGE) continue;
+    // Chatter between others stays in working memory; talk of family or of oneself is remembered.
+    const concerns =
+      Boolean(other.people[speaker.id]?.role || other.people[listener.id]?.role) ||
+      (other.name.length > 1 && message.includes(other.name));
     remember(
       other,
       state.tick,
       `I overheard ${nameAsKnown(other, speaker)} tell ${nameAsKnown(other, listener)}: “${message}”`,
-      2,
+      concerns ? 3 : 1,
       'conversation',
       [speaker.id, listener.id],
     );
@@ -1107,8 +1120,7 @@ function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived
   if (tree && tree.kind !== 'tree') tree = undefined;
   if (!tree) {
     let best: { o: (typeof map.objects)[number]; d: number } | null = null;
-    for (const o of map.objects) {
-      if (o.kind !== 'tree') continue;
+    for (const o of treesNear(map, agent, 25)) {
       const d = Math.abs(o.x - agent.x) + Math.abs(o.y - agent.y);
       if (d > 25 || woodLeft(o.id) < 1 || (best && d >= best.d)) continue;
       if (interactionTiles(map, o).length === 0) continue;
@@ -1315,7 +1327,7 @@ function personAction(
   if (intent.type === 'respond_offer') {
     const offer = state.offers.find((o) => o.id === intent.offerId && o.to === agent.id);
     if (!offer) return fail(ctx, agent, 'That offer is no longer open.');
-    const from = state.agents.find((a) => a.id === offer.from)!;
+    const from = findAgent(state, offer.from)!;
     const who = nameAsKnown(agent, from);
     const terms = `${describeBundle(offer.give)} for ${describeBundle(offer.ask)}`;
     const answer = (accepted: boolean) => {
@@ -1386,7 +1398,7 @@ function personAction(
     return;
   }
 
-  const other = state.agents.find((a) => a.id === intent.agentId);
+  const other = findAgent(state, intent.agentId);
   if (!other || other === agent) return fail(ctx, agent, "The person I meant isn't here.");
   const who = nameAsKnown(agent, other);
 
@@ -1761,9 +1773,7 @@ function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
       remember(agent, state.tick, `I rebuilt ${site.name} after the fire.`, 8);
       return;
     }
-    const partner = agent.partnerId
-      ? state.agents.find((a) => a.id === agent.partnerId)
-      : undefined;
+    const partner = agent.partnerId ? findAgent(state, agent.partnerId) : undefined;
     if (partner && !state.owners[site.id]!.includes(partner.id))
       state.owners[site.id]!.push(partner.id);
     emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5);

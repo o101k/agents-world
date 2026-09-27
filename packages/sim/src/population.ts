@@ -90,7 +90,15 @@ export function introduceResidents(state: WorldState): void {
 
 /** Starting cast: connect partners and parents named in the specs, with family roles. */
 export function linkFamilies(state: WorldState, cast: AgentSpec[]): void {
-  const byName = (name: string) => state.agents.find((a) => a.name === name && a.alive);
+  // First names can repeat across families: prefer the same household, then the same family.
+  const byName = (name: string, near?: Agent) => {
+    const all = state.agents.filter((a) => a.name === name && a.alive);
+    return (
+      (near && all.find((a) => a.homeId !== null && a.homeId === near.homeId)) ??
+      (near && all.find((a) => a.familyName === near.familyName)) ??
+      all[0]
+    );
+  };
   const role = (a: Agent, b: Agent, r: FamilyRole, affection: number) => {
     const p = a.people[b.id];
     if (p) {
@@ -100,10 +108,17 @@ export function linkFamilies(state: WorldState, cast: AgentSpec[]): void {
       p.familiarity = Math.max(p.familiarity, 90);
     }
   };
-  for (const spec of cast) {
-    const me = byName(spec.name);
+  for (const [i, spec] of cast.entries()) {
+    // A freshly created world has the cast in order; older saves are matched by name.
+    const same = state.agents[i];
+    const me =
+      same && same.name === spec.name && same.familyName === (spec.familyName ?? '')
+        ? same
+        : state.agents.find(
+            (a) => a.alive && a.name === spec.name && a.familyName === (spec.familyName ?? ''),
+          );
     if (!me) continue;
-    const partner = spec.partner ? byName(spec.partner) : undefined;
+    const partner = spec.partner ? byName(spec.partner, me) : undefined;
     if (partner && partner !== me) {
       me.partnerId = partner.id;
       partner.partnerId = me.id;
@@ -113,7 +128,7 @@ export function linkFamilies(state: WorldState, cast: AgentSpec[]): void {
       if (partner.people[me.id]) partner.people[me.id]!.romance = 60;
     }
     for (const parentName of spec.parents ?? []) {
-      const parent = byName(parentName);
+      const parent = byName(parentName, me);
       if (!parent) continue;
       if (parent.sex === 'female') me.motherId = parent.id;
       else me.fatherId = parent.id;

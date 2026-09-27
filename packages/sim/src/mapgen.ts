@@ -6,6 +6,10 @@ import { Rng, hashSeed } from './rng.ts';
 export interface MapGenOptions {
   width: number;
   height: number;
+  /** Number of fields. Defaults to 3 (5 on large maps); more for big populations. */
+  fields?: number;
+  /** Bigger fields (for big populations). */
+  bigFields?: boolean;
   /** Number of family houses. Defaults to scale with map size. */
   houses?: number;
 }
@@ -151,12 +155,12 @@ export function generateVillageMap(seed: string, options: MapGenOptions): WorldM
   }
 
   // --- Fields: farmland plots a little further out. ---
-  const fieldCount = w >= 80 ? 5 : 3;
+  const fieldCount = options.fields ?? (w >= 80 ? 5 : 3);
   const fieldTargets: Point[] = [];
   for (let f = 1; f <= fieldCount; f++) {
-    const fw = rng.int(5, 7);
-    const fh = rng.int(3, 5);
-    for (let attempt = 0; attempt < 600; attempt++) {
+    const fw = options.bigFields ? rng.int(8, 10) : rng.int(5, 7);
+    const fh = options.bigFields ? rng.int(5, 6) : rng.int(3, 5);
+    for (let attempt = 0; attempt < (options.bigFields ? 1500 : 600); attempt++) {
       const angle = rng.range(0, Math.PI * 2);
       const radius = 13 + attempt / 30 + rng.range(0, 4);
       const x = Math.round(cx + Math.cos(angle) * radius - fw / 2);

@@ -17,6 +17,7 @@ const SIZE_LABELS: Record<MapSize, string> = {
   small: `Small (${MAP_SIZES.small}×${MAP_SIZES.small})`,
   medium: `Medium (${MAP_SIZES.medium}×${MAP_SIZES.medium})`,
   large: `Large (${MAP_SIZES.large}×${MAP_SIZES.large})`,
+  huge: `Huge (${MAP_SIZES.huge}×${MAP_SIZES.huge}) — for 100+ people`,
 };
 
 export function WorldsScreen() {
@@ -245,7 +246,7 @@ function CreateWorldForm({
             <input
               value={adults}
               inputMode="numeric"
-              onChange={(e) => setAdults(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+              onChange={(e) => setAdults(Math.max(1, Math.min(150, Number(e.target.value) || 1)))}
             />
           </label>
           <label>
@@ -253,7 +254,7 @@ function CreateWorldForm({
             <input
               value={children}
               inputMode="numeric"
-              onChange={(e) => setChildren(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+              onChange={(e) => setChildren(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
             />
           </label>
           <label className="check">

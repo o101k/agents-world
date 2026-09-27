@@ -2,7 +2,10 @@ import { useWorld } from '../worldStore.ts';
 import { Portrait } from './Portrait.tsx';
 
 export function PeopleList({ onPick }: { onPick: (id: string) => void }) {
-  const agents = useWorld((s) => s.agents);
+  // In replay, the people as they were then.
+  const live = useWorld((s) => s.agents);
+  const past = useWorld((s) => s.replay?.view?.agents);
+  const agents = past ?? live;
   const selection = useWorld((s) => s.selection);
   const alive = agents.filter((a) => a.alive);
   const dead = agents.filter((a) => !a.alive);

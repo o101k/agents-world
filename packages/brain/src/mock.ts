@@ -176,6 +176,7 @@ export function mockDecide(p: Perception): Decision {
       goal ||= 'Eat something';
     } else if (
       known(['market']).length > 0 &&
+      !p.recent.some((r) => r.includes('market had no')) &&
       p.self.money >= knownBuyPrice(p, 'bread') &&
       (roll < 0.5 || foodSources().length === 0)
     ) {
@@ -253,8 +254,9 @@ export function mockDecide(p: Perception): Decision {
     };
   }
 
-  // Daytime: stock up on food first.
-  if (foodUnits < 4 && gatherPlan()) {
+  // Daytime: stock up on food first (more of it when winter is coming).
+  const lean = p.season === 'autumn' || p.season === 'winter';
+  if (foodUnits < (lean ? 8 : 4) && gatherPlan()) {
     return {
       thought: `My food stores are low. ${thoughts.join(' ')}`,
       goal: 'Stock up on food',
