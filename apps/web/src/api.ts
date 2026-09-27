@@ -17,6 +17,8 @@ import type {
   WorldResponse,
   WorldViewResponse,
   WorldsResponse,
+  StoryResponse,
+  WorldEventRequest,
 } from '@aw/shared';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -72,6 +74,10 @@ export const api = {
     request<WorldSettings>('PUT', `/api/worlds/${id}/aging`, { daysPerYear }),
   familyTree: (id: string, agentId: string) =>
     request<FamilyNode>('GET', `/api/worlds/${id}/family/${agentId}`),
+  worldEvent: (id: string, req: WorldEventRequest) =>
+    request<{ ok: true }>('POST', `/api/worlds/${id}/world-event`, req),
+  story: (id: string, agentId: string) =>
+    request<StoryResponse>('GET', `/api/worlds/${id}/agents/${agentId}/story`),
   providerModels: (provider: string) =>
     request<{ models: string[] }>('GET', `/api/providers/${provider}/models`),
 };

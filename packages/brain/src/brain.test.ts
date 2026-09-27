@@ -120,6 +120,8 @@ function perception(over: Partial<Perception> = {}): Perception {
     pregnant: false,
     language: 100,
     requests: [],
+    conditions: [],
+    sick: false,
     ...over,
   };
 }
@@ -437,5 +439,99 @@ describe('providers (fake HTTP)', () => {
     expect(body.tool_choice).toEqual({ type: 'function', function: { name: 'decide' } });
     expect(r.decision.plan).toEqual([{ type: 'sleep' }]);
     expect(r.usage?.estimated).toBe(true);
+  });
+});
+
+describe('a long life: reflection, sickness and world events', () => {
+  const reflecting = (scope: 'day' | 'year') =>
+    perception({
+      trigger: { kind: 'reflect', scope },
+      clock: { day: 3, hour: 22, minute: 0, isNight: true },
+      self: { ...perception().self, asleep: true },
+      reflectOn: [
+        '[Day 3 09:00] I ate bread.',
+        '[Day 3 11:00] Tobias Holt said to me: “The river is low.”',
+        '[Day 3 15:00] I sold 4 vegetables at the market for 12 coins (3 each).',
+      ],
+      lifeChapters: ['My 34th year: Lise was born.'],
+      beliefs: ['Hard work keeps us fed.'],
+    });
+
+  it('asks for a diary entry at night, from what the person remembers', () => {
+    const prompt = userPrompt(reflecting('day'));
+    expect(prompt).toContain('think back over your day');
+    expect(prompt).toContain('The river is low');
+    expect(prompt).toContain('My 34th year: Lise was born.');
+    expect(prompt).toContain('Hard work keeps us fed.');
+    expect(userPrompt(reflecting('year'))).toContain('past year of your life');
+  });
+
+  it('parses a reflection: diary and beliefs, and never a plan', () => {
+    const d = parseDecision(
+      {
+        thought: 'Sleepy.',
+        goal: 'Fish tomorrow',
+        plan: [{ action: 'explore' }],
+        diary: 'A good day at the market.',
+        beliefs: ['Tobias worries too much.', '', 42],
+      },
+      reflecting('day'),
+    );
+    expect(d.plan).toEqual([]);
+    expect(d.diary).toBe('A good day at the market.');
+    expect(d.beliefs).toEqual(['Tobias worries too much.']);
+  });
+
+  it('frugal people write their nightly diary by instinct, but their yearly chapter with AI', () => {
+    const frugal = (scope: 'day' | 'year') => ({ ...reflecting(scope), effort: 'frugal' as const });
+    expect(instinctApplies(frugal('day'))).toBe(true);
+    expect(instinctApplies(frugal('year'))).toBe(false);
+    expect(instinctApplies({ ...reflecting('day'), effort: 'standard' })).toBe(false);
+    const d = mockDecide(frugal('day'));
+    expect(d.plan).toEqual([]);
+    expect(d.diary).toContain('The river is low');
+    expect(d.diary).not.toContain('I ate bread');
+  });
+
+  it('mock brain: rests when ill, shelters from storms, and nurses the sick', () => {
+    const ill = mockDecide(perception({ sick: true, trigger: { kind: 'unwell' } }));
+    expect(ill.plan.map((i) => i.type)).toEqual(['go_to', 'rest']);
+    const storm = mockDecide(
+      perception({
+        conditions: ['A storm is raging: wind and cold rain. Staying outside will chill you.'],
+      }),
+    );
+    expect(storm.goal).toBe('Shelter from the storm');
+    let tended = false;
+    for (let tick = 600; tick < 640 && !tended; tick++) {
+      const d = mockDecide(
+        perception({
+          tick,
+          self: { ...perception().self, occupation: 'herbalist' },
+          visibleAgents: [
+            {
+              id: 'a2',
+              name: 'Tobias Holt',
+              x: 6,
+              y: 5,
+              distance: 1,
+              activity: 'resting (looks ill)',
+            },
+          ],
+        }),
+      );
+      tended = d.plan.some((i) => i.type === 'tend' && i.agentId === 'a2');
+    }
+    expect(tended).toBe(true);
+  });
+
+  it('mock brain drinks at the well when the river has dried up', () => {
+    const d = mockDecide(
+      perception({
+        self: { ...perception().self, needs: { food: 80, water: 20, energy: 80, warmth: 100 } },
+        conditions: ['The river has dried to cracked mud — only the well has water.'],
+      }),
+    );
+    expect(d.plan[0]).toEqual({ type: 'drink', sourceId: 'well-1' });
   });
 });

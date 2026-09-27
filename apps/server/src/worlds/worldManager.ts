@@ -7,6 +7,7 @@ import {
   DEFAULT_CAP_USD,
   DEFAULT_SPEED,
   WORLD_ID_PATTERN,
+  WorldEventRequest as WorldEventRequestSchema,
   encodeMap,
   type AgentDetail,
   type BrainConfig,
@@ -14,6 +15,8 @@ import {
   type LlmCallView,
   type MarketResponse,
   type SpawnRequest,
+  type StoryEntry,
+  type WorldEventRequest,
   type WorldMeta,
   type WorldViewResponse,
 } from '@aw/shared';
@@ -211,6 +214,7 @@ export class WorldManager {
       agents: state.agents.map(agentView),
       resources: runner.resourceAmounts(),
       owners: ownerNames(state),
+      conditions: state.conditions.map((c) => ({ ...c })),
     };
   }
 
@@ -232,6 +236,34 @@ export class WorldManager {
 
   events(worldId: string, query: Parameters<WorldFile['queryEvents']>[0]) {
     return this.file(worldId).queryEvents(query);
+  }
+
+  /**
+   * A person's life story: the important things that happened to them (from the world's history)
+   * interleaved with their own diary and life chapters, oldest first.
+   */
+  story(worldId: string, agentId: string): StoryEntry[] {
+    const state = this.requireActive(worldId).state;
+    if (!state.agents.some((a) => a.id === agentId))
+      throw new NotFoundError(`No such person ${agentId}`);
+    const events = this.file(worldId).queryEvents({
+      limit: 1500,
+      agentId,
+      minImportance: 3,
+      story: true,
+    });
+    return events.reverse().map((e) => ({
+      tick: e.tick,
+      text: e.text,
+      kind: e.kind,
+      source: e.kind === 'reflected' ? ('memory' as const) : ('event' as const),
+    }));
+  }
+
+  /** Observer power: start a drought, storm, disease, fire or bumper harvest. */
+  async worldEvent(worldId: string, req: WorldEventRequest): Promise<void> {
+    const parsed = WorldEventRequestSchema.parse(req);
+    await this.requireActive(worldId).submit({ kind: 'world_event', event: parsed });
   }
 
   control(worldId: string, req: { running?: boolean; speed?: number }): void {

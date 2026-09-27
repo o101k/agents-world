@@ -1,6 +1,13 @@
 import { performance } from 'node:perf_hooks';
 import { instinctApplies, type BrainRouter } from '@aw/brain';
-import type { AgentView, DecisionRequest, RunnerStatus, WorldEvent, WorldMeta } from '@aw/shared';
+import type {
+  ActiveCondition,
+  AgentView,
+  DecisionRequest,
+  RunnerStatus,
+  WorldEvent,
+  WorldMeta,
+} from '@aw/shared';
 import { TICKS_PER_HOUR } from '@aw/shared';
 import { agentView, pendingRequests, step, type TickInput, type WorldState } from '@aw/sim';
 import type { CallRecord, WorldFile } from './worldFile.ts';
@@ -18,6 +25,7 @@ export interface RunnerHooks {
     agents: AgentView[];
     resources: Record<string, number>;
     mapVersion: number;
+    conditions: ActiveCondition[];
   }) => void;
   onEvents?: (events: WorldEvent[]) => void;
   onStatus?: (meta: WorldMeta) => void;
@@ -390,6 +398,7 @@ export class WorldRunner {
       runner: this.status(),
       agents: this.agentViews(),
       resources,
+      conditions: this.state.conditions.map((c) => ({ ...c })),
     });
   }
 }

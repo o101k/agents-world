@@ -252,16 +252,34 @@ export class WorldFile {
     beforeId?: number;
     agentId?: string;
     minImportance: number;
+    /** Words to search for in the event text (case-insensitive). */
+    q?: string;
+    /** Life story: this person's important events and their own diary. */
+    story?: boolean;
   }): WorldEvent[] {
     const where = ["json_extract(payload, '$.importance') >= @minImportance"];
     if (opts.beforeId !== undefined) where.push('id < @beforeId');
     if (opts.agentId)
       where.push('EXISTS (SELECT 1 FROM json_each(events.actors) WHERE value = @agentId)');
+    if (opts.story)
+      where[0] = `(${where[0]} OR (kind = 'reflected' AND json_extract(actors, '$[0]') = @agentId))`;
+    const words = (opts.q ?? '').split(/\s+/).filter(Boolean).slice(0, 6);
+    const params: Record<string, unknown> = {};
+    words.forEach((w, i) => {
+      where.push(`json_extract(payload, '$.text') LIKE @q${i} ESCAPE '\\'`);
+      params[`q${i}`] = `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    });
     const rows = this.db
       .prepare(
         `SELECT id, tick, kind, actors, payload FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT @limit`,
       )
-      .all({ ...opts, beforeId: opts.beforeId ?? null, agentId: opts.agentId ?? null }) as {
+      .all({
+        limit: opts.limit,
+        minImportance: opts.minImportance,
+        beforeId: opts.beforeId ?? null,
+        agentId: opts.agentId ?? null,
+        ...params,
+      }) as {
       id: number;
       tick: number;
       kind: string;

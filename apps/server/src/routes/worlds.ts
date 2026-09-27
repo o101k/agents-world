@@ -6,6 +6,8 @@ import {
   ControlRequest,
   EventsQuery,
   SpawnRequest,
+  WorldEventRequest,
+  type StoryResponse,
   type CallsResponse,
   type AgentResponse,
   type EventsResponse,
@@ -124,6 +126,18 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
 
   app.post<IdParams>('/api/worlds/:id/spawn', async (req) =>
     worlds.spawn(req.params.id, SpawnRequest.parse(req.body)),
+  );
+
+  app.post<IdParams>('/api/worlds/:id/world-event', async (req) => {
+    await worlds.worldEvent(req.params.id, WorldEventRequest.parse(req.body ?? {}));
+    return { ok: true };
+  });
+
+  app.get<AgentParams>(
+    '/api/worlds/:id/agents/:agentId/story',
+    async (req): Promise<StoryResponse> => ({
+      entries: worlds.story(req.params.id, req.params.agentId),
+    }),
   );
 
   app.delete<IdParams>('/api/worlds/:id', async (req, reply) => {

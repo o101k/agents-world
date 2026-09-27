@@ -4,10 +4,13 @@ A browser-based 2D life simulation. Every villager will be an independent AI age
 "brain" (an LLM of your choice). You set up the world, then watch: they're born, grow up, work,
 trade, fall in love, have children and die. You can observe everything, but you can't control anyone.
 
-**Status: Phase 4 (life cycle).** Villagers are born, grow up, learn to talk, work, trade, fall in
+**Status: Phase 5 (a long life).** Villagers are born, grow up, learn to talk, work, trade, fall in
 love, have children, build houses, grow old and die; children inherit looks, temperament and
 aptitudes from their parents, and estates pass to heirs. They farm, fish, forage, chop wood, bake,
-make tools, trade at the market, and can also steal and fight.
+make tools, trade at the market, and can also steal and fight. Over a long life they keep a diary,
+write a chapter of their life story every year, form beliefs and forget what didn't matter. You can
+send droughts, storms, sickness, fires and bumper harvests, search the whole history, and read
+anyone's life story.
 Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
 such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
@@ -46,7 +49,14 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
   their thoughts, plan, needs, belongings, recent experiences, personality and skills. **Follow**
   keeps the camera on them.
 - **Timeline** (bottom): everything that happens, newest first. Filter to important events or to
-  the selected person; click an entry to jump to that person.
+  the selected person, or **search** the whole history (e.g. `fire`, `Maren`, `born`); click an
+  entry to jump to that person.
+- **⚡ Events** (top bar): start a **storm** (chills anyone outside; people shelter at home), a
+  **drought** (crops stop growing; when severe the river dries up and only the well has water), a
+  **sickness** (spreads between people who stay close; rest and nursing help), a **fire** (a building
+  burns down and must be rebuilt) or a **bumper harvest**. Choose how severe and how long. Active
+  events show under the top bar. You change the world, not the people: they notice what they can
+  see and decide for themselves.
 - Stopping the helper (Ctrl+C) or even a crash loses nothing: the world resumes at the exact
   in-game minute it had reached.
 
@@ -87,6 +97,16 @@ other and make trade offers; they only know market prices they've seen themselve
 pregnancy, will, inborn aptitudes and a **Family tree** (grandparents to grandchildren). Babies stay
 at home and must be fed; children learn from what they're taught and what they watch. The **World**
 tab has the **aging speed** slider (in-game days per year of age).
+
+**Memory over a long life**: each night people look back on their day and write a short diary
+entry, and on each birthday a chapter of their life story (which replaces that year's diary). They
+also note beliefs they've come to. Memories fade night by night unless they mattered (births,
+deaths, partners and other core memories last for life), and memories from the first three years
+mostly fade. In the inspector's **Memory** section you'll find their life chapters, beliefs,
+memories (fainter = fading), diary, and what they have **forgotten** (greyed out — they no longer
+know it). **Life story** puts what happened to them (from the village's history) next to what they
+wrote about it. Frugal villagers write their nightly diary for free by instinct and use their AI
+only for the yearly chapter; Standard/Deep villagers use their AI for both.
 
 **+ Spawn** brings a new person into the world from your description (the world's default AI fleshes
 them out). They arrive on the road knowing no one.

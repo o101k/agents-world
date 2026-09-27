@@ -12,6 +12,7 @@ import {
   type WorldSettings,
   stageOf,
 } from '@aw/shared';
+import type { Condition } from './conditions.ts';
 import { initialMarket, type MarketState } from './market.ts';
 import type { Agent } from './agent.ts';
 import { SAMPLE_CAST, type AgentSpec } from './cast.ts';
@@ -21,7 +22,7 @@ import { addAgent, introduceResidents, linkFamilies } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 5;
+export const WORLD_STATE_VERSION = 6;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -68,6 +69,9 @@ export interface WorldState {
   requests: { kind: 'proposal' | 'child_request'; from: string; to: string; tick: number }[];
   /** Bumped whenever the map changes (e.g. a new house), so viewers reload it. */
   mapVersion: number;
+  /** World events in progress (drought, storm, disease, fires, plenty). */
+  conditions: Condition[];
+  nextConditionNum: number;
 }
 
 /** JSON-safe form of WorldState, used for snapshots. */
@@ -131,6 +135,8 @@ export function createWorldState({
     owners: {},
     requests: [],
     mapVersion: 0,
+    conditions: [],
+    nextConditionNum: 1,
   };
   withRng(state, (r) => {
     state.resources = initialResources(map, r);
@@ -176,19 +182,32 @@ export function serializeWorldState(state: WorldState): SerializedWorldState {
 
 export function deserializeWorldState(data: SerializedWorldState | LegacyV1State): WorldState {
   if (data.version === 1) return upgradeV1(data as LegacyV1State);
-  if (data.version === 2) {
-    return upgradeV4(
-      upgradeV3(upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) })),
-    );
-  }
-  if (data.version === 4)
-    return upgradeV4({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
-  if (data.version === 3)
-    return upgradeV3({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
-  if (data.version !== WORLD_STATE_VERSION) {
+  if (data.version < 1 || data.version > WORLD_STATE_VERSION) {
     throw new Error(`Unsupported world state version ${data.version}`);
   }
-  return { ...(data as SerializedWorldState), map: decodeMap(data.map) };
+  let state: WorldState = { ...(data as SerializedWorldState), map: decodeMap(data.map) };
+  const from = data.version;
+  if (from <= 2) state = upgradeV2(state);
+  if (from <= 3) state = upgradeV3(state);
+  if (from <= 4) state = upgradeV4(state);
+  if (from <= 5) state = upgradeV6(state);
+  return state;
+}
+
+/** Phase 4 → 5 (state v6): memory strength, forgetting, reflection, sickness and world events. */
+function upgradeV6(state: WorldState): WorldState {
+  state.version = WORLD_STATE_VERSION;
+  state.conditions ??= [];
+  state.nextConditionNum ??= 1;
+  for (const a of state.agents as Partial<AgentT>[]) {
+    a.forgotten ??= [];
+    a.lastReflectDay ??= -1;
+    a.lastChapterAge ??= Math.floor(a.age ?? 0);
+    a.sickness ??= null;
+    a.immuneUntil ??= 0;
+    for (const m of a.memories ?? []) m.strength ??= m.importance;
+  }
+  return state;
 }
 
 /** Phase 3 → 4: families, relationships, aptitude and life-cycle fields. */
@@ -288,6 +307,8 @@ function upgradeV1(old: LegacyV1State): WorldState {
     owners: {},
     requests: [],
     mapVersion: 0,
+    conditions: [],
+    nextConditionNum: 1,
   };
   withRng(state, (r) => {
     state.resources = initialResources(state.map, r);

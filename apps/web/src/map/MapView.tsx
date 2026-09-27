@@ -29,6 +29,7 @@ export function MapView({ map, rendererRef }: Props) {
       renderer.setAgents(s.agents);
       renderer.setClock(s.tick);
       renderer.setFollow(s.followId);
+      renderer.setConditions(s.conditions);
     });
     const unsub = useWorld.subscribe((s, prev) => {
       if (s.resourceChanges !== prev.resourceChanges) renderer.setResources(s.resourceChanges);
@@ -36,6 +37,7 @@ export function MapView({ map, rendererRef }: Props) {
       if (s.tick !== prev.tick) renderer.setClock(s.tick);
       if (s.followId !== prev.followId) renderer.setFollow(s.followId);
       if (s.selection !== prev.selection) renderer.select(s.selection);
+      if (s.conditions !== prev.conditions) renderer.setConditions(s.conditions);
     });
     return () => {
       cancelled = true;

@@ -125,3 +125,42 @@ test('write your own cast and see the family tree', async ({ page }) => {
   await expect(page.locator('.family-tree')).toContainText('Lotta Berg');
   await expect(page.locator('.tree-person.is-root')).toContainText('Anna Berg');
 });
+
+test('world events, timeline search and a life story', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.world-screen, .worlds-screen')).toBeVisible();
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+  await page.getByLabel('Name').first().fill('Stormy Village');
+  await page.getByRole('button', { name: 'Create world' }).click();
+  await expect(page.locator('.topbar-title')).toHaveText('Stormy Village');
+
+  // Start a storm: it shows in the conditions bar and the timeline.
+  await page.getByRole('button', { name: '⚡ Events' }).click();
+  await page.getByRole('radio', { name: /Storm/ }).click();
+  await page.getByRole('button', { name: 'Start storm' }).click();
+  await expect(page.locator('.conditions-bar')).toContainText('Storm');
+  await expect(page.locator('.event-log')).toContainText('storm is sweeping');
+
+  // Set a house on fire.
+  await page.getByRole('button', { name: '⚡ Events' }).click();
+  await page.getByRole('radio', { name: /Fire/ }).click();
+  await page.getByLabel('Building').selectOption({ index: 1 });
+  await page.getByRole('button', { name: 'Start fire' }).click();
+  await expect(page.locator('.conditions-bar')).toContainText('is burning');
+
+  // Search the history.
+  await page.getByLabel('Search the timeline').fill('fire');
+  await expect(page.locator('.event-list .event').first()).toContainText('on fire');
+  await page.getByLabel('Search the timeline').fill('zzqqxx');
+  await expect(page.locator('.event-list')).toContainText('Nothing in the history matches');
+  await page.getByLabel('Search the timeline').fill('');
+
+  // A person's memory and life story.
+  await page.getByRole('tab', { name: 'People' }).click();
+  await page.locator('.person-row', { hasText: 'Maren Holt' }).click();
+  await expect(page.locator('.inspector')).toContainText('Memory');
+  await page.getByRole('tab', { name: /Forgotten/ }).click();
+  await page.getByRole('button', { name: 'Life story' }).click();
+  await expect(page.locator('.modal.story')).toContainText('The life of Maren Holt');
+});

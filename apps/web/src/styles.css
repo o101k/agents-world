@@ -938,3 +938,137 @@ input[type='range'] {
   color: var(--muted);
   border-style: dashed;
 }
+
+/* ---------- a long life: world events, sickness, memory */
+.event-search {
+  margin: 0 0 0 auto;
+  width: 200px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.conditions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.condition {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.condition-storm {
+  border-color: #5b7fa8;
+}
+.condition-drought {
+  border-color: #c9a040;
+}
+.condition-disease {
+  border-color: #7fae5a;
+}
+.condition-fire {
+  border-color: #e0703a;
+  color: #ffd0b0;
+}
+.condition-bumper_harvest {
+  border-color: #b8c850;
+}
+.event-kinds {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin: 8px 0;
+}
+.event-kind {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.event-kind.is-on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.event-kind-icon {
+  font-size: 20px;
+}
+.modal input[type='range'] {
+  width: 100%;
+}
+.status-pill.is-ill {
+  margin-left: 6px;
+  background: rgba(127, 174, 90, 0.18);
+  color: #c8e6a0;
+}
+.memory h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chapters,
+.beliefs {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.chapters li {
+  margin-bottom: 4px;
+  font-style: italic;
+}
+.memory .segmented {
+  margin: 8px 0 4px;
+}
+.memories li.is-forgotten {
+  color: var(--muted);
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-color: rgba(139, 155, 171, 0.5);
+}
+.modal.story {
+  max-width: 640px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal.story > * {
+  flex-shrink: 0;
+}
+.modal.story > .story-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.story-day h4 {
+  margin: 12px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.story-day ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+.story-day li {
+  padding: 2px 0;
+}
+.story-mine {
+  color: #c9d8ff;
+  font-style: italic;
+}

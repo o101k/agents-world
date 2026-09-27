@@ -16,7 +16,8 @@ import type {
   SkillName,
 } from '@aw/shared';
 
-export type MemoryKind = 'experience' | 'conversation' | 'thought' | 'told';
+export type { MemoryKind } from '@aw/shared';
+import type { MemoryKind } from '@aw/shared';
 
 /** One long-term memory. Importance 1 (trivial) – 10 (life-changing). */
 export interface Memory {
@@ -26,6 +27,18 @@ export interface Memory {
   kind: MemoryKind;
   /** People involved (agent ids), used for recall. */
   people: string[];
+  /** How vivid it is (starts at importance; fades nightly unless important; forgotten below 1). */
+  strength: number;
+  /** Formed in the first three years of life (these mostly fade: childhood amnesia). */
+  early?: boolean;
+}
+
+/** What remains of a forgotten memory (for the observer only; the person no longer has it). */
+export interface ForgottenMemory {
+  tick: number;
+  text: string;
+  importance: number;
+  kind: MemoryKind;
 }
 
 export interface PersonKnowledge {
@@ -46,6 +59,8 @@ export interface PersonKnowledge {
 export interface KnownPlaceState {
   lastSeenTick: number;
   lastSeenAmount?: number;
+  /** Last time the agent tried and failed to find a way there. */
+  unreachableTick?: number;
 }
 
 /** What the body is doing right now. Multi-tick; plans are made of these. */
@@ -138,6 +153,17 @@ export interface Agent {
   lastStage: LifeStage;
   /** Last tick this person tried for a child (once per in-game day). */
   lastChildTry: number;
+
+  // ---- A long life (Phase 5)
+  /** Forgotten memories, kept (capped) only so the observer can see what faded. */
+  forgotten: ForgottenMemory[];
+  /** In-game day of the last nightly reflection. */
+  lastReflectDay: number;
+  /** Age (whole years) of the last yearly life chapter. */
+  lastChapterAge: number;
+  sickness: { severity: number; since: number; known: boolean; tended: number } | null;
+  /** Can't catch the same sickness again until this tick. */
+  immuneUntil: number;
   /** Market prices as last seen in person. */
   priceKnowledge: {
     tick: number;
@@ -145,13 +171,16 @@ export interface Agent {
   } | null;
 }
 
-export const MEMORY_LIMIT = 300;
+/** Hard cap on active long-term memories per person (the faintest are forgotten first). */
+export const MEMORY_LIMIT = 500;
+/** How many forgotten memories are kept for the observer. */
+export const FORGOTTEN_LIMIT = 100;
 
 export const RECENT_LIMIT = 12;
 
 /**
  * Record an experience. Everything goes into working memory; anything above trivial also goes
- * into the long-term stream, which is capped by dropping the weakest (least important, oldest).
+ * into the long-term stream, which is capped by forgetting the faintest (see `forgetMemory`).
  */
 export function remember(
   agent: Agent,
@@ -165,26 +194,34 @@ export function remember(
   if (agent.recent.length > RECENT_LIMIT)
     agent.recent.splice(0, agent.recent.length - RECENT_LIMIT);
   if (importance < 2) return;
-  agent.memories.push({
-    tick,
-    text,
-    importance: Math.max(1, Math.min(10, Math.round(importance))),
-    kind,
-    people,
-  });
+  const imp = Math.max(1, Math.min(10, Math.round(importance)));
+  const memory: Memory = { tick, text, importance: imp, kind, people, strength: imp };
+  if (agent.age < 3) memory.early = true;
+  agent.memories.push(memory);
   if (agent.memories.length > MEMORY_LIMIT) {
     let weakest = 0;
     let weakestScore = Infinity;
     for (let i = 0; i < agent.memories.length; i++) {
       const m = agent.memories[i]!;
-      const score = m.importance * 1e6 + m.tick; // importance dominates; the older one loses ties
+      if (m.kind === 'chapter') continue;
+      // the faintest goes first; the older one loses ties
+      const score = m.strength * 1e3 + m.importance + m.tick / 1e9;
       if (score < weakestScore) {
         weakestScore = score;
         weakest = i;
       }
     }
-    agent.memories.splice(weakest, 1);
+    forgetMemory(agent, weakest);
   }
+}
+
+/** Drop a memory from the person's mind (a trace is kept for the observer). */
+export function forgetMemory(agent: Agent, index: number): void {
+  const [m] = agent.memories.splice(index, 1);
+  if (!m) return;
+  agent.forgotten.push({ tick: m.tick, text: m.text, importance: m.importance, kind: m.kind });
+  if (agent.forgotten.length > FORGOTTEN_LIMIT)
+    agent.forgotten.splice(0, agent.forgotten.length - FORGOTTEN_LIMIT);
 }
 
 export function fullName(agent: Agent): string {

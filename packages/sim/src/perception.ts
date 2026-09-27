@@ -6,8 +6,10 @@ import {
   type KnownPlace,
   type Perception,
 } from '@aw/shared';
+import { conditionLevel, sensedConditions } from './conditions.ts';
 import { ABILITIES } from './life.ts';
 import type { Agent, Memory } from './agent.ts';
+import { lifeStory, reflectionMaterial } from './memory.ts';
 import { distanceToObject, mapCache, objectsNear } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
@@ -15,6 +17,11 @@ const MAX_PLACES = 40;
 const HEARING_RADIUS = 8;
 
 function activityOf(a: Agent): string {
+  const ill = a.sickness?.known ? ' (looks ill)' : '';
+  return doingOf(a) + ill;
+}
+
+function doingOf(a: Agent): string {
   if (a.asleep) return 'sleeping';
   switch (a.action?.type) {
     case 'walk':
@@ -103,10 +110,11 @@ export function recall(
   );
   const presentSet = new Set(present);
   const scored = agent.memories
-    .filter((m) => !recentTicks.has(m.tick))
+    .filter((m) => !recentTicks.has(m.tick) && m.kind !== 'chapter' && m.kind !== 'belief')
     .map((m) => {
       const hoursAgo = (state.tick - m.tick) / 60;
-      let score = m.importance / 10 + Math.pow(0.99, hoursAgo);
+      // Vivid (strong) memories come to mind more easily than faded ones.
+      let score = (m.strength ?? m.importance) / 10 + Math.pow(0.99, hoursAgo);
       if (m.people.some((p) => presentSet.has(p))) score += 1;
       if (
         goalWords.size &&
@@ -120,6 +128,38 @@ export function recall(
     });
   scored.sort((a, b) => b.score - a.score || b.m.tick - a.m.tick);
   return scored.slice(0, limit).map((s) => s.m);
+}
+
+/** People the agent is aware of right now (for recall): those in sight and whoever spoke to them. */
+function presentFor(state: WorldState, agent: Agent): string[] {
+  const radius = senseRadius(state, agent);
+  const present =
+    agent.alive && !agent.asleep
+      ? state.agents
+          .filter(
+            (o) =>
+              o !== agent &&
+              o.alive &&
+              !o.indoorsId &&
+              Math.max(Math.abs(o.x - agent.x), Math.abs(o.y - agent.y)) <= radius,
+          )
+          .map((o) => o.id)
+      : [];
+  if (agent.awaiting?.kind === 'spoken_to') present.push(agent.awaiting.fromId);
+  return present;
+}
+
+/** The memories that come to mind for this agent's next decision. */
+export function recallFor(state: WorldState, agent: Agent): Memory[] {
+  return recall(state, agent, presentFor(state, agent), RECALL[agent.brain.effort] ?? 8);
+}
+
+/** How far someone can see and hear people: less at night, in a storm, and none from indoors. */
+function senseRadius(state: WorldState, agent: Agent): number {
+  if (agent.indoorsId) return 0;
+  const { hour } = tickToClock(state.tick);
+  const dark = hour < 6 || hour >= 21 || conditionLevel(state, 'storm') >= 0.5;
+  return dark ? 4 : HEARING_RADIUS;
 }
 
 function stamp(tick: number): string {
@@ -170,6 +210,10 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       distance: distanceToObject(o, agent),
       lastSeenAmount: k.lastSeenAmount,
       lastSeenTick: k.lastSeenTick,
+      ...(o.burntTick !== undefined && k.lastSeenTick >= o.burntTick ? { burnt: true } : {}),
+      ...(k.unreachableTick !== undefined && state.tick - k.unreachableTick < 2 * 1440
+        ? { unreachable: true }
+        : {}),
       ...(state.resources[id]?.item ? { produce: state.resources[id]!.item } : {}),
       ...(ownerLabel(state, agent, id) ? { owner: ownerLabel(state, agent, id)! } : {}),
     });
@@ -177,7 +221,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
   knownPlaces.sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
 
   const senses = agent.alive && !agent.asleep;
-  const radius = agent.indoorsId ? 0 : isNight ? 4 : HEARING_RADIUS;
+  const radius = senseRadius(state, agent);
   const visibleAgents = senses
     ? state.agents
         .filter((o) => o !== agent && o.alive && !o.indoorsId)
@@ -194,11 +238,8 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         }))
     : [];
   const trigger = agent.awaiting ?? { kind: 'check_in' as const };
-  const present = visibleAgents.map((v) => v.id);
-  if (trigger.kind === 'spoken_to') present.push(trigger.fromId);
-  const memories = recall(state, agent, present, RECALL[agent.brain.effort] ?? 8).map(
-    (m) => `${stamp(m.tick)} ${m.text}`,
-  );
+  const memories = recallFor(state, agent).map((m) => `${stamp(m.tick)} ${m.text}`);
+  const story = lifeStory(agent);
   const knownPeople = Object.entries(agent.people)
     .filter(([id, p]) => p.name && state.agents.find((a) => a.id === id)?.alive)
     .map(([id, p]) => ({
@@ -295,6 +336,13 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     pregnant: Boolean(agent.pregnancy?.known),
     language: Math.round(agent.skills.language ?? 100),
     requests,
+    conditions: sensedConditions(state, agent),
+    sick: Boolean(agent.sickness?.known),
+    ...(trigger.kind === 'reflect'
+      ? { reflectOn: reflectionMaterial(state, agent, trigger.scope) }
+      : {}),
+    ...(story.chapters.length ? { lifeChapters: story.chapters } : {}),
+    ...(story.beliefs.length ? { beliefs: story.beliefs } : {}),
   };
 }
 

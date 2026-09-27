@@ -16,3 +16,5 @@ export * from './world.ts';
 export * from './market.ts';
 export * from './life.ts';
 export * from './generate.ts';
+export * from './conditions.ts';
+export * from './memory.ts';

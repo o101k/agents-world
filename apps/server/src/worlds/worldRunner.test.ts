@@ -57,6 +57,34 @@ describe('WorldRunner', () => {
     await wm.closeAll();
   });
 
+  it('replays world events and night-time reflections exactly after a crash', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Events', seed: 'events', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runUntil(runner, w.tick + 60);
+    await wm.worldEvent(w.id, { kind: 'disease', intensity: 0.8, hours: 30 });
+    await wm.worldEvent(w.id, { kind: 'storm', intensity: 0.5, hours: 3 });
+    await runUntil(runner, w.tick + 1200); // through the night: diaries get written
+    expect(runner.state.conditions.some((c) => c.kind === 'disease')).toBe(true);
+    const diaries = wm.events(w.id, { limit: 50, minImportance: 1, q: 'diary' });
+    expect(diaries.length).toBeGreaterThan(0);
+    const someone = diaries[0]!.actors[0]!;
+    const story = wm.story(w.id, someone);
+    expect(story.some((e) => e.source === 'memory')).toBe(true);
+    expect(story.every((e, i) => i === 0 || e.tick >= story[i - 1]!.tick)).toBe(true);
+
+    const tick = runner.state.tick;
+    const expected = hash(runner);
+    const file = WorldFile.open(join(dir, 'worlds', `${w.id}.sqlite`));
+    const resumed = WorldRunner.open(file, new BrainRouter());
+    expect(resumed.state.tick).toBe(tick);
+    expect(hash(resumed)).toBe(expected);
+    await resumed.stop();
+    file.close();
+    await wm.closeAll();
+  });
+
   it('continues identically after a restart', async () => {
     // World A runs 900 ticks straight; world B (same seed) runs 400, restarts, then 500 more.
     const wm = new WorldManager(dir);

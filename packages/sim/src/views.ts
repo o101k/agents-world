@@ -61,6 +61,7 @@ export function agentView(agent: Agent): AgentView {
     appearance: agent.appearance,
     speech: agent.speech?.text,
     stage: stageOf(agent.age),
+    ...(agent.sickness?.known ? { sick: true } : {}),
   };
 }
 
@@ -81,6 +82,7 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
     else if (a.type === 'drink') currentAction = 'Drinking';
     else if (a.type === 'chop') currentAction = 'Chopping wood';
     else if (a.type === 'craft') currentAction = `Making ${a.recipe}`;
+    else if (a.type === 'build') currentAction = `Building ${name(a.objectId)}`;
     else if (a.type === 'sleep') currentAction = 'Sleeping';
     else currentAction = 'Resting';
   }
@@ -109,7 +111,19 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
     recent: [...agent.recent].reverse(),
     memories: [...agent.memories]
       .sort((a, b) => b.tick - a.tick)
-      .map((m) => ({ tick: m.tick, text: m.text, importance: m.importance, kind: m.kind })),
+      .map((m) => ({
+        tick: m.tick,
+        text: m.text,
+        importance: m.importance,
+        kind: m.kind,
+        strength: Math.round(m.strength * 10) / 10,
+      })),
+    forgotten: [...agent.forgotten]
+      .sort((a, b) => b.tick - a.tick)
+      .map((m) => ({ ...m, forgotten: true })),
+    sickness: agent.sickness?.known
+      ? { severity: Math.round(agent.sickness.severity * 100) / 100, since: agent.sickness.since }
+      : null,
     people: Object.entries(agent.people)
       .map(([id, p]) => ({
         id,

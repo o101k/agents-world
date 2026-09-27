@@ -125,6 +125,7 @@ export type Activity =
   | 'resting'
   | 'working'
   | 'thinking'
+  | 'sick'
   | 'dead';
 
 /** What the map needs to draw one person. Sent every frame. */
@@ -143,13 +144,20 @@ export interface AgentView {
   /** Words said in the last few in-game minutes (speech bubble). */
   speech?: string;
   stage: LifeStage;
+  sick?: boolean;
 }
+
+export type MemoryKind =
+  'experience' | 'conversation' | 'thought' | 'told' | 'diary' | 'chapter' | 'belief';
 
 export interface MemoryView {
   tick: number;
   text: string;
   importance: number;
-  kind: 'experience' | 'conversation' | 'thought' | 'told';
+  kind: MemoryKind;
+  /** 0–10: how vivid it still is (it fades unless important). */
+  strength?: number;
+  forgotten?: boolean;
 }
 
 export interface KnownPlaceView {
@@ -196,6 +204,8 @@ export interface AgentDetail extends AgentView {
   constitution: number;
   pregnancy: { fatherName: string; progress: number } | null;
   will: { heirName: string } | null;
+  sickness: { severity: number; since: number } | null;
+  forgotten: MemoryView[];
   death?: { tick: number; cause: string };
   bornTick: number;
   spentUsd: number;

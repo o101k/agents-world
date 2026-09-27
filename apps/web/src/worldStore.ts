@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { AgentView, RunnerStatus, WorldEvent, WorldViewResponse } from '@aw/shared';
+import type {
+  ActiveCondition,
+  AgentView,
+  RunnerStatus,
+  WorldEvent,
+  WorldViewResponse,
+} from '@aw/shared';
 import type { MapSelection } from './map/renderer.ts';
 
 const MAX_EVENTS = 600;
@@ -19,6 +25,8 @@ interface WorldRuntime {
   followId: string | null;
   /** Bumped by the helper when the map changes (e.g. a house is built). */
   mapVersion: number;
+  /** World events in progress (drought, storm, sickness, fires, plenty). */
+  conditions: ActiveCondition[];
 
   load: (worldId: string, view: WorldViewResponse, events: WorldEvent[]) => void;
   applyFrame: (
@@ -29,6 +37,7 @@ interface WorldRuntime {
       agents: AgentView[];
       resources: Record<string, number>;
       mapVersion: number;
+      conditions?: ActiveCondition[];
     },
   ) => void;
   addEvents: (worldId: string, events: WorldEvent[]) => void;
@@ -58,6 +67,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
   selection: null,
   followId: null,
   mapVersion: 0,
+  conditions: [],
 
   load: (worldId, view, events) =>
     set({
@@ -70,6 +80,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       events,
       selection: null,
       followId: null,
+      conditions: view.conditions ?? [],
     }),
   applyFrame: (worldId, f) => {
     if (get().worldId !== worldId) return;
@@ -80,6 +91,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       resources: Object.keys(f.resources).length ? { ...s.resources, ...f.resources } : s.resources,
       resourceChanges: f.resources,
       mapVersion: f.mapVersion ?? s.mapVersion,
+      conditions: f.conditions ?? s.conditions,
     }));
   },
   addEvents: (worldId, events) => {
@@ -89,5 +101,13 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
   select: (selection) => set({ selection }),
   setFollow: (followId) => set({ followId }),
   reset: () =>
-    set({ worldId: null, agents: [], events: [], selection: null, followId: null, resources: {} }),
+    set({
+      worldId: null,
+      agents: [],
+      events: [],
+      selection: null,
+      followId: null,
+      resources: {},
+      conditions: [],
+    }),
 }));

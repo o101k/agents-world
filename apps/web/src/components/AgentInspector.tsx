@@ -15,6 +15,7 @@ import { formatUsd } from './SpendMeter.tsx';
 import { useWorld } from '../worldStore.ts';
 import { Bar } from './Bars.tsx';
 import { Portrait } from './Portrait.tsx';
+import { LifeStory } from './LifeStory.tsx';
 
 const ACTIVITY_LABEL: Record<string, string> = {
   idle: 'Idle',
@@ -26,6 +27,7 @@ const ACTIVITY_LABEL: Record<string, string> = {
   resting: 'Resting',
   working: 'Working',
   thinking: 'Thinking…',
+  sick: 'Ill',
   dead: 'Dead',
 };
 
@@ -47,6 +49,7 @@ export function AgentInspector({
   onPick?: (id: string) => void;
 }) {
   const [treeOpen, setTreeOpen] = useState(false);
+  const [storyOpen, setStoryOpen] = useState(false);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const followId = useWorld((s) => s.followId);
@@ -92,6 +95,7 @@ export function AgentInspector({
             {STAGE_LABELS[agent.stage]} · {agent.age} · {agent.sex} · {agent.occupation}
           </div>
           <div className={`status-pill ${agent.alive ? '' : 'is-dead'}`}>{status}</div>
+          {agent.sickness && <div className="status-pill is-ill">Ill</div>}
         </div>
         {agent.alive && (
           <button
@@ -177,6 +181,7 @@ export function AgentInspector({
       <section>
         <h3>Body</h3>
         <Bar label="Health" value={agent.health} />
+        {agent.sickness && <Bar label="Illness" value={agent.sickness.severity * 100} tone="bad" />}
         {(Object.keys(NEED_LABELS) as NeedName[]).map((k) => (
           <Bar key={k} label={NEED_LABELS[k]} value={agent.needs[k]} />
         ))}
@@ -247,24 +252,16 @@ export function AgentInspector({
           ))}
       </section>
 
-      {agent.memories.length > 0 && (
-        <section>
-          <h3>Memories ({agent.memories.length})</h3>
-          <ul className="recent memories">
-            {agent.memories.slice(0, 15).map((m, i) => (
-              <li key={i}>
-                <span
-                  className={`imp imp-${Math.min(3, Math.ceil(m.importance / 3.4))}`}
-                  title={`Importance ${m.importance}/10`}
-                >
-                  {m.importance}
-                </span>{' '}
-                <span className="muted small">{formatClock(m.tick)}</span> {m.text}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <section>
+        <h3>Memory</h3>
+        <button className="btn btn-small" onClick={() => setStoryOpen(true)}>
+          Life story
+        </button>
+        {storyOpen && (
+          <LifeStory worldId={worldId} agent={agent} onClose={() => setStoryOpen(false)} />
+        )}
+        <Memories agent={agent} />
+      </section>
 
       {agent.people.length > 0 && (
         <section>
@@ -293,6 +290,104 @@ export function AgentInspector({
         )}
         <AiExchanges worldId={worldId} agentId={agentId} />
       </section>
+    </div>
+  );
+}
+
+type MemoryFilter = 'all' | 'story' | 'forgotten';
+
+/**
+ * What the person remembers: their life chapters and beliefs, then the memory stream (faded
+ * memories look faint), and what they have forgotten (greyed; they no longer know it).
+ */
+function Memories({ agent }: { agent: AgentDetail }) {
+  const [filter, setFilter] = useState<MemoryFilter>('all');
+  const [limit, setLimit] = useState(15);
+  const chapters = agent.memories
+    .filter((m) => m.kind === 'chapter')
+    .sort((a, b) => a.tick - b.tick);
+  const beliefs = agent.memories.filter((m) => m.kind === 'belief');
+  const list =
+    filter === 'forgotten'
+      ? agent.forgotten
+      : filter === 'story'
+        ? agent.memories.filter((m) => m.kind === 'diary')
+        : agent.memories.filter((m) => m.kind !== 'chapter' && m.kind !== 'belief');
+  return (
+    <div className="memory">
+      {chapters.length > 0 && (
+        <>
+          <h4>Life so far</h4>
+          <ol className="chapters">
+            {chapters.map((c) => (
+              <li key={c.tick}>{c.text}</li>
+            ))}
+          </ol>
+        </>
+      )}
+      {beliefs.length > 0 && (
+        <>
+          <h4>Believes</h4>
+          <ul className="beliefs">
+            {beliefs.map((b) => (
+              <li key={b.tick + b.text}>{b.text}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      <div className="segmented" role="tablist" aria-label="Which memories">
+        {(
+          [
+            ['all', `Memories (${agent.memories.length})`],
+            ['story', 'Diary'],
+            ['forgotten', `Forgotten (${agent.forgotten.length})`],
+          ] as [MemoryFilter, string][]
+        ).map(([f, label]) => (
+          <button
+            key={f}
+            role="tab"
+            aria-selected={filter === f}
+            className={`seg ${filter === f ? 'is-on' : ''}`}
+            onClick={() => setFilter(f)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {list.length === 0 ? (
+        <p className="muted small">
+          {filter === 'forgotten' ? 'Nothing forgotten yet.' : 'Nothing here yet.'}
+        </p>
+      ) : (
+        <ul className="recent memories">
+          {list.slice(0, limit).map((m, i) => (
+            <li
+              key={i}
+              className={m.forgotten ? 'is-forgotten' : ''}
+              style={
+                m.forgotten || m.strength === undefined
+                  ? undefined
+                  : { opacity: 0.45 + 0.55 * Math.min(1, m.strength / Math.max(1, m.importance)) }
+              }
+              title={
+                m.forgotten
+                  ? 'Forgotten — they no longer remember this'
+                  : `Importance ${m.importance}/10 · vividness ${m.strength ?? m.importance}/10`
+              }
+            >
+              <span className={`imp imp-${Math.min(3, Math.ceil(m.importance / 3.4))}`}>
+                {m.importance}
+              </span>{' '}
+              <span className="muted small">{formatClock(m.tick)}</span> {m.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      {list.length > limit && (
+        <button className="linkish small" onClick={() => setLimit(limit + 30)}>
+          Show more ({list.length - limit} more)
+        </button>
+      )}
     </div>
   );
 }

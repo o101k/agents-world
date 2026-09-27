@@ -106,7 +106,9 @@ const ACTION_HELP: Record<string, string> = {
   respond_child_request: 'respond_child_request {target: your partner, accept: true or false}',
   name_child: 'name_child {target: your unnamed baby, name: a first name}',
   declare_will: 'declare_will {target: who inherits everything you own when you die}',
-  build_house: 'build_house (start or continue building a house; each stretch uses 3 planks)',
+  build_house:
+    'build_house (start or continue building a house, or rebuild your burnt one; each stretch uses 3 planks)',
+  tend: 'tend {target: a sick person id} (nurse them: they recover faster; you may catch it)',
 };
 
 /** Who the person is at their stage of life, in their own terms. */
@@ -169,6 +171,7 @@ export function systemPrompt(p: Perception): string {
       '- You can give things to people, offer them trades (they may accept or refuse), and accept or decline offers made to you.',
       '- Family: grown-ups can ask someone to be their partner; partners who both want to can try for a child. Babies cannot feed themselves and must be fed several times a day (feed); young ones learn from what you teach them and from watching you work. When you die, what you own goes to the heir you name (declare_will), otherwise to your partner or children.',
       '- Houses can be built with planks (build_house).',
+      '- Sickness passes between people who stay close. The sick get better faster resting, sleeping and eating well, and someone can nurse them (tend). Storms chill anyone caught outside; droughts stunt crops and, when bad, dry up the river. Fires can burn buildings down; they can be rebuilt.',
       '- Nothing physically stops you from taking what is not yours or using force, but anyone who sees it will remember, and people talk. Someone badly hurt can die.',
     );
   }
@@ -222,13 +225,70 @@ function triggerText(p: Perception): string {
       return `${t.childName} [${t.childId}] is crying — ${t.need === 'food' ? 'hungry' : 'thirsty'}.`;
     case 'grew_up':
       return `You have grown up a little: you are now ${t.stage === 'adult' ? 'an adult' : `a ${t.stage}`}.`;
+    case 'unwell':
+      return 'You feel feverish, aching and weak: you are ill.';
+    case 'world_event':
+      return t.description;
+    case 'reflect':
+      return t.scope === 'year'
+        ? 'Another year of your life has passed. Before sleep, you look back on it.'
+        : 'Night has come. Before sleep, you think back over the day.';
     case 'check_in':
       return 'A few hours have passed. Take stock of your situation.';
   }
 }
 
+function lifeStoryLines(p: Perception): string[] {
+  const out: string[] = [];
+  if (p.lifeChapters?.length) {
+    out.push('', 'Your life so far, as you remember it:');
+    out.push(...p.lifeChapters.map((c) => `- ${c}`));
+  }
+  if (p.beliefs?.length) {
+    out.push('', 'Things you have come to believe:');
+    out.push(...p.beliefs.map((b) => `- ${b}`));
+  }
+  return out;
+}
+
+/** The night-time message: look back and write a diary entry (or a life chapter). */
+export function reflectPrompt(p: Perception): string {
+  const scope = p.trigger.kind === 'reflect' ? p.trigger.scope : 'day';
+  const lines: string[] = [];
+  lines.push(
+    `It is night on day ${p.clock.day}. You are lying down to sleep${p.self.indoors ? ' at home' : ' outside'}.`,
+    '',
+    scope === 'year'
+      ? `You have just turned ${p.self.age}. You think back over the past year of your life.`
+      : 'You think back over your day.',
+  );
+  lines.push(...lifeStoryLines(p));
+  if (p.knownPeople.length) {
+    lines.push('', 'People in your life:');
+    for (const k of p.knownPeople.slice(0, 12)) {
+      const role = k.role ? `your ${k.role}; ` : '';
+      lines.push(`- ${k.name} [${k.id}] — ${role}${feelingWords(k.affection, k.trust, k.romance)}`);
+    }
+  }
+  lines.push(
+    '',
+    scope === 'year' ? 'What you remember of this year:' : 'What you remember of today:',
+  );
+  const material = p.reflectOn?.length ? p.reflectOn : p.recent;
+  lines.push(...(material.length ? material.map((m) => `- ${m}`) : ['- Nothing much happened.']));
+  lines.push(
+    '',
+    scope === 'year'
+      ? 'Call the decide tool with: diary = a chapter of your life story for this year (3–6 sentences, first person, what mattered and how it changed you); beliefs = up to 3 short things you now believe; thought = how you feel tonight; goal = what you want from the year ahead; plan = [] (you are going to sleep). Add feelings if your feelings about someone changed.'
+      : 'Call the decide tool with: diary = a short diary entry about today (2–4 sentences, first person, what mattered to you); beliefs = up to 3 short things you have come to believe, if any; thought = how you feel as you fall asleep; goal = what you mean to do tomorrow; plan = [] (you are going to sleep). Add feelings if your feelings about someone changed.',
+    'Only what is listed above happened; do not invent events.',
+  );
+  return lines.join('\n');
+}
+
 /** The per-decision message: everything the agent senses, knows and remembers right now. */
 export function userPrompt(p: Perception): string {
+  if (p.trigger.kind === 'reflect') return reflectPrompt(p);
   const s = p.self;
   const lines: string[] = [];
   const { day, hour, minute } = p.clock;
@@ -244,7 +304,14 @@ export function userPrompt(p: Perception): string {
         `${NEED_LABELS[n].toLowerCase()} ${Math.round(s.needs[n])}/100${needWord(n, s.needs[n]) ? ` (${needWord(n, s.needs[n])})` : ''}`,
     )
     .join(', ');
-  lines.push(`Your body: ${needs}; health ${Math.round(s.health)}/100.`);
+  lines.push(
+    `Your body: ${needs}; health ${Math.round(s.health)}/100.${p.sick ? ' You are ill.' : ''}`,
+  );
+  if (p.conditions?.length) {
+    lines.push('');
+    lines.push('Around you:');
+    for (const c of p.conditions) lines.push(`- ${c}`);
+  }
   const bag = Object.entries(s.inventory)
     .filter(([, n]) => (n ?? 0) > 0)
     .map(([k, n]) => `${n} ${ITEM_LABELS[k as keyof typeof ITEM_LABELS].toLowerCase()}`);
@@ -267,7 +334,10 @@ export function userPrompt(p: Perception): string {
       const amount =
         k.lastSeenAmount !== undefined ? `, last time you saw ${k.lastSeenAmount} to gather` : '';
       const owner = k.owner ? `, owned by ${k.owner}` : '';
-      lines.push(`- ${k.name}${produce} [${k.id}], ${k.distance} steps${amount}${owner}`);
+      const burnt =
+        (k.burnt ? ' (burnt down — needs rebuilding)' : '') +
+        (k.unreachable ? " (you couldn't find a way there)" : '');
+      lines.push(`- ${k.name}${produce}${burnt} [${k.id}], ${k.distance} steps${amount}${owner}`);
     }
   } else {
     lines.push('You do not know any places here yet.');
@@ -332,6 +402,7 @@ export function userPrompt(p: Perception): string {
   }
   if (p.language < 60 && p.stage !== 'infant')
     lines.push('', 'You only know a few words; keep what you say very short and simple.');
+  lines.push(...lifeStoryLines(p));
   lines.push('');
   lines.push('What happened recently:');
   lines.push(...(p.recent.length ? p.recent.map((r) => `- ${r}`) : ['- Nothing much.']));

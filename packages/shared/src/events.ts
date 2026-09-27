@@ -29,7 +29,13 @@ export type EventKind =
   | 'named'
   | 'grew_up'
   | 'inherited'
-  | 'built';
+  | 'built'
+  | 'world_event'
+  | 'fell_ill'
+  | 'recovered'
+  | 'tended'
+  | 'reflected'
+  | 'fire';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

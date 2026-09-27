@@ -61,8 +61,10 @@ export interface MapObject {
   name?: string;
   /** Doorway tile (inside the footprint) for buildings. */
   door?: Point;
-  /** Construction progress 0–1 for buildings being built (absent = finished). */
+  /** Construction progress 0–1 for buildings being built or repaired (absent = finished). */
   progress?: number;
+  /** Tick it burnt down, while it is being rebuilt (unusable until progress reaches 1 again). */
+  burntTick?: number;
 }
 
 export interface WorldMap {

@@ -33,14 +33,16 @@ class Semaphore {
 }
 
 /**
- * Instinct: at the "frugal" effort level, routine bodily needs (thirst, hunger, bedtime) are handled
- * by the free rulebook instead of an AI call. Everything social, surprising or open-ended still goes
- * to the agent's AI. This is the biggest cost lever for a very-low budget.
+ * Instinct: at the "frugal" effort level, routine bodily needs (thirst, hunger, bedtime, feeling
+ * ill) and the nightly diary are handled by the free rulebook instead of an AI call. Everything
+ * social, surprising or open-ended — and the yearly life chapter — still goes to the agent's AI.
+ * This is the biggest cost lever for a very-low budget.
  */
 export function instinctApplies(p: Perception): boolean {
   if (p.effort !== 'frugal') return false;
   const t = p.trigger;
-  if (t.kind === 'urgent_need') return true;
+  if (t.kind === 'urgent_need' || t.kind === 'unwell') return true;
+  if (t.kind === 'reflect') return t.scope === 'day';
   const bedtime = (p.clock.isNight || p.clock.hour >= 21) && p.self.needs.energy < 85;
   return (t.kind === 'plan_done' || t.kind === 'check_in') && bedtime;
 }

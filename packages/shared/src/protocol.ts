@@ -81,6 +81,7 @@ export interface WorldViewResponse {
   resources: Record<string, number>;
   /** Owners' names by object id. */
   owners: Record<string, string[]>;
+  conditions: ActiveCondition[];
 }
 
 export interface MarketResponse {
@@ -96,8 +97,47 @@ export const ControlRequest = z.object({
 });
 export type ControlRequest = z.infer<typeof ControlRequest>;
 
+export const WorldEventRequest = z.object({
+  kind: z.enum(['drought', 'storm', 'disease', 'fire', 'bumper_harvest']),
+  /** 0.2 (mild) – 1 (severe). */
+  intensity: z.number().min(0.1).max(1).default(0.6),
+  /** In-game hours (fire ignores this). */
+  hours: z
+    .number()
+    .min(1)
+    .max(24 * 30)
+    .default(24),
+  /** Optional target (a building for fire, a person to start a disease). */
+  targetId: z.string().max(40).optional(),
+});
+export type WorldEventRequest = z.input<typeof WorldEventRequest>;
+
+export interface ActiveCondition {
+  id: string;
+  kind: 'drought' | 'storm' | 'disease' | 'bumper_harvest' | 'fire';
+  intensity: number;
+  startTick: number;
+  endTick: number;
+  /** Fire: the burning building. */
+  targetId?: string;
+}
+
+/** One entry in a person's life story. */
+export interface StoryEntry {
+  tick: number;
+  text: string;
+  kind: string;
+  /** "event" = from the world's history (what happened); "memory" = in their own words. */
+  source: 'event' | 'memory';
+}
+
+export interface StoryResponse {
+  entries: StoryEntry[];
+}
+
 export const EventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
+  q: z.string().trim().max(100).optional(),
   beforeId: z.coerce.number().int().optional(),
   agentId: z.string().max(40).optional(),
   minImportance: z.coerce.number().int().min(1).max(5).default(1),
@@ -151,6 +191,7 @@ export type ServerMessage =
       resources: Record<string, number>;
       /** Changes when the map changes (e.g. a house is built), so viewers reload it. */
       mapVersion: number;
+      conditions: ActiveCondition[];
     }
   | { type: 'events'; worldId: string; events: WorldEvent[] };
 

@@ -43,6 +43,13 @@ export function mockDecide(p: Perception): Decision {
   let goal = '';
   const roll = hash(`${p.agentId}:${p.tick}`);
 
+  if (p.trigger.kind === 'reflect') return mockReflect(p);
+  if (p.trigger.kind === 'world_event' || p.trigger.kind === 'unwell') {
+    const why = p.trigger.kind === 'unwell' ? 'I feel ill.' : p.trigger.description;
+    const rest = mockDecide({ ...p, trigger: { kind: 'plan_done' } });
+    return { ...rest, thought: `${why} ${rest.thought}` };
+  }
+
   const life = lifePlan(p, roll);
   if (life) return life;
 
@@ -76,7 +83,8 @@ export function mockDecide(p: Perception): Decision {
     };
   }
 
-  const known = (kinds: string[]) => p.knownPlaces.filter((k) => kinds.includes(k.kind));
+  const known = (kinds: string[]) =>
+    p.knownPlaces.filter((k) => kinds.includes(k.kind) && !k.unreachable);
   const home = p.self.homeId ? p.knownPlaces.find((k) => k.id === p.self.homeId) : undefined;
   const foodInBag = FOOD_ITEMS.filter((i) => (inventory[i] ?? 0) > 0).sort(
     (a, b) => NUTRITION[b] - NUTRITION[a],
@@ -150,9 +158,12 @@ export function mockDecide(p: Perception): Decision {
 
   // Thirst first: it kills fastest.
   if (needs.water < 45) {
-    const source = known(['well', 'dock']).sort((a, b) => a.distance - b.distance)[0];
-    const riverCloser = !source || source.distance > 15;
-    plan.push(riverCloser ? { type: 'drink' } : { type: 'drink', sourceId: source.id });
+    const riverDry = (p.conditions ?? []).some((c) => c.includes('only the well'));
+    const source = known(riverDry ? ['well'] : ['well', 'dock']).sort(
+      (a, b) => a.distance - b.distance,
+    )[0];
+    const riverCloser = !riverDry && (!source || source.distance > 15);
+    plan.push(riverCloser || !source ? { type: 'drink' } : { type: 'drink', sourceId: source.id });
     thoughts.push(needs.water < 20 ? "I'm parched — I need water now." : "I'm thirsty.");
     goal = 'Get a drink';
   }
@@ -200,6 +211,17 @@ export function mockDecide(p: Perception): Decision {
     }
   }
 
+  // Illness: rest it off at home.
+  if (p.sick && plan.length === 0) {
+    if (home && home.distance > 0) plan.push({ type: 'go_to', target: { objectId: home.id } });
+    plan.push(needs.energy < 70 ? { type: 'sleep' } : { type: 'rest', minutes: 120 });
+    return {
+      thought: 'I feel wretched. I need to lie down and rest until this passes.',
+      goal: 'Rest until I am well',
+      plan,
+    };
+  }
+
   // Sleep.
   const bedtime = isNight || hour >= 21;
   if (needs.energy < 25 || (bedtime && needs.energy < 85) || needs.warmth < 25) {
@@ -217,6 +239,19 @@ export function mockDecide(p: Perception): Decision {
   }
 
   if (plan.length > 0) return { thought: thoughts.join(' '), goal, plan };
+
+  // Take shelter from a storm.
+  const stormy = (p.conditions ?? []).some((c) => c.includes('storm is raging:'));
+  if (stormy && home) {
+    return {
+      thought: 'This storm is no joke. I am going inside until it blows over.',
+      goal: 'Shelter from the storm',
+      plan: [
+        ...(home.distance > 0 ? [{ type: 'go_to' as const, target: { objectId: home.id } }] : []),
+        { type: 'rest', minutes: 90 },
+      ],
+    };
+  }
 
   // Daytime: stock up on food first.
   if (foodUnits < 4 && gatherPlan()) {
@@ -436,6 +471,25 @@ function lifePlan(p: Perception, roll: number): Decision | null {
       };
     }
   }
+  // Nurse the sick: family, or anyone if caring for people is your calling.
+  const carer = /herb|midwife|heal|nurse/.test(p.self.occupation.toLowerCase());
+  const family = new Set(
+    [
+      p.family.partner?.id,
+      ...p.family.children.map((c) => c.id),
+      ...p.family.parents.map((q) => q.id),
+    ].filter(Boolean),
+  );
+  const patient = p.visibleAgents.find(
+    (a) => a.activity.includes('looks ill') && (carer || family.has(a.id)),
+  );
+  if (patient && selfOk && !p.sick && p.stage !== 'child' && roll < (carer ? 0.8 : 0.5)) {
+    return {
+      thought: `${patient.name} looks terribly ill. I'll see to them.`,
+      goal: 'Nurse the sick',
+      plan: [{ type: 'tend', agentId: patient.id }],
+    };
+  }
   if (p.stage === 'child' || p.stage === 'teen') return null;
 
   // Initiatives, now and then.
@@ -507,12 +561,45 @@ function workPlan(p: Perception, roll: number): Decision | null {
   if (roll > 0.75) return null; // everyone needs some time off
   const inv = p.self.inventory;
   const have = (i: ItemName) => inv[i] ?? 0;
+  // A burnt home (or workplace) of our own comes first: wood → planks → rebuild.
+  const ruin = p.knownPlaces.find((k) => k.burnt && k.owner === 'you');
+  if (ruin && p.stage !== 'child') {
+    if (have('planks') >= 3)
+      return {
+        thought: `${ruin.name} won't rebuild itself.`,
+        goal: `Rebuild ${ruin.name}`,
+        plan: [{ type: 'build_house' }],
+      };
+    if (have('wood') >= 2)
+      return {
+        thought: 'Planks for the rebuilding.',
+        goal: 'Make planks',
+        plan: [
+          { type: 'craft', recipe: 'planks' },
+          ...(have('wood') >= 4 ? [{ type: 'craft' as const, recipe: 'planks' as const }] : []),
+        ],
+      };
+    if (p.self.money >= knownBuyPrice(p, 'planks') * 3 && roll < 0.5)
+      return {
+        thought: 'I will buy planks and get on with rebuilding.',
+        goal: `Rebuild ${ruin.name}`,
+        plan: [{ type: 'buy', item: 'planks', quantity: 3 }, { type: 'build_house' }],
+      };
+    return {
+      thought: `I need timber to rebuild ${ruin.name}.`,
+      goal: 'Gather wood for rebuilding',
+      plan: [{ type: 'chop_wood' }, { type: 'chop_wood' }],
+    };
+  }
   const occ = p.self.occupation.toLowerCase();
   const place = (kind: string, produce?: ItemName) =>
     p.knownPlaces
       .filter(
         (k) =>
-          k.kind === kind && (!produce || k.produce === produce) && (k.lastSeenAmount ?? 1) >= 1,
+          k.kind === kind &&
+          !k.unreachable &&
+          (!produce || k.produce === produce) &&
+          (k.lastSeenAmount ?? 1) >= 1,
       )
       .sort((a, b) => a.distance - b.distance)[0];
   const overflowing = (item: ItemName) =>
@@ -615,7 +702,9 @@ function workPlan(p: Perception, roll: number): Decision | null {
     };
   }
   // Everyone else forages and sells a little.
-  const bush = p.knownPlaces.find((k) => k.kind === 'berry_bush' && (k.lastSeenAmount ?? 1) >= 2);
+  const bush = p.knownPlaces.find(
+    (k) => k.kind === 'berry_bush' && !k.unreachable && (k.lastSeenAmount ?? 1) >= 2,
+  );
   if (bush && roll < 0.4) {
     return {
       thought: 'I will pick berries.',
@@ -624,6 +713,43 @@ function workPlan(p: Perception, roll: number): Decision | null {
     };
   }
   return null;
+}
+
+const ROUTINE = /^I (ate|drank|gathered|chopped|went to sleep|fished|found no|made a note|woke)/;
+const CHATTER = /said to me|^I said to|^I overheard|knocked at the door/;
+const BIG =
+  /born|died|partner|stole|attack|fire|burn|storm|ill|sick|nursed|built|child|baby|inherit|drought|kill|grow/i;
+
+/** A plain, free nightly reflection: the day's notable moments become a short diary entry. */
+export function mockReflect(p: Perception): Decision {
+  const scope = p.trigger.kind === 'reflect' ? p.trigger.scope : 'day';
+  const lines = [
+    ...new Set(
+      (p.reflectOn ?? [])
+        .map((l) => l.replace(/^\[[^\]]*\]\s*/, '').replace(/^Diary:\s*/, ''))
+        .filter((l) => !ROUTINE.test(l)),
+    ),
+  ];
+  // What mattered most, then what was done, then (only if nothing else) who said what.
+  const rank = (l: string) => (BIG.test(l) ? 0 : CHATTER.test(l) ? 2 : 1);
+  const pick = [...lines]
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, scope === 'year' ? 4 : 3)
+    .sort((a, b) => lines.indexOf(a) - lines.indexOf(b));
+  const body = pick.length ? pick.join(' ') : 'A quiet day of ordinary work.';
+  const mood =
+    p.sick || p.self.health < 50
+      ? ' I feel poorly.'
+      : p.self.needs.food < 30
+        ? ' I went to bed hungry.'
+        : '';
+  const diary = `${body}${mood}`;
+  return {
+    thought: scope === 'year' ? 'Another year gone.' : 'Time to sleep.',
+    goal: '',
+    plan: [],
+    diary: diary.slice(0, 600),
+  };
 }
 
 export class MockBrain implements BrainProvider {

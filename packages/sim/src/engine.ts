@@ -22,6 +22,17 @@ import {
 } from '@aw/shared';
 import { fullName, remember, type Agent } from './agent.ts';
 import type { AgentSpec } from './cast.ts';
+import {
+  canDrinkAt,
+  conditionLevel,
+  conditionsTick,
+  sicknessTick,
+  startWorldEvent,
+  tendAction,
+  usable,
+  type WorldEventSpec,
+} from './conditions.ts';
+import { applyReflection, memoryTick, reinforceRecalled } from './memory.ts';
 import { NUTRITION, isFood } from './items.ts';
 import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
 import { findPathToAny } from './pathfinding.ts';
@@ -52,7 +63,6 @@ import {
   interactionTiles,
   invalidateMapCaches,
   isAt,
-  isDrinkSpot,
   isWalkable,
   mapCache,
   moveCost,
@@ -68,7 +78,8 @@ export type TickInput =
   | { kind: 'spawn_agent'; spec: AgentSpec }
   | { kind: 'set_brain'; agentId: string; brain: BrainConfig }
   | { kind: 'set_default_brain'; brain: BrainConfig; applyToAll?: boolean }
-  | { kind: 'set_days_per_year'; value: number };
+  | { kind: 'set_days_per_year'; value: number }
+  | { kind: 'world_event'; event: WorldEventSpec };
 
 export interface StepResult {
   events: WorldEvent[];
@@ -141,6 +152,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
   withRng(state, (rng) => {
     ctx.rng = rng;
     for (const input of inputs) applyInput(ctx, input);
+    conditionsTick(ctx);
     if (state.tick % TICKS_PER_DAY === 0) {
       const alive = state.agents.filter((a) => a.alive).length;
       emit(
@@ -165,8 +177,10 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       if (agent.speech && state.tick >= agent.speech.until) agent.speech = null;
       updateBody(ctx, agent);
       if (!agent.alive) continue;
+      if (agent.sickness) sicknessTick(ctx, agent);
       lifeTick(ctx, agent, ageStep);
       if (!agent.alive) continue;
+      memoryTick(ctx, agent);
       if (!agent.named) autoName(ctx, agent);
       if (!agent.asleep) {
         progressAction(ctx, agent);
@@ -219,6 +233,20 @@ function applyInput(ctx: Ctx, input: TickInput): void {
     case 'decision': {
       const agent = state.agents.find((a) => a.id === input.agentId);
       if (!agent?.alive) return;
+      const trigger = agent.awaiting;
+      agent.decisions += 1;
+      agent.spentUsd += Math.max(0, input.usage?.costUsd ?? 0);
+      if (trigger?.kind === 'reflect') {
+        // A night's reflection: the body keeps sleeping; only the mind changes.
+        agent.awaiting = null;
+        applyReflection(ctx, agent, trigger.scope, input.decision);
+        if (Array.isArray(input.decision.feelings))
+          applyFeelings(state, agent, input.decision.feelings);
+        const goal = String(input.decision.goal ?? '').trim();
+        if (goal) agent.goal = goal.slice(0, 300);
+        return;
+      }
+      reinforceRecalled(state, agent);
       agent.awaiting = null;
       agent.thought = String(input.decision.thought ?? '').slice(0, 2000);
       agent.goal = String(input.decision.goal ?? '').slice(0, 300);
@@ -229,8 +257,6 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       }
       agent.plan = plan;
       agent.nextCheckIn = state.tick + checkInFor(agent);
-      agent.decisions += 1;
-      agent.spentUsd += Math.max(0, input.usage?.costUsd ?? 0);
       if (Array.isArray(input.decision.feelings))
         applyFeelings(state, agent, input.decision.feelings);
       const note = input.decision.remember;
@@ -278,6 +304,9 @@ function applyInput(ctx: Ctx, input: TickInput): void {
     case 'set_days_per_year':
       state.settings.daysPerYear = Math.min(60, Math.max(1, input.value));
       return;
+    case 'world_event':
+      startWorldEvent(ctx, input.event);
+      return;
   }
 }
 
@@ -286,11 +315,16 @@ function applyInput(ctx: Ctx, input: TickInput): void {
 function regrowResources(ctx: Ctx): void {
   const { state } = ctx;
   const ids = Object.keys(state.resources).sort();
+  // Droughts stunt growth; a bumper season doubles it.
+  const growth =
+    (1 - 0.9 * conditionLevel(state, 'drought')) *
+    (conditionLevel(state, 'bumper_harvest') > 0 ? 2 : 1);
   for (const id of ids) {
     const r = state.resources[id]!;
     if (r.amount >= r.max) continue;
     const before = Math.floor(r.amount);
-    r.amount = Math.min(r.max, r.amount + r.regenPerDay / 24);
+    const rate = r.item === 'wood' ? 1 : growth;
+    r.amount = Math.min(r.max, r.amount + (r.regenPerDay * rate) / 24);
     if (Math.floor(r.amount) !== before) ctx.changed.add(id);
     // Trees are tracked only while recovering from chopping, to keep the state small.
     if (r.item === 'wood' && r.amount >= r.max) delete state.resources[id];
@@ -313,16 +347,20 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   // Babies need feeding every few hours (milk covers both food and water); the old tire faster.
   const infant = agent.age < 1;
   const pregnant = agent.pregnancy ? 1.25 : 1;
+  const storm = indoors ? 0 : conditionLevel(state, 'storm');
+  const heat = indoors || night ? 0 : 0.3 * conditionLevel(state, 'drought');
   n.food = clamp(
     n.food - ((infant ? 3 : asleep ? RATES.foodAsleep : RATES.foodAwake) * pregnant) / H,
   );
-  n.water = clamp(n.water - (infant ? 3 : asleep ? RATES.waterAsleep : RATES.waterAwake) / H);
+  n.water = clamp(
+    n.water - ((infant ? 3 : asleep ? RATES.waterAsleep : RATES.waterAwake) * (1 + heat)) / H,
+  );
   if (asleep) {
     n.energy = clamp(
       n.energy + (indoors ? RATES.energySleepIndoors : RATES.energySleepOutdoors) / H,
     );
   } else {
-    const tiring = agent.age < 3 ? 1.6 : agent.age >= 70 ? 1.25 : 1;
+    const tiring = (agent.age < 3 ? 1.6 : agent.age >= 70 ? 1.25 : 1) * (1 + 0.3 * storm);
     n.energy = clamp(n.energy - (RATES.energyAwake * tiring) / H);
   }
   if (indoors || (!night && !isTwilight(state.tick)))
@@ -330,6 +368,11 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   else if (night)
     n.warmth = clamp(n.warmth - (asleep ? RATES.coldNightAsleep : RATES.coldNightAwake) / H);
   else n.warmth = clamp(n.warmth - RATES.coolTwilight / H);
+  // Wind and cold rain chill anyone caught outside.
+  if (storm > 0) {
+    const noSun = !night && !isTwilight(state.tick) ? RATES.warmIndoors : 0;
+    n.warmth = clamp(n.warmth - (noSun + 12 * storm) / H);
+  }
 
   // Health: suffers when needs hit bottom, recovers when they're comfortable.
   let damage = 0;
@@ -339,7 +382,7 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   for (const k of ['food', 'water', 'warmth'] as NeedName[])
     if (n[k] > 0 && n[k] < 10) damage += 0.5;
   if (damage > 0) agent.health = clamp(agent.health - damage / H);
-  else if (n.food >= 30 && n.water >= 30 && n.warmth >= 30)
+  else if (!agent.sickness && n.food >= 30 && n.water >= 30 && n.warmth >= 30)
     agent.health = clamp(agent.health + ((asleep ? 3 : 1.5) * (agent.constitution ?? 1)) / H);
 
   if (agent.health <= 0) {
@@ -365,7 +408,11 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     // Sleep through the night; by day, get up once rested.
     const rested = hour >= 5 && hour < 21 && n.energy >= 90;
     const desperate = n.food < 8 || n.water < 8;
-    if (rested || desperate) wake(ctx, agent, true);
+    if (rested || desperate) {
+      // Hunger or thirst can drag even an exhausted person to their feet for a while.
+      if (desperate) n.energy = Math.max(n.energy, 12);
+      wake(ctx, agent, true);
+    }
   } else if (n.energy <= 0) {
     agent.plan = [];
     agent.action = { type: 'sleep', since: state.tick };
@@ -384,7 +431,9 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
     forcedCause ??
     (n[lowest] <= 0
       ? { water: 'thirst', food: 'starvation', warmth: 'cold', energy: 'exhaustion' }[lowest]
-      : 'poor health');
+      : agent.sickness
+        ? 'illness'
+        : 'poor health');
   agent.alive = false;
   agent.death = { tick: ctx.state.tick, cause };
   agent.asleep = false;
@@ -403,7 +452,7 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
   settleEstate(ctx, agent);
 }
 
-function wake(ctx: Ctx, agent: Agent, requestDecision: boolean): void {
+export function wake(ctx: Ctx, agent: Agent, requestDecision: boolean): void {
   agent.asleep = false;
   agent.indoorsId = null;
   agent.action = null;
@@ -576,10 +625,17 @@ function walkTo(
   goals: Point[],
   then: Intent | null,
   what: string,
+  objectId?: string,
 ): boolean {
   const { map } = ctx.state;
   const path = findPathToAny(map.width, map.height, agent, goals, moveCost(map));
   if (!path) {
+    // Remember that this place can't be reached from here (so nobody keeps trying).
+    if (objectId)
+      agent.knowledge[objectId] = {
+        ...(agent.knowledge[objectId] ?? { lastSeenTick: ctx.state.tick }),
+        unreachableTick: ctx.state.tick,
+      };
     fail(ctx, agent, `I couldn't find a way to ${what}.`);
     return false;
   }
@@ -596,12 +652,15 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
   if (!canDo(agent, intent.type)) return fail(ctx, agent, tooYoung(agent, intent.type));
   const { map } = state;
   const cache = mapCache(map);
+  // Stepping out: anything but resting or sleeping takes a person back outside.
+  if (agent.indoorsId && intent.type !== 'rest' && intent.type !== 'sleep' && agent.age >= 1)
+    agent.indoorsId = null;
   switch (intent.type) {
     case 'go_to': {
       if ('objectId' in intent.target) {
         const o = cache.byId.get(intent.target.objectId);
         if (!o) return fail(ctx, agent, `I tried to go somewhere that doesn't exist.`);
-        walkTo(ctx, agent, interactionTiles(map, o), null, objName(state, o.id));
+        walkTo(ctx, agent, interactionTiles(map, o), null, objName(state, o.id), o.id);
       } else {
         const { x, y } = intent.target;
         const goal = isWalkable(map, x, y)
@@ -619,7 +678,7 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       }
       const tiles = interactionTiles(map, o);
       if (!arrived && !isAt(agent, tiles)) {
-        walkTo(ctx, agent, tiles, intent, objName(state, o.id));
+        walkTo(ctx, agent, tiles, intent, objName(state, o.id), o.id);
         return;
       }
       if (o.kind !== 'dock') {
@@ -650,16 +709,16 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       return;
     }
     case 'drink': {
-      if (isDrinkSpot(map, agent)) {
+      if (canDrinkAt(state, agent)) {
         agent.action = { type: 'drink', until: state.tick + 10 };
         return;
       }
       if (arrived) return fail(ctx, agent, 'There was no water where I went to drink.');
       let goals: Point[] = [];
       const source = intent.sourceId ? cache.byId.get(intent.sourceId) : undefined;
-      if (source) goals = interactionTiles(map, source).filter((p) => isDrinkSpot(map, p));
+      if (source) goals = interactionTiles(map, source).filter((p) => canDrinkAt(state, p));
       if (goals.length === 0) {
-        const spot = nearestWalkable(map, agent, (p) => isDrinkSpot(map, p), 120);
+        const spot = nearestWalkable(map, agent, (p) => canDrinkAt(state, p), 120);
         if (spot) goals = [spot];
       }
       if (goals.length === 0) return fail(ctx, agent, "I couldn't find any water to drink.");
@@ -672,18 +731,30 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       agent.plan = [];
       agent.action = { type: 'sleep', since: state.tick };
       agent.indoorsId =
-        home?.door && home.door.x === agent.x && home.door.y === agent.y ? home.id : null;
+        home?.door && home.door.x === agent.x && home.door.y === agent.y && usable(state, home.id)
+          ? home.id
+          : null;
       const where = agent.indoorsId ? 'at home' : 'outside';
       emit(ctx, 'fell_asleep', [agent.id], `${fullName(agent)} fell asleep ${where}.`, 1);
       remember(agent, state.tick, `I went to sleep ${where}.`);
       return;
     }
-    case 'rest':
+    case 'rest': {
       agent.action = {
         type: 'rest',
         until: state.tick + Math.min(600, Math.max(1, Math.round(intent.minutes))),
       };
+      // Resting at your own front door means resting inside (warm, sheltered, out of sight).
+      const home = agent.homeId ? cache.byId.get(agent.homeId) : undefined;
+      if (
+        home?.door &&
+        home.door.x === agent.x &&
+        home.door.y === agent.y &&
+        usable(state, home.id)
+      )
+        agent.indoorsId = home.id;
       return;
+    }
     case 'talk_to': {
       const other = state.agents.find((a) => a.id === intent.agentId);
       if (!other || other === agent)
@@ -720,6 +791,8 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       return lifeAction(ctx, agent, intent);
     case 'build_house':
       return startBuild(ctx, agent, arrived);
+    case 'tend':
+      return tendAction(ctx, agent, intent);
     case 'explore': {
       const target = pickExploreTarget(ctx, agent);
       if (!target) return fail(ctx, agent, "I couldn't find anywhere new to explore.");
@@ -826,7 +899,8 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
   if (o.kind === 'dock') {
     item = 'fish';
     const chance = 0.3 + agent.skills.fishing * 0.005 + (tools ? 0.15 : 0);
-    got = ctx.rng.chance(chance) ? 1 : 0;
+    const rough = conditionLevel(state, 'storm') >= 0.5;
+    got = !rough && ctx.rng.chance(chance) ? 1 : 0;
     train(agent, 'fishing', 0.2);
     observeWork(state, agent, 'fishing');
   } else {
@@ -855,7 +929,11 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
     remember(
       agent,
       state.tick,
-      o.kind === 'dock' ? 'I fished but caught nothing.' : `I found no ${label}.`,
+      o.kind !== 'dock'
+        ? `I found no ${label}.`
+        : conditionLevel(state, 'storm') >= 0.5
+          ? 'The river was too rough to fish in the storm.'
+          : 'I fished but caught nothing.',
     );
   }
 }
@@ -865,9 +943,19 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
 /** Update what the agent knows from what it can see right now. */
 export function look(state: WorldState, agent: Agent): void {
   if (!agent.alive || agent.asleep || agent.indoorsId) return;
-  const radius = isNight(state.tick) ? VISION_NIGHT : VISION_DAY;
+  const radius =
+    isNight(state.tick) || conditionLevel(state, 'storm') >= 0.5 ? VISION_NIGHT : VISION_DAY;
   for (const o of objectsNear(state.map, agent, radius)) {
     const r = state.resources[o.id];
+    const seenBefore = agent.knowledge[o.id]?.lastSeenTick ?? -1;
+    if (o.burntTick !== undefined && seenBefore >= 0 && seenBefore < o.burntTick) {
+      // Coming upon a building that burnt down while they were away.
+      const mine = agent.homeId === o.id || state.owners[o.id]?.includes(agent.id);
+      const name = o.name ?? OBJECT_LABELS[o.kind];
+      remember(agent, state.tick, `${mine ? 'My home' : name} has burnt down!`, mine ? 9 : 5);
+      if (mine && !agent.awaiting)
+        agent.awaiting = { kind: 'world_event', description: `${name} has burnt down.` };
+    }
     agent.knowledge[o.id] = {
       lastSeenTick: state.tick,
       lastSeenAmount: r ? Math.floor(r.amount) : undefined,
@@ -921,8 +1009,28 @@ export function approach(
   const dist = cheb(agent, other);
   if (dist <= range && !other.indoorsId) return true;
   if (other.indoorsId) {
-    fail(ctx, agent, `I wanted to ${verb} ${who}, but they are indoors.`);
-    return false;
+    // Knock at the door: someone awake inside comes out to answer.
+    const building = mapCache(ctx.state.map).byId.get(other.indoorsId);
+    if (other.asleep || !building?.door || other.age < 1) {
+      fail(
+        ctx,
+        agent,
+        `I wanted to ${verb} ${who}, but they are ${other.asleep ? 'asleep ' : ''}indoors.`,
+      );
+      return false;
+    }
+    if (cheb(agent, building.door) <= Math.max(1, range)) {
+      other.indoorsId = null;
+      remember(
+        other,
+        ctx.state.tick,
+        `${nameAsKnown(other, agent)} knocked at the door.`,
+        2,
+        'experience',
+        [agent.id],
+      );
+      return true;
+    }
   }
   if (dist > 60) {
     fail(ctx, agent, `${who} is too far away to reach.`);
@@ -1043,12 +1151,21 @@ function startCraft(
   const { map } = state;
   const recipe = RECIPES[intent.recipe];
   if (!recipe) return fail(ctx, agent, "I don't know how to make that.");
-  const workplaces = map.objects.filter((o) => o.kind === recipe.place);
+  const workplaces = map.objects.filter((o) => o.kind === recipe.place && usable(state, o.id));
   const here = workplaces.find((o) => isAt(agent, interactionTiles(map, o)));
   if (!here) {
     if (arrived) return fail(ctx, agent, `I couldn't get into the ${recipe.place}.`);
     const known = workplaces.filter((o) => agent.knowledge[o.id]);
-    if (known.length === 0) return fail(ctx, agent, `I don't know where a ${recipe.place} is.`);
+    if (known.length === 0) {
+      const ruined = map.objects.some((o) => o.kind === recipe.place && !usable(state, o.id));
+      return fail(
+        ctx,
+        agent,
+        ruined
+          ? `The ${recipe.place} can't be used — it needs rebuilding.`
+          : `I don't know where a ${recipe.place} is.`,
+      );
+    }
     walkTo(
       ctx,
       agent,
@@ -1555,8 +1672,12 @@ function findBuildSite(state: WorldState, near: Point): { x: number; y: number }
 function startBuild(ctx: Ctx, agent: Agent, arrived: boolean): void {
   const { state } = ctx;
   const { map } = state;
+  // Carry on with (or rebuild) a building of one's own before starting a new house.
   let site = map.objects.find(
-    (o) => o.kind === 'house' && (o.progress ?? 1) < 1 && state.owners[o.id]?.includes(agent.id),
+    (o) =>
+      (o.kind === 'house' || o.burntTick !== undefined) &&
+      (o.progress ?? 1) < 1 &&
+      state.owners[o.id]?.includes(agent.id),
   );
   if (!site) {
     if (agent.skills.building < 10)
@@ -1604,7 +1725,8 @@ function startBuild(ctx: Ctx, agent: Agent, arrived: boolean): void {
     emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4);
     remember(agent, state.tick, `I started building a house (${site.name}).`, 7);
   }
-  const tiles = [{ x: site.door!.x, y: site.door!.y + 1 }];
+  const door = site.door ?? { x: site.x + Math.floor(site.w / 2), y: site.y + site.h - 1 };
+  const tiles = [{ x: door.x, y: door.y + 1 }];
   if (!arrived && !isAt(agent, tiles)) {
     walkTo(ctx, agent, tiles, { type: 'build_house' }, site.name ?? 'the building site');
     return;
@@ -1633,6 +1755,12 @@ function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
   state.mapVersion += 1;
   if (site.progress >= 1) {
     delete site.progress;
+    if (site.burntTick !== undefined) {
+      delete site.burntTick;
+      emit(ctx, 'built', [agent.id], `${fullName(agent)} finished rebuilding ${site.name}!`, 5);
+      remember(agent, state.tick, `I rebuilt ${site.name} after the fire.`, 8);
+      return;
+    }
     const partner = agent.partnerId
       ? state.agents.find((a) => a.id === agent.partnerId)
       : undefined;
@@ -1640,7 +1768,7 @@ function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
       state.owners[site.id]!.push(partner.id);
     emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5);
     remember(agent, state.tick, `I finished building ${site.name}. It's mine.`, 8);
-    if (!agent.homeId) agent.homeId = site.id;
+    if (!agent.homeId && site.kind === 'house') agent.homeId = site.id;
   } else {
     remember(
       agent,

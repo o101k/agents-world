@@ -33,6 +33,9 @@ export type DecisionTrigger =
   | { kind: 'child_born'; childId: string; childLabel: string }
   | { kind: 'child_needs'; childId: string; childName: string; need: NeedName }
   | { kind: 'grew_up'; stage: LifeStage }
+  | { kind: 'reflect'; scope: 'day' | 'year' }
+  | { kind: 'unwell' }
+  | { kind: 'world_event'; description: string }
   | { kind: 'check_in' };
 
 export type ItemName =
@@ -148,7 +151,8 @@ export type Intent =
   | { type: 'respond_child_request'; fromId: string; accept: boolean }
   | { type: 'name_child'; childId: string; name: string }
   | { type: 'declare_will'; agentId: string }
-  | { type: 'build_house' };
+  | { type: 'build_house' }
+  | { type: 'tend'; agentId: string; tries?: number };
 
 export interface Decision {
   /** Inner monologue shown to the observer. */
@@ -160,6 +164,10 @@ export interface Decision {
   remember?: { text: string; importance: number };
   /** How the agent's feelings toward people changed (each −3…3). */
   feelings?: { agentId: string; affection?: number; trust?: number; romance?: number }[];
+  /** Nightly reflection: a diary entry (or, for a year, a life chapter) summarising what happened. */
+  diary?: string;
+  /** Nightly reflection: things the agent now believes (up to 3). */
+  beliefs?: string[];
 }
 
 export interface PerceivedAgent {
@@ -172,6 +180,10 @@ export interface PerceivedAgent {
 }
 
 export interface KnownPlace {
+  /** Seen burnt down (and not yet rebuilt). */
+  burnt?: boolean;
+  /** They recently couldn't find a way there. */
+  unreachable?: boolean;
   id: string;
   kind: MapObjectKind;
   name: string;
@@ -252,6 +264,16 @@ export interface Perception {
   language: number;
   /** Pending requests addressed to this agent (partnership, child). */
   requests: { kind: 'proposal' | 'child_request'; fromId: string; fromName: string }[];
+  /** What's going on around them that they can sense (weather, drought, sickness, fire). */
+  conditions: string[];
+  /** Feeling ill (and knows it). */
+  sick: boolean;
+  /** For reflection: the memories to look back over (today's, or this year's diary). */
+  reflectOn?: string[];
+  /** The latest chapters of their life story, in their own words (oldest first). */
+  lifeChapters?: string[];
+  /** Things they have come to believe. */
+  beliefs?: string[];
   /** Personality traits (0–100) for the prompt. */
   personality: Personality;
   /** The agent's thinking budget level. */
@@ -352,6 +374,7 @@ export const IntentSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('declare_will'), agentId: z.string() }),
   z.object({ type: z.literal('build_house') }),
+  z.object({ type: z.literal('tend'), agentId: z.string() }),
 ]);
 
 export const DecisionSchema = z.object({
@@ -370,6 +393,8 @@ export const DecisionSchema = z.object({
     )
     .max(10)
     .optional(),
+  diary: z.string().max(1500).optional(),
+  beliefs: z.array(z.string().max(300)).max(5).optional(),
 });
 
 /** Human-readable one-liner for an intent, e.g. for the inspector. */
@@ -431,5 +456,7 @@ export function describeIntent(intent: Intent, names: (id: string) => string = (
       return `Leave everything to ${names(intent.agentId)}`;
     case 'build_house':
       return 'Work on building a house';
+    case 'tend':
+      return `Tend to ${names(intent.agentId)}`;
   }
 }

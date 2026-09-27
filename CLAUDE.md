@@ -21,15 +21,15 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 
 ## Current status
 
-| Phase                         | Status  |
-| ----------------------------- | ------- |
-| 0 – Skeleton                  | Done    |
-| 1 – A world that runs (no AI) | Done    |
-| 2 – Minds                     | Done    |
-| 3 – Work, trade, money        | Done    |
-| 4 – Life cycle                | Done    |
-| 5 – A long life               | Next    |
-| 6 – Replay and scale          | Planned |
+| Phase                         | Status |
+| ----------------------------- | ------ |
+| 0 – Skeleton                  | Done   |
+| 1 – A world that runs (no AI) | Done   |
+| 2 – Minds                     | Done   |
+| 3 – Work, trade, money        | Done   |
+| 4 – Life cycle                | Done   |
+| 5 – A long life               | Done   |
+| 6 – Replay and scale          | Next   |
 
 ## Commands
 
@@ -282,7 +282,7 @@ teacher and a closer relationship).
 | **2 – Minds** ✅                     | Provider layer + key settings, per-agent model/effort + world default, request queue, world waits, cost tracking + cap, perception limits, thoughts/goals/plans, memory stream + recall, conversations + overhearing, mind inspector (incl. raw prompt/reply), spawn agent from description | Real AI villagers plan, talk, remember; read their minds; watch spending           |
 | **3 – Work, trade, money** ✅        | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
 | **4 – Life cycle** ✅                | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
-| **5 – A long life**                  | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
+| **5 – A long life** ✅               | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
 | **6 – Replay and scale**             | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
 
 ### Known risks
@@ -296,6 +296,31 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-09-27 — Phase 5 details.** (a) Memory strength starts at importance and each night keeps
+  `0.85 + 0.014 × importance`; importance ≥ 9 (core) and life chapters never fade; memories from
+  before age 3 keep 80% a night whatever they were. Below 1 a memory is forgotten (the observer
+  still sees the last 100 greyed out). Recalling a memory in a decision strengthens it (+0.5). The
+  active cap rises from 300 to the planned 500. (b) Reflection happens asleep at night, once per
+  night, only after a day with something worth remembering (saves calls); it's a separate prompt
+  and never changes the plan or wakes the person. Diary = memory of importance 6; beliefs at most 8.
+  (c) "Days → seasons → years" became **days → years**: with the default 4 in-game days per year a
+  day already is a season, so the nightly diary plays the season's role and the yearly chapter
+  (written the first night after a birthday, from age 4) folds that year's diary in. Every entry
+  is also a `reflected` event, so the history keeps them all. (d) Budget: Frugal people's nightly
+  diary is written by the free rulebook; their yearly chapter uses their AI. Feeling ill is an
+  instinct case too. (e) The "leanings" left by early childhood are the relationships (attachment)
+  and a nightly 2% drift of a child's temperament toward the adults raising them. (f) World events
+  as designed, plus: fire only targets houses, the bakery and the workshop (never the market or
+  well, which keep the economy bootstrapped); burnt buildings are ruins rebuilt with `build_house`
+  by an owner; fire doesn't spread in a storm. Disease numbers: 15% × intensity initially ill,
+  8% × intensity per 10 minutes within 2 tiles, 30 days' immunity; nursing = new `tend` action.
+  (g) New shelter rule: resting (not only sleeping) at your own door puts you indoors; visitors
+  knock and the person comes out. Needed so people can sit out a storm or an illness at home.
+  (h) Places a person couldn't find a way to are flagged for two days (the mock brain once starved
+  walking at an unreachable bush), and someone desperately hungry or thirsty can drag themselves up
+  from exhaustion (a collapse loop once killed a villager). (i) World state v6; upgrades now chain
+  version by version (a v3 save previously skipped the v4 upgrade).
 
 - **2026-09-27 — Process note.** Some scripted doc edits in Phases 1–3 silently failed after Prettier
   reformatted tables, leaving this status table and `docs/DESIGN.md` stale; both were rewritten at

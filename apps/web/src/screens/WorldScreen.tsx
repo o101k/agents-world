@@ -3,6 +3,7 @@ import {
   OBJECT_LABELS,
   TILE_NAMES,
   decodeMap,
+  formatClock,
   type MapObjectKind,
   type WorldMap,
   type WorldViewResponse,
@@ -14,6 +15,7 @@ import { BrainEditor } from '../components/BrainEditor.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
+import { ConditionsBar, WorldEventsDialog } from '../components/WorldEventsDialog.tsx';
 import { SpendMeter } from '../components/SpendMeter.tsx';
 import { TimeControls } from '../components/TimeControls.tsx';
 import { useSettings } from '../settingsStore.ts';
@@ -23,7 +25,7 @@ import { useApp } from '../store.ts';
 import { useWorld } from '../worldStore.ts';
 
 const OBJECT_BLURBS: Partial<Record<MapObjectKind, string>> = {
-  house: 'A family home. Shelter from cold and storms, and a place to sleep.',
+  house: 'A family home. Shelter from cold and storms; a place to sleep, rest and be ill in.',
   market: 'The town market buys and sells basic goods at prices driven by supply and demand.',
   well: 'Fresh drinking water for everyone.',
   field: 'Common farmland anyone may work. Crops grow back over time.',
@@ -47,6 +49,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const selection = useWorld((s) => s.selection);
   const capReached = useWorld((s) => s.runner.capReached);
   const [spawning, setSpawning] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
   /** Map version currently shown (to know when to reload). */
@@ -132,6 +135,13 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         {view && <SpendMeter worldId={worldId} />}
         <button
           className="btn btn-small"
+          onClick={() => setEventsOpen(true)}
+          title="Trigger a drought, storm, sickness, fire or bumper harvest"
+        >
+          ⚡ Events
+        </button>
+        <button
+          className="btn btn-small"
           onClick={() => setSpawning(true)}
           title="Bring a new person into the world"
         >
@@ -151,6 +161,10 @@ export function WorldScreen({ worldId }: { worldId: string }) {
           The spending cap is reached, so time is paused. Raise the cap (click the spending meter)
           or switch people to the free Mock brain, then press Play.
         </div>
+      )}
+      <ConditionsBar map={map} />
+      {eventsOpen && (
+        <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
       {spawning && (
         <SpawnDialog
@@ -363,6 +377,12 @@ function SelectionDetails({
           {object.w > 1 || object.h > 1 ? ` · ${object.w}×${object.h}` : ''}
         </div>
         {OBJECT_BLURBS[object.kind] && <p>{OBJECT_BLURBS[object.kind]}</p>}
+        {object.burntTick !== undefined && (
+          <p className="warn">
+            Burnt down {formatClock(object.burntTick)} — being rebuilt (
+            {Math.round((object.progress ?? 0) * 100)}%). Unusable until finished.
+          </p>
+        )}
         {owners?.length ? (
           <p>
             <strong>Owned by:</strong> {owners.join(', ')}

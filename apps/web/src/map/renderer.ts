@@ -15,6 +15,7 @@ import {
   objectContains,
   tickToClock,
   tileAt,
+  type ActiveCondition,
   type AgentView,
   type MapObject,
   type Point,
@@ -109,6 +110,11 @@ export class WorldRenderer {
   private readonly ground = new Container();
   private readonly objects = new Container({ sortableChildren: true });
   private readonly night = new Graphics();
+  /** Flames on burning buildings (world space, above objects). */
+  private readonly fires = new Graphics();
+  /** Falling rain in a storm (screen space). */
+  private readonly rain = new Graphics();
+  private conditions: ActiveCondition[] = [];
   private readonly hoverBox = new Graphics();
   private readonly selectBox = new Graphics();
   private readonly overlay = new Container();
@@ -163,8 +169,15 @@ export class WorldRenderer {
       ]),
     ) as Record<SpriteName, Texture>;
 
-    this.scene.addChild(this.ground, this.objects, this.night, this.hoverBox, this.selectBox);
-    this.app.stage.addChild(this.scene, this.overlay);
+    this.scene.addChild(
+      this.ground,
+      this.objects,
+      this.fires,
+      this.night,
+      this.hoverBox,
+      this.selectBox,
+    );
+    this.app.stage.addChild(this.scene, this.rain, this.overlay);
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(host);
@@ -187,6 +200,27 @@ export class WorldRenderer {
     this.tick = tick;
     this.drawNight();
     this.requestRender();
+  }
+
+  /** World events in progress: weather tints, rain, flames. */
+  setConditions(conditions: ActiveCondition[]): void {
+    this.conditions = conditions;
+    this.drawNight();
+    if (this.hasMotion()) this.startAnimating();
+    else {
+      this.fires.clear();
+      this.rain.clear();
+    }
+    this.requestRender();
+  }
+
+  private level(kind: ActiveCondition['kind']): number {
+    return this.conditions.reduce((m, c) => (c.kind === kind ? Math.max(m, c.intensity) : m), 0);
+  }
+
+  /** Storms and fires animate even when nobody moves. */
+  private hasMotion(): boolean {
+    return this.conditions.some((c) => c.kind === 'storm' || c.kind === 'fire');
   }
 
   setResources(changes: Record<string, number>): void {
@@ -383,7 +417,11 @@ export class WorldRenderer {
       const bottom = (o.y + o.h) * TILE_PX;
       s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
       s.zIndex = bottom;
-      if (o.progress !== undefined) {
+      if (o.burntTick !== undefined) {
+        // A burnt-out ruin, blackened until rebuilt.
+        s.alpha = 0.55 + 0.45 * (o.progress ?? 0);
+        s.tint = 0x5a4a40;
+      } else if (o.progress !== undefined) {
         // Under construction: fades in as the work progresses.
         s.alpha = 0.3 + 0.6 * o.progress;
         s.tint = 0xd8c8a8;
@@ -524,6 +562,8 @@ export class WorldRenderer {
     a.baseScale =
       v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
     const sleeping = v.activity === 'sleeping';
+    // The sick look pale and greenish.
+    a.sprite.tint = v.sick ? 0xb8e0a0 : 0xffffff;
     a.sprite.rotation = sleeping ? -Math.PI / 2 : 0;
     a.sprite.anchor.set(sleeping ? 0.5 : 0.5, sleeping ? 0.6 : 1);
   }
@@ -543,7 +583,7 @@ export class WorldRenderer {
       if (this.destroyed) return;
       const busy = this.animate(performance.now());
       this.app.render();
-      if (busy || this.followId) requestAnimationFrame(loop);
+      if (busy || this.followId || this.hasMotion()) requestAnimationFrame(loop);
       else this.animating = false;
     };
     requestAnimationFrame(loop);
@@ -589,7 +629,60 @@ export class WorldRenderer {
       }
     }
     this.drawSelection();
+    this.drawEffects(now);
     return busy;
+  }
+
+  /** Flickering flames on burning buildings and rain streaks in a storm. */
+  private drawEffects(now: number): void {
+    const f = this.fires.clear();
+    const r = this.rain.clear();
+    if (!this.map || this.conditions.length === 0) return;
+    for (const c of this.conditions) {
+      if (c.kind !== 'fire' || !c.targetId) continue;
+      const o = this.map.objects.find((x) => x.id === c.targetId);
+      if (!o) continue;
+      const left = o.x * TILE_PX;
+      const width = o.w * TILE_PX;
+      const base = (o.y + o.h) * TILE_PX - 4;
+      const top = (o.y - 1) * TILE_PX;
+      for (let i = 0; i < 7; i++) {
+        const phase = now / 110 + i * 1.7;
+        const x = left + ((i + 0.5) / 7) * width + Math.sin(phase) * 1.5;
+        const h = (base - top) * (0.45 + 0.35 * Math.abs(Math.sin(phase * 0.7 + i)));
+        const w = 3 + (i % 3);
+        f.moveTo(x - w, base)
+          .lineTo(x, base - h)
+          .lineTo(x + w, base)
+          .fill({ color: i % 2 ? 0xff7a1a : 0xffb52e, alpha: 0.85 });
+        f.moveTo(x - w / 2, base)
+          .lineTo(x, base - h * 0.55)
+          .lineTo(x + w / 2, base)
+          .fill({ color: 0xfff1a0, alpha: 0.9 });
+      }
+      // Smoke
+      for (let i = 0; i < 4; i++) {
+        const t = ((now / 1400 + i / 4) % 1) * 1;
+        f.circle(left + width / 2 + Math.sin(now / 600 + i) * 6, top - t * 30, 4 + t * 8).fill({
+          color: 0x3a3a3a,
+          alpha: 0.35 * (1 - t),
+        });
+      }
+    }
+    const storm = this.level('storm');
+    if (storm > 0) {
+      const { width, height } = this.screenSize();
+      const drops = Math.round(80 + 220 * storm);
+      const speed = now / 2.2;
+      for (let i = 0; i < drops; i++) {
+        const x = (hash(i, 7) % 10007) / 10007;
+        const y0 = (hash(i, 13) % 10007) / 10007;
+        const px = (x * (width + 60) - speed * 0.25 + 10000) % (width + 60);
+        const py = (y0 * (height + 40) + speed) % (height + 40);
+        r.moveTo(px, py - 20).lineTo(px - 4, py - 8);
+      }
+      r.stroke({ width: 1, color: 0xb8cce0, alpha: 0.35 + 0.25 * storm });
+    }
   }
 
   /** Speech bubble above a person while they're talking. */
@@ -687,10 +780,16 @@ export class WorldRenderer {
 
   private drawNight(): void {
     const g = this.night.clear();
-    const level = nightLevel(this.tick);
-    if (level <= 0 || !this.map) return;
+    if (!this.map) return;
     const { width, height } = this.worldSize();
-    g.rect(0, 0, width, height).fill({ color: 0x0b1640, alpha: 0.5 * level });
+    const level = nightLevel(this.tick);
+    if (level > 0) g.rect(0, 0, width, height).fill({ color: 0x0b1640, alpha: 0.5 * level });
+    // Weather: storms darken the sky; droughts bleach the land.
+    const storm = this.level('storm');
+    if (storm > 0) g.rect(0, 0, width, height).fill({ color: 0x1e2a3a, alpha: 0.2 + 0.3 * storm });
+    const drought = this.level('drought');
+    if (drought > 0)
+      g.rect(0, 0, width, height).fill({ color: 0xe0a848, alpha: 0.14 + 0.2 * drought });
   }
 
   private drawSelection(): void {

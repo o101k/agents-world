@@ -143,4 +143,45 @@ describe('HTTP API', () => {
     expect(agent.homeId).toBeNull();
     expect(agent.knownPlaces).toBeLessThan(10);
   });
+
+  it('triggers world events, searches the timeline and tells a life story', async () => {
+    const created = await app.server.inject({
+      method: 'POST',
+      url: '/api/worlds',
+      headers: HOST,
+      payload: { name: 'Events', seed: 'ev', mapSize: 'small' },
+    });
+    const id = created.json().world.id as string;
+    await app.server.inject({ method: 'POST', url: `/api/worlds/${id}/activate`, headers: HOST });
+    const bad = await app.server.inject({
+      method: 'POST',
+      url: `/api/worlds/${id}/world-event`,
+      headers: HOST,
+      payload: { kind: 'meteor' },
+    });
+    expect(bad.statusCode).toBe(400);
+    const ok = await app.server.inject({
+      method: 'POST',
+      url: `/api/worlds/${id}/world-event`,
+      headers: HOST,
+      payload: { kind: 'drought', intensity: 0.9, hours: 48 },
+    });
+    expect(ok.statusCode).toBe(200);
+    const view = (await app.server.inject({ url: `/api/worlds/${id}/view`, headers: HOST })).json();
+    expect(view.conditions).toEqual([expect.objectContaining({ kind: 'drought', intensity: 0.9 })]);
+    const found = (
+      await app.server.inject({ url: `/api/worlds/${id}/events?q=DROUGHT`, headers: HOST })
+    ).json().events;
+    expect(found.map((e: { kind: string }) => e.kind)).toEqual(['world_event']);
+    const none = (
+      await app.server.inject({ url: `/api/worlds/${id}/events?q=100%25_x`, headers: HOST })
+    ).json().events;
+    expect(none).toEqual([]);
+    const story = await app.server.inject({
+      url: `/api/worlds/${id}/agents/a1/story`,
+      headers: HOST,
+    });
+    expect(story.statusCode).toBe(200);
+    expect(Array.isArray(story.json().entries)).toBe(true);
+  });
 });

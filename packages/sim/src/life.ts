@@ -15,6 +15,7 @@ import {
 } from '@aw/shared';
 import { fullName, remember, type Agent, type PersonKnowledge } from './agent.ts';
 import { GREY_HAIR, HAIR_COLORS, PANTS_COLORS, SHIRT_COLORS, languageBaseline } from './cast.ts';
+import { usable } from './conditions.ts';
 import { approach, emit, fail, meet, type Ctx } from './engine.ts';
 import { nameAsKnown } from './perception.ts';
 import { mapCache } from './spatial.ts';
@@ -56,6 +57,7 @@ const ALL: IntentType[] = [
   'attack',
   'feed',
   'teach',
+  'tend',
   ...ADULT_ONLY,
 ];
 
@@ -242,7 +244,8 @@ export function lifeTick(ctx: Ctx, agent: Agent, ageStep: number): void {
     if (home?.door) {
       agent.x = home.door.x;
       agent.y = home.door.y;
-      agent.indoorsId = home.id;
+      // A burnt (or burning) home gives no shelter: the baby is outside on the doorstep.
+      agent.indoorsId = usable(state, home.id) ? home.id : null;
     }
     agent.action =
       agent.action?.type === 'sleep'

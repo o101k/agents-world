@@ -3,7 +3,7 @@
 A short technical design of what is built so far. The full plan, decisions and roadmap live in
 [`../CLAUDE.md`](../CLAUDE.md). Updated at the end of every phase.
 
-_Last updated: Phase 4._
+_Last updated: Phase 5._
 
 ## Processes
 
@@ -24,13 +24,13 @@ Browser tab (apps/web)  ──HTTP /api/* + WebSocket /ws──►  Local helper
 
 ## Packages and boundaries
 
-| Package      | Contents                                                                               | May import         |
-| ------------ | -------------------------------------------------------------------------------------- | ------------------ |
-| `@aw/shared` | Types for maps, agents, perceptions, decisions, events; wire protocol (Zod); constants | zod                |
-| `@aw/sim`    | Seeded RNG, map generator, world state, tick engine, perception, market, life cycle    | `@aw/shared`       |
-| `@aw/brain`  | Provider interface, router, prompts, decide-tool schema/parser, Mock brain, pricing    | `@aw/shared`, SDKs |
-| `@aw/server` | Config, settings/keys, world files, manager, runner, HTTP routes, WebSocket hub        | shared, sim, brain |
-| `@aw/web`    | React UI, PixiJS renderer, procedural pixel art                                        | `@aw/shared` only  |
+| Package      | Contents                                                                                                  | May import         |
+| ------------ | --------------------------------------------------------------------------------------------------------- | ------------------ |
+| `@aw/shared` | Types for maps, agents, perceptions, decisions, events; wire protocol (Zod); constants                    | zod                |
+| `@aw/sim`    | Seeded RNG, map generator, world state, tick engine, perception, market, life cycle, memory, world events | `@aw/shared`       |
+| `@aw/brain`  | Provider interface, router, prompts, decide-tool schema/parser, Mock brain, pricing                       | `@aw/shared`, SDKs |
+| `@aw/server` | Config, settings/keys, world files, manager, runner, HTTP routes, WebSocket hub                           | shared, sim, brain |
+| `@aw/web`    | React UI, PixiJS renderer, procedural pixel art                                                           | `@aw/shared` only  |
 
 ESLint enforces: the sim can't use `Math.random`, `Date`, `performance`, `fetch` or Node I/O; the
 UI can't import the sim, brain or server. A test checks the decide tool offers exactly the actions
@@ -41,46 +41,54 @@ the simulation understands.
 - All randomness in the sim comes from `Rng` (sfc32); its state is part of `WorldState`.
 - `step(state, inputs)` is the only way the world changes. Inputs are brain decisions (with their
   cost), decision timeouts and observer commands (`spawn_agent`, `set_brain`, `set_default_brain`,
-  `set_days_per_year`).
+  `set_days_per_year`, `world_event`).
 - The runner logs every input the moment it's queued (tagged with the tick it applies to), commits
   inputs + events + meta in one transaction per loop iteration, and writes a full snapshot every
   6 in-game hours and on pause/stop.
 - **Resume** = latest snapshot + replay of logged inputs up to the saved tick; inputs already logged
   for the next tick are re-queued and outstanding decisions re-asked. Tests check that crash-resume
   and stop/restart both match an uninterrupted run exactly.
-- World state has a version; older saves are upgraded on load (v1 → v5).
+- World state has a version; older saves are upgraded on load, step by step (v1 → v6).
 
 World file (SQLite, WAL, migrations via `PRAGMA user_version`): `meta`, `snapshots` (gzipped JSON,
 pruned to one per day after two days), `tick_inputs`, `events`, `llm_calls`.
 
-## World state (v5)
+## World state (v6)
 
 `seed, tick, rng, settings {daysPerYear, defaultBrain}, map {width, height, tiles, objects},
 agents[], resources{}, market {stock}, offers[], requests[], owners{}, nextAgentNum, nextOfferNum,
-mapVersion`. Agents are never removed (the dead stay for history and family trees).
+mapVersion, conditions[], nextConditionNum`. Agents are never removed (the dead stay for history
+and family trees). Map objects may carry `progress` (being built or rebuilt) and `burntTick`.
 
 An **agent** holds identity (name, family name, sex, age in years), appearance, personality (Big
 Five), traits, background, occupation, home, position, needs, health, inventory, money, skills,
 knowledge (places seen, last-seen amounts, market prices seen), people (relationships), memory
 (recent + long-term stream), brain config, current thought/goal/plan/action, family links,
-aptitude, constitution, pregnancy, will.
+aptitude, constitution, pregnancy, will, sickness and immunity, the forgotten list, and the day of
+the last reflection and age of the last life chapter.
 
 ## The tick engine (`packages/sim/src/engine.ts`)
 
 1. Apply inputs. Decisions are validated with `IntentSchema`; bad steps are dropped. A decision
-   replaces the plan, records spending, applies reported feelings and "remember" notes.
+   replaces the plan, records spending, applies reported feelings and "remember" notes, and
+   refreshes the memories it recalled. A **reflection** (answer to a `reflect` request) changes only
+   the mind: diary/chapter, beliefs, feelings, maybe the goal — the body keeps sleeping.
+   Then world conditions advance (`conditionsTick`: endings, fires burning down, contagion).
 2. Hourly: resources regrow (bushes, fields; chopped trees until full), offers/requests expire.
    Daily: the market drifts toward normal stock; a "new day" event.
 3. For each living person: age += 1/(1440 × daysPerYear); needs decay (babies, the pregnant and the
    old differ); health suffers at 0 and recovers with constitution; death at health 0; sleep and
-   waking; `lifeTick` (below); the current action advances (walking one tile per tick — half speed
+   waking; the course of an illness (`sicknessTick`); `lifeTick` (below); `memoryTick` (fading at
+   03:00, children's temperament drifting toward their carers, and the night's reflection request);
+   the current action advances (walking one tile per tick — half speed
    for toddlers and the very old — gathering, chopping, crafting, building, eating, drinking); the
    next plan step starts; decision points are raised.
 4. Every 5 ticks each awake person looks around (8 tiles by day, 4 at night) and updates knowledge.
 
 Decision points: spawned, woke up, plan done, action failed, urgent need (once per dip), spoken to,
 trade offer / answer, robbed, attacked, proposal / answer, separated, child request, child born,
-child needs feeding, grew up, and a check-in (8 h / 4 h / 3 h by effort). Repeated failures pause
+child needs feeding, grew up, felt ill, a world event they witnessed (storm, fire, their home found
+burnt), the night's reflection, and a check-in (8 h / 4 h / 3 h by effort). Repeated failures pause
 the person (5 min × streak, max 60) before deciding again, so a confused brain can't loop.
 
 ## Perception — no omniscience (`packages/sim/src/perception.ts`)
@@ -89,10 +97,59 @@ A person's `Perception` has only: their body, bag, money and position; where the
 sight (strangers described by looks until introduced); places they've seen (with food seen there,
 crop, owner); prices they saw at the market; recent experiences; recalled memories; people they
 know and how they feel about them; family (children's needs only when with them); open offers and
-requests; their stage, what they can do, language ability; the unfinished plan.
+requests; their stage, what they can do, language ability; the unfinished plan; the conditions
+they can sense (storm, drought, dry river, fire in sight, sickness going around); whether they're
+ill; their latest life chapters and beliefs; for a reflection, the material to look back on.
+Places they couldn't reach recently are flagged, so nobody keeps walking into a wall.
 
-Memory recall ranks the long-term stream by importance + recency + relevance (people present,
-the speaker, words from the goal): 6 / 12 / 20 memories by effort. The stream is capped at 300.
+Memory recall ranks the long-term stream by vividness (strength) + recency + relevance (people
+present, the speaker, words from the goal): 6 / 12 / 20 memories by effort.
+
+## Memory over a long life (`packages/sim/src/memory.ts`)
+
+- Every memory has a **strength** (starts at its importance, 1–10). Each night at 03:00 it keeps
+  `0.85 + 0.014 × importance` of it (importance 2 fades in ~5 nights, 5 in ~19, 8 in ~50); core
+  memories (importance ≥ 9) and life chapters never fade. Memories formed before age 3 keep only
+  80% a night whatever they were (childhood amnesia). Recalling a memory for a decision adds 0.5.
+- Below strength 1 a memory is **forgotten**: gone from the mind (and prompts), kept in a capped
+  list of 100 for the observer. The active stream is capped at 500 (the faintest go first).
+- **Reflection**: asleep between 21:00 and 05:00, anyone 3+ who had a noteworthy day is asked to
+  reflect once per night. They write a **diary** entry (stored as a memory of importance 6) and up
+  to 3 **beliefs** (at most 8 kept; the oldest give way). On the first night after a birthday
+  (age 4+) the reflection is a **life chapter** for that year instead ("My 35th year: …",
+  importance 9); that year's diary entries are folded into it. Every diary entry and chapter is
+  also a `reflected` event in the world history, so nothing is lost for the observer.
+- Frugal people's nightly diary is written by the free rulebook (instinct); their yearly chapter,
+  and every reflection of Standard/Deep people, goes to their AI.
+- Children 1–12 drift 2% a night toward the temperament of the adults raising them.
+
+## World events (`packages/sim/src/conditions.ts`)
+
+Observer command `world_event {kind, intensity 0.1–1, hours, targetId?}` → an entry in
+`state.conditions` (shown to viewers) with an end tick.
+
+- **Drought**: regrowth × (1 − 0.9 × intensity); outdoor daytime thirst +30% × intensity; at ≥ 0.5
+  the river can't be drunk from (only wells).
+- **Storm**: outdoors there is no sun warmth and −12 × intensity warmth an hour, energy drains
+  faster, sight shrinks to 4 tiles and fishing is impossible (≥ 0.5). Sleepers outside are woken;
+  people outside get a decision point. Fires don't spread during a storm.
+- **Sickness**: max(1, 15% × intensity of the living) fall ill (or a chosen person). Every 10
+  minutes anyone within 2 tiles of a sick person (or indoors with them) may catch it
+  (8% × intensity ÷ constitution; ×1.3 for under-3s and over-65s). Symptoms show after 3 hours.
+- **Fire**: a house, bakery or workshop burns for an hour. People inside are woken, driven out and
+  hurt; at the end it is a ruin (`burntTick`, progress 0.3) until rebuilt with `build_house`.
+  Buildings within 3 tiles may catch (25% × intensity).
+- **Bumper harvest**: every field and bush is filled at once; regrowth doubles while it lasts.
+
+Illness: severity 0.3–0.8 by intensity (×1.25 for the frail) falls by 0.02 × constitution an hour
+(×2 asleep, ×0.6 for the very young and old) and rises when food, water or warmth are low; health
+drops 2.5 × severity an hour and doesn't heal while ill; severity 0 → recovered and immune for 30
+days. `tend` (nurse): −0.1 × (0.5 + caregiving/100) severity and +8 health, once an hour per
+patient. Deaths while ill are recorded as "illness".
+
+Shelter: resting (not just sleeping) at your own front door puts you indoors (warm, out of sight);
+visitors knock and the person comes out. Burnt or burning buildings give no shelter and can't be
+worked in.
 
 ## Work, trade and conflict
 
@@ -131,13 +188,17 @@ the speaker, words from the goal): 6 / 12 / 20 memories by effort. The stream is
   `output_config.effort` only on models that take it), `OpenAIProvider` (official SDK for OpenAI
   and any OpenAI-compatible base URL; named function call; `reasoning_effort` on reasoning models),
   and `MockBrain` (a free rulebook over the perception — work by occupation, trade, family care,
+  nursing the sick, sheltering from storms, rebuilding after a fire, a plain nightly diary,
   courtship, conflict responses).
 - `prompt.ts`: stage-aware system prompt (identity, temperament, how life works, allowed actions)
-  and a user message with everything in the perception.
+  and a user message with everything in the perception; at night a separate **reflection** message
+  (the day's or year's memories, life so far, beliefs, people) asking for `diary` and `beliefs`.
 - `schema.ts`: one flat `decide` tool (`action`, `target`, item/quantity/coins, recipe, trade
-  fields, offer id, accept, skill, name; plus `feelings` and `remember`), parsed to typed intents.
+  fields, offer id, accept, skill, name; plus `feelings`, `remember`, `diary` and `beliefs`),
+  parsed to typed intents (a reflection never carries a plan).
 - `router.ts`: per-provider concurrency (6 hosted, 2 local), timeout, Mock fallback for providers
-  without keys, **instinct** for Frugal people's routine needs, errors/refusals → a short pause.
+  without keys, **instinct** for Frugal people's routine needs (and feeling ill, and the nightly
+  diary), errors/refusals → a short pause.
 - `pricing.ts`: default Claude prices; editable table; unknown models at a pessimistic $3/$15.
 - `person.ts`: turns an observer's description into a person (AI or offline).
 
@@ -158,7 +219,7 @@ the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event
 | POST   | `/api/worlds/:id/activate`              | make it the active (running) world                                 |
 | GET    | `/api/worlds/:id/view`                  | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
 | POST   | `/api/worlds/:id/control`               | `{ running?, speed? }`                                             |
-| GET    | `/api/worlds/:id/events`                | `?limit&beforeId&agentId&minImportance` → `{ events }`             |
+| GET    | `/api/worlds/:id/events`                | `?limit&beforeId&agentId&minImportance&q` → `{ events }`           |
 | GET    | `/api/worlds/:id/agents/:agentId`       | inspector detail                                                   |
 | PUT    | `/api/worlds/:id/agents/:agentId/brain` | set a person's brain                                               |
 | GET    | `/api/worlds/:id/agents/:agentId/calls` | recent AI exchanges                                                |
@@ -168,6 +229,8 @@ the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event
 | PUT    | `/api/worlds/:id/aging`                 | `{ daysPerYear }`                                                  |
 | GET    | `/api/worlds/:id/market`                | `{ stock, quotes, moneySupply }`                                   |
 | POST   | `/api/worlds/:id/spawn`                 | `{ description, name?, sex?, age? }` → `{ agentId }`               |
+| POST   | `/api/worlds/:id/world-event`           | `{ kind, intensity?, hours?, targetId? }`                          |
+| GET    | `/api/worlds/:id/agents/:agentId/story` | `{ entries }`: their events + diary/chapters, oldest first         |
 | DELETE | `/api/worlds/:id`                       | delete permanently                                                 |
 | GET    | `/api/settings`                         | providers (no keys), prices, data folder                           |
 | PUT    | `/api/settings/providers/:id`           | `{ apiKey?, baseUrl?, defaultModel? }`                             |
@@ -175,7 +238,7 @@ the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event
 | GET    | `/api/providers/:id/models`             | model list (doubles as a connection test)                          |
 
 WebSocket `/ws` pushes `hello`, `worlds_changed`, `frame` (tick, runner status incl. spending,
-agent views, changed resources, map version) and `events`. There is deliberately no endpoint that
+agent views, changed resources, map version, active conditions) and `events`. There is deliberately no endpoint that
 sets an agent's state or decisions; changing someone's brain changes how they think, not what they
 decide.
 
@@ -186,6 +249,8 @@ decide.
 - `renderer.ts` (PixiJS v8): ground in 32×32-tile chunks with cull areas; objects and people in one
   depth-sorted layer; people tween between frames; children drawn smaller; sleepers lie down;
   babies and indoor sleepers hidden; the dead become gravestones; half-built houses fade in; speech
-  bubbles, name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. It
-  animates only while something moves.
+  bubbles, name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. Weather:
+  storms darken the map and draw falling rain (screen space); droughts give a hot, bleached tint;
+  burning buildings get flickering flames and smoke; ruins are drawn blackened; the sick look pale
+  green. It animates only while something moves (or burns, or rains).
 - `camera.ts`: pure camera maths (tested).

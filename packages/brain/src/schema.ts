@@ -40,6 +40,7 @@ export const ACTIONS = [
   'name_child',
   'declare_will',
   'build_house',
+  'tend',
 ] as const;
 
 /**
@@ -122,6 +123,17 @@ export const DECIDE_SCHEMA = {
         'Optional: something you want to remember for later, and how important it is (1–10).',
       properties: { text: { type: 'string' }, importance: { type: 'integer' } },
       required: ['text', 'importance'],
+    },
+    diary: {
+      type: 'string',
+      description:
+        'Only when asked to reflect at night: your diary entry (first person, in your own voice).',
+    },
+    beliefs: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Only when reflecting: up to 3 short things you now believe (about people, the village, life).',
     },
   },
   required: ['thought', 'goal', 'plan'],
@@ -320,10 +332,25 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
       case 'build_house':
         plan.push({ type: 'build_house' });
         break;
+      case 'tend':
+        if (target) plan.push({ type: 'tend', agentId: target });
+        break;
     }
   }
-  if (plan.length === 0) plan.push({ type: 'rest', minutes: 20 });
+  const reflecting = perception.trigger.kind === 'reflect';
+  if (reflecting)
+    plan.length = 0; // a night's reflection changes the mind, not the body
+  else if (plan.length === 0) plan.push({ type: 'rest', minutes: 20 });
   const decision: Decision = { thought, goal, plan };
+  if (typeof obj.diary === 'string' && obj.diary.trim())
+    decision.diary = obj.diary.trim().slice(0, 1500);
+  if (Array.isArray(obj.beliefs)) {
+    const beliefs = (obj.beliefs as unknown[])
+      .filter((b): b is string => typeof b === 'string' && b.trim().length > 0)
+      .slice(0, 3)
+      .map((b) => b.trim().slice(0, 300));
+    if (beliefs.length) decision.beliefs = beliefs;
+  }
   if (Array.isArray(obj.feelings)) {
     decision.feelings = (obj.feelings as Record<string, unknown>[])
       .filter((f) => f && typeof f.target === 'string')

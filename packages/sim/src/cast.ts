@@ -179,6 +179,11 @@ export function createAgent(
     named: true,
     lastStage: stageOf(spec.age),
     lastChildTry: -1e9,
+    forgotten: [],
+    lastReflectDay: -1,
+    lastChapterAge: Math.floor(spec.age),
+    sickness: null,
+    immuneUntil: 0,
   };
 }
 
