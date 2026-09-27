@@ -1,8 +1,10 @@
 name: CI
 
+# Pushes to master, and every pull request (so a branch with an open PR runs once per push,
+# not twice). Can also be started by hand from the Actions tab.
 on:
   push:
-    branches: ['**']
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -25,9 +27,9 @@ jobs:
         # Linux for speed, macOS because that's where the game is played.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -56,9 +58,9 @@ jobs:
     needs: check
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -74,7 +76,7 @@ jobs:
 
       - name: Keep the test report when something fails
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |

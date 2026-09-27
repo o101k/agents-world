@@ -300,7 +300,8 @@ teacher and a closer relationship).
 Newest first. Record every change to an agreed decision here.
 
 - **2026-09-27 — Tests and CI (owner request).** GitHub Actions workflow `.github/workflows/ci.yml`
-  on every push and PR: format check, typecheck, lint and all Vitest tests on Ubuntu and macOS
+  on pushes to `master` and every PR (not every branch push, which ran everything twice for a
+  branch with an open PR): format check, typecheck, lint and all Vitest tests on Ubuntu and macOS
   (the owner plays on a Mac, and the SQLite driver is native), a small stress run, then Playwright
   end-to-end on Ubuntu (report uploaded on failure). New simple tests: the helper end to end over a
   real port (HTTP + WebSocket, restart and resume, replay, observer powers, the origin guard),
