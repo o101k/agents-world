@@ -58,7 +58,7 @@ test('time runs, villagers live, and the world resumes where it was', async ({ p
 
   // Everyone in the sample cast is listed.
   await page.getByRole('tab', { name: 'People' }).click();
-  await expect(page.locator('.person-row')).toHaveCount(8);
+  await expect(page.locator('.person-row')).toHaveCount(11);
 
   // Run fast for a moment.
   await page.getByRole('button', { name: '200×' }).click();
@@ -102,6 +102,6 @@ test('observer powers: spawn a person and set up AI settings', async ({ page }) 
   await page.getByRole('button', { name: 'Spawn', exact: true }).click();
   await expect(page.locator('.inspector')).toContainText('Hob');
   await page.getByRole('tab', { name: 'People' }).click();
-  await expect(page.locator('.person-row')).toHaveCount(9);
+  await expect(page.locator('.person-row')).toHaveCount(12);
   await expect(page.locator('.spend-meter')).toContainText('$0');
 });

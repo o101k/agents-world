@@ -3,7 +3,16 @@
  * The sim builds a Perception (only what this agent senses and knows) and asks for a Decision.
  */
 import { z } from 'zod';
-import type { EffortLevel, NeedName, Needs, Personality, Sex } from './agent.ts';
+import type {
+  EffortLevel,
+  FamilyRole,
+  LifeStage,
+  NeedName,
+  Needs,
+  Personality,
+  Sex,
+  SkillName,
+} from './agent.ts';
 import type { MapObjectKind, Point } from './map.ts';
 
 export type DecisionTrigger =
@@ -17,6 +26,13 @@ export type DecisionTrigger =
   | { kind: 'offer_answered'; offerId: string; byName: string; accepted: boolean }
   | { kind: 'robbed'; byId: string | null; byName: string; what: string }
   | { kind: 'attacked'; byId: string; byName: string }
+  | { kind: 'proposal'; fromId: string; fromName: string }
+  | { kind: 'proposal_answered'; byName: string; accepted: boolean }
+  | { kind: 'partnership_ended'; byName: string }
+  | { kind: 'child_request'; fromId: string; fromName: string }
+  | { kind: 'child_born'; childId: string; childLabel: string }
+  | { kind: 'child_needs'; childId: string; childName: string; need: NeedName }
+  | { kind: 'grew_up'; stage: LifeStage }
   | { kind: 'check_in' };
 
 export type ItemName =
@@ -42,6 +58,7 @@ export const ITEMS: Record<ItemName, ItemInfo> = {
 };
 export const ITEM_NAMES = Object.keys(ITEMS) as ItemName[];
 export const FOOD_ITEMS = ITEM_NAMES.filter((i) => ITEMS[i].nutrition > 0);
+export const isFoodItem = (i: ItemName): boolean => (ITEMS[i]?.nutrition ?? 0) > 0;
 export const ITEM_LABELS = Object.fromEntries(ITEM_NAMES.map((i) => [i, ITEMS[i].label])) as Record<
   ItemName,
   string
@@ -121,7 +138,17 @@ export type Intent =
   | { type: 'offer_trade'; agentId: string; give: Bundle; ask: Bundle; tries?: number }
   | { type: 'respond_offer'; offerId: string; accept: boolean; tries?: number }
   | { type: 'steal'; agentId: string; item?: ItemName; tries?: number }
-  | { type: 'attack'; agentId: string; tries?: number };
+  | { type: 'attack'; agentId: string; tries?: number }
+  | { type: 'feed'; agentId: string; item: ItemName; tries?: number }
+  | { type: 'teach'; agentId: string; skill: SkillName; tries?: number }
+  | { type: 'propose_partnership'; agentId: string; tries?: number }
+  | { type: 'respond_proposal'; fromId: string; accept: boolean }
+  | { type: 'end_partnership' }
+  | { type: 'try_for_child'; agentId: string; tries?: number }
+  | { type: 'respond_child_request'; fromId: string; accept: boolean }
+  | { type: 'name_child'; childId: string; name: string }
+  | { type: 'declare_will'; agentId: string }
+  | { type: 'build_house' };
 
 export interface Decision {
   /** Inner monologue shown to the observer. */
@@ -131,6 +158,8 @@ export interface Decision {
   plan: Intent[];
   /** Something the agent wants to remember, with importance 1–10. */
   remember?: { text: string; importance: number };
+  /** How the agent's feelings toward people changed (each −3…3). */
+  feelings?: { agentId: string; affection?: number; trust?: number; romance?: number }[];
 }
 
 export interface PerceivedAgent {
@@ -198,8 +227,31 @@ export interface Perception {
   recent: string[];
   /** Older memories that come to mind now (most relevant first). */
   memories: string[];
-  /** People this agent knows by name, with how well. */
-  knownPeople: { id: string; name: string; familiarity: number; lastSeenTick: number }[];
+  /** People this agent knows by name, with how they feel about them. */
+  knownPeople: {
+    id: string;
+    name: string;
+    familiarity: number;
+    affection: number;
+    trust: number;
+    romance: number;
+    role?: FamilyRole;
+    lastSeenTick: number;
+  }[];
+  /** Life stage, what the body can do, and family. */
+  stage: LifeStage;
+  canDo: Intent['type'][];
+  family: {
+    partner: { id: string; name: string } | null;
+    children: { id: string; name: string; age: number; nearby: boolean; needs?: Needs }[];
+    parents: { id: string; name: string; alive: boolean }[];
+  };
+  /** Pregnant, and knows it. */
+  pregnant: boolean;
+  /** Language ability 0–100 (shapes how they speak and understand). */
+  language: number;
+  /** Pending requests addressed to this agent (partnership, child). */
+  requests: { kind: 'proposal' | 'child_request'; fromId: string; fromName: string }[];
   /** Personality traits (0–100) for the prompt. */
   personality: Personality;
   /** The agent's thinking budget level. */
@@ -273,6 +325,33 @@ export const IntentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('respond_offer'), offerId: z.string(), accept: z.boolean() }),
   z.object({ type: z.literal('steal'), agentId: z.string(), item: ItemSchema.optional() }),
   z.object({ type: z.literal('attack'), agentId: z.string() }),
+  z.object({ type: z.literal('feed'), agentId: z.string(), item: ItemSchema }),
+  z.object({
+    type: z.literal('teach'),
+    agentId: z.string(),
+    skill: z.enum([
+      'foraging',
+      'fishing',
+      'farming',
+      'cooking',
+      'building',
+      'trading',
+      'caregiving',
+      'language',
+    ]),
+  }),
+  z.object({ type: z.literal('propose_partnership'), agentId: z.string() }),
+  z.object({ type: z.literal('respond_proposal'), fromId: z.string(), accept: z.boolean() }),
+  z.object({ type: z.literal('end_partnership') }),
+  z.object({ type: z.literal('try_for_child'), agentId: z.string() }),
+  z.object({ type: z.literal('respond_child_request'), fromId: z.string(), accept: z.boolean() }),
+  z.object({
+    type: z.literal('name_child'),
+    childId: z.string(),
+    name: z.string().trim().min(1).max(40),
+  }),
+  z.object({ type: z.literal('declare_will'), agentId: z.string() }),
+  z.object({ type: z.literal('build_house') }),
 ]);
 
 export const DecisionSchema = z.object({
@@ -280,6 +359,17 @@ export const DecisionSchema = z.object({
   goal: z.string().max(300).default(''),
   plan: z.array(z.unknown()).max(20).default([]),
   remember: z.object({ text: z.string().max(500), importance: z.number() }).optional(),
+  feelings: z
+    .array(
+      z.object({
+        agentId: z.string(),
+        affection: z.number().optional(),
+        trust: z.number().optional(),
+        romance: z.number().optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
 });
 
 /** Human-readable one-liner for an intent, e.g. for the inspector. */
@@ -321,5 +411,25 @@ export function describeIntent(intent: Intent, names: (id: string) => string = (
       return `Steal ${intent.item ?? 'coins'} from ${names(intent.agentId)}`;
     case 'attack':
       return `Attack ${names(intent.agentId)}`;
+    case 'feed':
+      return `Feed ${names(intent.agentId)} ${intent.item}`;
+    case 'teach':
+      return `Teach ${names(intent.agentId)} ${intent.skill}`;
+    case 'propose_partnership':
+      return `Ask ${names(intent.agentId)} to be partners`;
+    case 'respond_proposal':
+      return `${intent.accept ? 'Accept' : 'Refuse'} ${names(intent.fromId)}'s proposal`;
+    case 'end_partnership':
+      return 'End the partnership';
+    case 'try_for_child':
+      return `Ask ${names(intent.agentId)} to try for a child`;
+    case 'respond_child_request':
+      return `${intent.accept ? 'Agree' : 'Decline'} to try for a child with ${names(intent.fromId)}`;
+    case 'name_child':
+      return `Name the baby ${intent.name}`;
+    case 'declare_will':
+      return `Leave everything to ${names(intent.agentId)}`;
+    case 'build_house':
+      return 'Work on building a house';
   }
 }

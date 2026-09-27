@@ -7,6 +7,7 @@ import {
   OBJECT_LABELS,
   TICKS_PER_DAY,
   TICKS_PER_HOUR,
+  Tile,
   tickToClock,
   type BrainConfig,
   type Decision,
@@ -25,11 +26,31 @@ import { NUTRITION, isFood } from './items.ts';
 import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
 import { findPathToAny } from './pathfinding.ts';
 import { buildPerception, nameAsKnown } from './perception.ts';
+import {
+  applyFeelings,
+  autoName,
+  canDo,
+  expireRequests,
+  feel,
+  garble,
+  hearSpeech,
+  lifeAction,
+  lifeTick,
+  mournDeath,
+  observeWork,
+  relation,
+  settleEstate,
+  simplifySpeech,
+  tooYoung,
+  train,
+  walksSlowly,
+} from './life.ts';
 import { addAgent } from './population.ts';
 import type { Rng } from './rng.ts';
 import {
   distanceToObject,
   interactionTiles,
+  invalidateMapCaches,
   isAt,
   isDrinkSpot,
   isWalkable,
@@ -84,11 +105,15 @@ const RECOVERED = 50;
 export const VISION_DAY = 8;
 export const VISION_NIGHT = 4;
 
-interface Ctx {
+/** Everything one tick's rules share. Exported for the life-cycle module. */
+export interface Ctx {
   state: WorldState;
   rng: Rng;
   events: WorldEvent[];
   changed: Set<string>;
+  die: (agent: Agent, cause?: string) => void;
+  addPerson: (spec: AgentSpec) => Agent;
+  walkTo: (agent: Agent, goals: Point[], then: Intent | null, what: string) => boolean;
 }
 
 export function isNight(tick: number): boolean {
@@ -104,7 +129,15 @@ function isTwilight(tick: number): boolean {
 /** Advance the world by one tick. Mutates `state`. Pure apart from that: same inputs, same result. */
 export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
   state.tick += 1;
-  const ctx: Ctx = { state, rng: undefined as unknown as Rng, events: [], changed: new Set() };
+  const ctx: Ctx = {
+    state,
+    rng: undefined as unknown as Rng,
+    events: [],
+    changed: new Set(),
+    die: (agent, cause) => die(ctx, agent, cause),
+    addPerson: (spec) => addAgent(state, spec, ctx.rng),
+    walkTo: (agent, goals, then, what) => walkTo(ctx, agent, goals, then, what),
+  };
   withRng(state, (rng) => {
     ctx.rng = rng;
     for (const input of inputs) applyInput(ctx, input);
@@ -121,6 +154,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
     if (state.tick % H === 0) {
       regrowResources(ctx);
       expireOffers(ctx);
+      expireRequests(state);
     }
     if (state.tick % TICKS_PER_DAY === 0) driftMarket(state.market);
     const ageStep = 1 / (TICKS_PER_DAY * state.settings.daysPerYear);
@@ -131,6 +165,9 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       if (agent.speech && state.tick >= agent.speech.until) agent.speech = null;
       updateBody(ctx, agent);
       if (!agent.alive) continue;
+      lifeTick(ctx, agent, ageStep);
+      if (!agent.alive) continue;
+      if (!agent.named) autoName(ctx, agent);
       if (!agent.asleep) {
         progressAction(ctx, agent);
         maybeNeedDecision(ctx, agent);
@@ -155,7 +192,7 @@ export function pendingRequests(state: WorldState): DecisionRequest[] {
   return out;
 }
 
-function emit(
+export function emit(
   ctx: Ctx,
   kind: WorldEvent['kind'],
   actors: string[],
@@ -194,6 +231,8 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       agent.nextCheckIn = state.tick + checkInFor(agent);
       agent.decisions += 1;
       agent.spentUsd += Math.max(0, input.usage?.costUsd ?? 0);
+      if (Array.isArray(input.decision.feelings))
+        applyFeelings(state, agent, input.decision.feelings);
       const note = input.decision.remember;
       if (note?.text)
         remember(
@@ -271,14 +310,20 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   const indoors = agent.indoorsId !== null;
   const night = isNight(state.tick);
 
-  n.food = clamp(n.food - (asleep ? RATES.foodAsleep : RATES.foodAwake) / H);
-  n.water = clamp(n.water - (asleep ? RATES.waterAsleep : RATES.waterAwake) / H);
+  // Babies need feeding every few hours (milk covers both food and water); the old tire faster.
+  const infant = agent.age < 1;
+  const pregnant = agent.pregnancy ? 1.25 : 1;
+  n.food = clamp(
+    n.food - ((infant ? 3 : asleep ? RATES.foodAsleep : RATES.foodAwake) * pregnant) / H,
+  );
+  n.water = clamp(n.water - (infant ? 3 : asleep ? RATES.waterAsleep : RATES.waterAwake) / H);
   if (asleep) {
     n.energy = clamp(
       n.energy + (indoors ? RATES.energySleepIndoors : RATES.energySleepOutdoors) / H,
     );
   } else {
-    n.energy = clamp(n.energy - RATES.energyAwake / H);
+    const tiring = agent.age < 3 ? 1.6 : agent.age >= 70 ? 1.25 : 1;
+    n.energy = clamp(n.energy - (RATES.energyAwake * tiring) / H);
   }
   if (indoors || (!night && !isTwilight(state.tick)))
     n.warmth = clamp(n.warmth + RATES.warmIndoors / H);
@@ -295,7 +340,7 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     if (n[k] > 0 && n[k] < 10) damage += 0.5;
   if (damage > 0) agent.health = clamp(agent.health - damage / H);
   else if (n.food >= 30 && n.water >= 30 && n.warmth >= 30)
-    agent.health = clamp(agent.health + (asleep ? 3 : 1.5) / H);
+    agent.health = clamp(agent.health + ((asleep ? 3 : 1.5) * (agent.constitution ?? 1)) / H);
 
   if (agent.health <= 0) {
     die(ctx, agent);
@@ -354,13 +399,16 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
     `${fullName(agent)} died of ${cause}, aged ${Math.floor(agent.age)}.`,
     5,
   );
+  mournDeath(ctx, agent);
+  settleEstate(ctx, agent);
 }
 
 function wake(ctx: Ctx, agent: Agent, requestDecision: boolean): void {
   agent.asleep = false;
   agent.indoorsId = null;
   agent.action = null;
-  agent.alerted = {};
+  // Fresh eyes on urgent needs after sleep, but keep "starving"/"crying" alerts until they recover.
+  for (const k of ['food', 'water', 'energy', 'warmth']) delete agent.alerted[k];
   emit(ctx, 'woke_up', [agent.id], `${fullName(agent)} woke up.`, 1);
   if (requestDecision) {
     agent.plan = [];
@@ -420,7 +468,7 @@ const SUCCESS_EVENTS = new Set([
   'offer',
 ]);
 
-function fail(ctx: Ctx, agent: Agent, reason: string): void {
+export function fail(ctx: Ctx, agent: Agent, reason: string): void {
   agent.plan = [];
   agent.action = null;
   remember(agent, ctx.state.tick, reason, 2);
@@ -456,6 +504,7 @@ function progressAction(ctx: Ctx, agent: Agent): void {
         return;
       }
       if (!isWalkable(state.map, next.x, next.y)) return fail(ctx, agent, 'My way was blocked.');
+      if (walksSlowly(agent) && state.tick % 2 === 1) return;
       agent.facing = facingTo(agent, next);
       agent.x = next.x;
       agent.y = next.y;
@@ -474,6 +523,9 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       return;
     case 'craft':
       if (state.tick >= action.until) finishCraft(ctx, agent, action.recipe);
+      return;
+    case 'build':
+      if (state.tick >= action.until) finishBuild(ctx, agent, action.objectId);
       return;
     case 'eat':
       if (state.tick >= action.until) {
@@ -541,6 +593,7 @@ function walkTo(
 
 function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): void {
   const { state } = ctx;
+  if (!canDo(agent, intent.type)) return fail(ctx, agent, tooYoung(agent, intent.type));
   const { map } = state;
   const cache = mapCache(map);
   switch (intent.type) {
@@ -655,6 +708,18 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
     case 'steal':
     case 'attack':
       return personAction(ctx, agent, intent);
+    case 'feed':
+    case 'teach':
+    case 'propose_partnership':
+    case 'respond_proposal':
+    case 'end_partnership':
+    case 'try_for_child':
+    case 'respond_child_request':
+    case 'name_child':
+    case 'declare_will':
+      return lifeAction(ctx, agent, intent);
+    case 'build_house':
+      return startBuild(ctx, agent, arrived);
     case 'explore': {
       const target = pickExploreTarget(ctx, agent);
       if (!target) return fail(ctx, agent, "I couldn't find anywhere new to explore.");
@@ -667,7 +732,7 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
 /** Say something to someone nearby. They hear it (and may reply); bystanders overhear. */
 function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
   const { state } = ctx;
-  const message = raw.trim().slice(0, 600);
+  const message = simplifySpeech(ctx, speaker, raw.trim().slice(0, 600));
   if (!message) return;
   speaker.speech = { text: message, until: state.tick + 30 };
   speaker.facing = facingTo(speaker, listener);
@@ -691,10 +756,13 @@ function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
   meet(speaker, listener, state.tick, false);
   if (listenerHears) {
     meet(listener, speaker, state.tick, true); // people introduce themselves when they speak
+    const heard = garble(ctx, listener, message);
+    hearSpeech(listener);
+    feel(listener, speaker, state.tick, { affection: 1 });
     remember(
       listener,
       state.tick,
-      `${nameAsKnown(listener, speaker)} said to me: “${message}”`,
+      `${nameAsKnown(listener, speaker)} said to me: “${heard}”`,
       4,
       'conversation',
       [speaker.id],
@@ -708,7 +776,7 @@ function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
         kind: 'spoken_to',
         fromId: speaker.id,
         fromName: nameAsKnown(listener, speaker),
-        message,
+        message: heard,
       };
     }
   }
@@ -729,12 +797,11 @@ function speak(ctx: Ctx, speaker: Agent, listener: Agent, raw: string): void {
 }
 
 /** `viewer` has an encounter with `other`; learnName = other introduced themselves. */
-function meet(viewer: Agent, other: Agent, tick: number, learnName: boolean): void {
-  const p = viewer.people[other.id] ?? { name: null, familiarity: 0, lastSeenTick: tick };
+export function meet(viewer: Agent, other: Agent, tick: number, learnName: boolean): void {
+  const p = relation(viewer, other, tick);
   if (learnName && !p.name) p.name = fullName(other);
   p.familiarity = Math.min(100, p.familiarity + 2);
   p.lastSeenTick = tick;
-  viewer.people[other.id] = p;
 }
 
 function pickExploreTarget(ctx: Ctx, agent: Agent): Point | null {
@@ -760,7 +827,8 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
     item = 'fish';
     const chance = 0.3 + agent.skills.fishing * 0.005 + (tools ? 0.15 : 0);
     got = ctx.rng.chance(chance) ? 1 : 0;
-    agent.skills.fishing = Math.min(100, agent.skills.fishing + 0.2);
+    train(agent, 'fishing', 0.2);
+    observeWork(state, agent, 'fishing');
   } else {
     const r = state.resources[o.id]!;
     item = r.item ?? (o.kind === 'field' ? 'vegetables' : 'berries');
@@ -769,7 +837,8 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
     ctx.changed.add(o.id);
     agent.knowledge[o.id] = { lastSeenTick: state.tick, lastSeenAmount: Math.floor(r.amount) };
     const skill = o.kind === 'field' ? 'farming' : 'foraging';
-    agent.skills[skill] = Math.min(100, agent.skills[skill] + 0.2);
+    train(agent, skill, 0.2);
+    observeWork(state, agent, skill);
   }
   const label = ITEM_LABELS[item].toLowerCase();
   if (got > 0) {
@@ -836,7 +905,7 @@ type ApproachIntent = Extract<Intent, { tries?: number }>;
  * Walk to within `range` of another person. Returns true when close enough to act right now;
  * otherwise it has either started walking (and will retry the intent on arrival) or failed.
  */
-function approach(
+export function approach(
   ctx: Ctx,
   agent: Agent,
   other: Agent,
@@ -959,7 +1028,7 @@ function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
   if (got <= 0) return fail(ctx, agent, 'That tree had no more wood worth taking.');
   r.amount -= got;
   agent.inventory.wood = (agent.inventory.wood ?? 0) + got;
-  agent.skills.building = Math.min(100, agent.skills.building + 0.1);
+  train(agent, 'building', 0.1);
   emit(ctx, 'gathered', [agent.id], `${fullName(agent)} chopped ${got} wood.`, 1);
   remember(agent, state.tick, `I chopped ${got} wood.`);
 }
@@ -1027,7 +1096,8 @@ function finishCraft(ctx: Ctx, agent: Agent, name: keyof typeof RECIPES): void {
     agent.inventory[item as ItemName] = (agent.inventory[item as ItemName] ?? 0) + n! + bonus;
     made.push(describeBundle({ item: item as ItemName, quantity: n! + bonus }));
   }
-  agent.skills[recipe.skill] = Math.min(100, agent.skills[recipe.skill] + 0.5);
+  train(agent, recipe.skill, 0.5);
+  observeWork(state, agent, recipe.skill);
   const where = recipe.place === 'bakery' ? 'the bakery' : 'the workshop';
   emit(ctx, 'crafted', [agent.id], `${fullName(agent)} made ${made.join(', ')} at ${where}.`, 2);
   remember(agent, state.tick, `I made ${made.join(', ')} at ${where}.`, 2);
@@ -1176,6 +1246,8 @@ function personAction(
     }
     moveBundle(from, agent, offer.give);
     moveBundle(agent, from, offer.ask);
+    feel(agent, from, tick, { trust: 3 });
+    feel(from, agent, tick, { trust: 3 });
     answer(true);
     meet(agent, from, tick, true);
     meet(from, agent, tick, true);
@@ -1210,6 +1282,7 @@ function personAction(
       if (!approach(ctx, agent, other, intent, 1, 'give something to')) return;
       moveBundle(agent, other, gift);
       meet(other, agent, tick, true);
+      feel(other, agent, tick, { affection: 6, trust: 4 });
       other.people[agent.id]!.familiarity = Math.min(100, other.people[agent.id]!.familiarity + 5);
       emit(
         ctx,
@@ -1324,6 +1397,7 @@ function personAction(
         [other.id],
       );
       if (victimNoticed) {
+        feel(other, agent, tick, { trust: -40, affection: -25 });
         if (other.asleep) wake(ctx, other, false);
         const thief = nameAsKnown(other, agent);
         remember(
@@ -1347,6 +1421,7 @@ function personAction(
           other.awaiting = { kind: 'robbed', byId: null, byName: 'someone', what };
       }
       for (const w of seenBy) {
+        feel(w, agent, tick, { trust: -20, affection: -10 });
         remember(
           w,
           tick,
@@ -1365,6 +1440,9 @@ function personAction(
       const damage = 8 + ctx.rng.int(0, 17) + (armed ? 5 : 0);
       if (other.asleep) wake(ctx, other, false);
       other.health = clamp(other.health - damage);
+      feel(other, agent, tick, { trust: -60, affection: -50 });
+      for (const w of witnesses(state, agent, other))
+        feel(w, agent, tick, { trust: -30, affection: -20 });
       agent.facing = facingTo(agent, other);
       const seen = witnesses(state, agent, other);
       emit(
@@ -1429,4 +1507,146 @@ function expireOffers(ctx: Ctx): void {
     );
     return false;
   });
+}
+
+// ------------------------------------------------------------------ building houses
+
+const HOUSE_PLANKS_PER_SESSION = 3;
+
+/** A free 3×3 plot near the village (land, off paths, clear of buildings), with a reachable doorstep. */
+function findBuildSite(state: WorldState, near: Point): { x: number; y: number } | null {
+  const { map } = state;
+  const cache = mapCache(map);
+  const occupied = new Uint8Array(map.width * map.height);
+  for (const o of map.objects) {
+    if (o.kind === 'tree' || o.kind === 'berry_bush' || o.kind === 'rock') continue;
+    for (let y = o.y - 1; y < o.y + o.h + 1; y++) {
+      for (let x = o.x - 1; x < o.x + o.w + 1; x++)
+        if (x >= 0 && y >= 0 && x < map.width && y < map.height) occupied[y * map.width + x] = 1;
+    }
+  }
+  const ok = (x: number, y: number) => {
+    if (x < 2 || y < 2 || x + 3 > map.width - 2 || y + 4 > map.height - 2) return false;
+    for (let yy = y - 1; yy < y + 4; yy++) {
+      for (let xx = x - 1; xx < x + 4; xx++) {
+        const i = yy * map.width + xx;
+        if (occupied[i] || map.tiles[i] !== Tile.Grass) return false;
+      }
+    }
+    // doorstep below the door must be walkable (trees there would block it)
+    return isWalkable(map, x + 1, y + 3) && cache.walk[(y + 3) * map.width + x + 1] === 1;
+  };
+  for (let r = 4; r < Math.max(map.width, map.height); r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = near.x + dx;
+        const y = near.y + dy;
+        if (ok(x, y)) {
+          // Trees and bushes on the plot are cleared when building starts.
+          return { x, y };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function startBuild(ctx: Ctx, agent: Agent, arrived: boolean): void {
+  const { state } = ctx;
+  const { map } = state;
+  let site = map.objects.find(
+    (o) => o.kind === 'house' && (o.progress ?? 1) < 1 && state.owners[o.id]?.includes(agent.id),
+  );
+  if (!site) {
+    if (agent.skills.building < 10)
+      return fail(ctx, agent, "I don't know enough about building to start a house.");
+    if ((agent.inventory.planks ?? 0) < HOUSE_PLANKS_PER_SESSION) {
+      return fail(
+        ctx,
+        agent,
+        `I need at least ${HOUSE_PLANKS_PER_SESSION} planks to start building.`,
+      );
+    }
+    const market = map.objects.find((o) => o.kind === 'market') ?? { x: agent.x, y: agent.y };
+    const spot = findBuildSite(state, { x: market.x, y: market.y });
+    if (!spot) return fail(ctx, agent, "There's no free land left to build on.");
+    // Clear the plot of trees/bushes.
+    map.objects = map.objects.filter(
+      (o) =>
+        !(
+          (o.kind === 'tree' || o.kind === 'berry_bush' || o.kind === 'rock') &&
+          o.x >= spot.x - 1 &&
+          o.x < spot.x + 4 &&
+          o.y >= spot.y - 1 &&
+          o.y < spot.y + 4
+        ),
+    );
+    const n = map.objects.filter((o) => o.kind === 'house').length + 1;
+    let id = `house-${n}`;
+    for (let k = n; map.objects.some((o) => o.id === id); k++) id = `house-${k + 1}`;
+    site = {
+      id,
+      kind: 'house',
+      x: spot.x,
+      y: spot.y,
+      w: 3,
+      h: 3,
+      name: `House ${id.split('-')[1]}`,
+      door: { x: spot.x + 1, y: spot.y + 2 },
+      progress: 0,
+    };
+    map.objects.push(site);
+    state.owners[id] = [agent.id];
+    agent.knowledge[id] = { lastSeenTick: state.tick };
+    invalidateMapCaches(map);
+    state.mapVersion += 1;
+    emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4);
+    remember(agent, state.tick, `I started building a house (${site.name}).`, 7);
+  }
+  const tiles = [{ x: site.door!.x, y: site.door!.y + 1 }];
+  if (!arrived && !isAt(agent, tiles)) {
+    walkTo(ctx, agent, tiles, { type: 'build_house' }, site.name ?? 'the building site');
+    return;
+  }
+  if ((agent.inventory.planks ?? 0) < HOUSE_PLANKS_PER_SESSION) {
+    return fail(
+      ctx,
+      agent,
+      `I need ${HOUSE_PLANKS_PER_SESSION} planks for the next stretch of building.`,
+    );
+  }
+  agent.inventory.planks! -= HOUSE_PLANKS_PER_SESSION;
+  if (!agent.inventory.planks) delete agent.inventory.planks;
+  agent.facing = 'up';
+  agent.action = { type: 'build', objectId: site.id, until: state.tick + 60 };
+}
+
+function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
+  const { state } = ctx;
+  agent.action = null;
+  const site = state.map.objects.find((o) => o.id === objectId);
+  if (!site || site.progress === undefined) return;
+  site.progress = Math.min(1, site.progress + 0.1 * (0.5 + agent.skills.building / 100));
+  train(agent, 'building', 0.6);
+  observeWork(state, agent, 'building');
+  state.mapVersion += 1;
+  if (site.progress >= 1) {
+    delete site.progress;
+    const partner = agent.partnerId
+      ? state.agents.find((a) => a.id === agent.partnerId)
+      : undefined;
+    if (partner && !state.owners[site.id]!.includes(partner.id))
+      state.owners[site.id]!.push(partner.id);
+    emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5);
+    remember(agent, state.tick, `I finished building ${site.name}. It's mine.`, 8);
+    if (!agent.homeId) agent.homeId = site.id;
+  } else {
+    remember(
+      agent,
+      state.tick,
+      `I worked on ${site.name} (${Math.round(site.progress * 100)}% done).`,
+      2,
+    );
+  }
 }

@@ -43,6 +43,9 @@ export function mockDecide(p: Perception): Decision {
   let goal = '';
   const roll = hash(`${p.agentId}:${p.tick}`);
 
+  const life = lifePlan(p, roll);
+  if (life) return life;
+
   // Someone spoke to us: answer briefly (unless we're in real trouble), then carry on.
   if (p.trigger.kind === 'spoken_to') {
     const t = p.trigger;
@@ -223,9 +226,32 @@ export function mockDecide(p: Perception): Decision {
       plan,
     };
   }
+  const nearby = p.visibleAgents.find((a) => a.distance <= 6 && a.activity !== 'sleeping');
+  const social = p.personality.extraversion / 100;
+  if (nearby && roll < 0.04 + 0.12 * social) {
+    const name = nearby.name.startsWith('a stranger') ? 'there' : nearby.name.split(' ')[0];
+    const greetings = [
+      `Hello, ${name}!`,
+      `Morning, ${name}. How are you keeping?`,
+      `${name}! Any news?`,
+      `Fine weather, isn't it, ${name}?`,
+      `Good to see you, ${name}.`,
+    ];
+    return {
+      thought: `There's ${nearby.name}. I'll stop for a chat.`,
+      goal: 'Chat with a neighbour',
+      plan: [
+        {
+          type: 'talk_to',
+          agentId: nearby.id,
+          message: greetings[Math.floor(roll * 50) % greetings.length]!,
+        },
+      ],
+    };
+  }
   const work = workPlan(p, roll);
   if (work) return work;
-  if (roll < 0.35) {
+  if (roll < 0.15) {
     return {
       thought: 'Nothing pressing. I feel like wandering.',
       goal: 'Explore',
@@ -256,6 +282,226 @@ export function mockDecide(p: Perception): Decision {
   };
 }
 
+const BABY_NAMES = {
+  female: ['Alma', 'Clara', 'Elin', 'Fenna', 'Hanne', 'Ilse', 'Liesel', 'Marta', 'Nora', 'Tilde'],
+  male: ['Anton', 'Bertil', 'Claus', 'Ebbe', 'Falk', 'Hauke', 'Jannik', 'Kaspar', 'Mats', 'Ruben'],
+};
+
+/** Babies, children and family life: care, naming, courtship, children, teaching, wills. */
+function lifePlan(p: Perception, roll: number): Decision | null {
+  const t = p.trigger;
+  const needs = p.self.needs;
+  const inv = p.self.inventory;
+  const food = FOOD_ITEMS.filter((i) => (inv[i] ?? 0) > 0).sort(
+    (a, b) => NUTRITION[b] - NUTRITION[a],
+  )[0];
+
+  if (p.stage === 'infant') {
+    const carer = p.visibleAgents[0];
+    if (needs.food < 45 || needs.water < 45) {
+      return {
+        thought: 'Hungry… want milk…',
+        goal: 'Be fed',
+        plan: carer
+          ? [
+              { type: 'talk_to', agentId: carer.id, message: 'Waaah!' },
+              { type: 'rest', minutes: 20 },
+            ]
+          : [{ type: 'rest', minutes: 20 }],
+      };
+    }
+    if (needs.energy < 60 || p.clock.isNight)
+      return { thought: 'Sleepy…', goal: 'Sleep', plan: [{ type: 'sleep' }] };
+    return {
+      thought: 'Warm. Faces. Nice.',
+      goal: 'Look around',
+      plan:
+        carer && roll < 0.4
+          ? [
+              { type: 'talk_to', agentId: carer.id, message: 'goo!' },
+              { type: 'rest', minutes: 60 },
+            ]
+          : [{ type: 'rest', minutes: 60 }],
+    };
+  }
+  if (p.stage === 'toddler') {
+    if (needs.water < 45)
+      return { thought: 'Thirsty. Water!', goal: 'Drink', plan: [{ type: 'drink' }] };
+    if (needs.food < 50 && food)
+      return { thought: 'Yum.', goal: 'Eat', plan: [{ type: 'eat', item: food }] };
+    if (needs.food < 40) {
+      const parent = p.visibleAgents.find((a) => p.family.parents.some((q) => q.id === a.id));
+      return {
+        thought: 'Tummy hurts. Want food.',
+        goal: 'Ask for food',
+        plan: parent
+          ? [
+              { type: 'talk_to', agentId: parent.id, message: 'Hungry!' },
+              { type: 'rest', minutes: 20 },
+            ]
+          : [{ type: 'rest', minutes: 30 }],
+      };
+    }
+    if (needs.energy < 40 || p.clock.isNight || p.clock.hour >= 20) {
+      const home = p.knownPlaces.find((k) => k.id === p.self.homeId);
+      return {
+        thought: 'Sleepy.',
+        goal: 'Sleep',
+        plan: [
+          ...(home && home.distance > 0
+            ? [{ type: 'go_to' as const, target: { objectId: home.id } }]
+            : []),
+          { type: 'sleep' },
+        ],
+      };
+    }
+    const parent = p.visibleAgents.find((a) => p.family.parents.some((q) => q.id === a.id));
+    if (parent && roll < 0.5) {
+      return {
+        thought: 'Where Mama going?',
+        goal: 'Follow',
+        plan: [
+          { type: 'go_to', target: { x: parent.x, y: parent.y } },
+          { type: 'rest', minutes: 20 },
+        ],
+      };
+    }
+    return { thought: 'Play!', goal: 'Play', plan: [{ type: 'rest', minutes: 40 }] };
+  }
+
+  // Grown-ups (and children answering what they can).
+  if (t.kind === 'child_born') {
+    const sex =
+      p.family.children.find((c) => c.id === t.childId) && t.childLabel.includes('girl')
+        ? 'female'
+        : 'male';
+    const name = BABY_NAMES[sex][Math.floor(roll * BABY_NAMES[sex].length)]!;
+    return {
+      thought: `Our baby is here! We'll call them ${name}.`,
+      goal: 'Welcome the baby',
+      plan: [
+        { type: 'name_child', childId: t.childId, name },
+        { type: 'rest', minutes: 60 },
+      ],
+    };
+  }
+  if (t.kind === 'proposal' && p.stage !== 'child') {
+    const who = p.knownPeople.find((k) => k.id === t.fromId);
+    const yes = !p.family.partner && (who?.affection ?? 0) >= 15 && roll < 0.8;
+    return {
+      thought: yes
+        ? `${t.fromName} wants to be with me. Yes!`
+        : `${t.fromName}? No, I don't feel that way.`,
+      goal: yes ? 'Say yes' : 'Let them down gently',
+      plan: [{ type: 'respond_proposal', fromId: t.fromId, accept: yes }],
+    };
+  }
+  if (t.kind === 'child_request') {
+    const yes = p.family.children.length < 4 && roll < 0.8;
+    return {
+      thought: yes ? 'A child of our own… yes.' : 'Not now. We have enough to manage.',
+      goal: yes ? 'Try for a child' : 'Decline for now',
+      plan: [{ type: 'respond_child_request', fromId: t.fromId, accept: yes }],
+    };
+  }
+  // Feed hungry children we can see (or were told about).
+  const hungryChild =
+    p.family.children.find(
+      (c) => c.age < 13 && c.needs && (c.needs.food < 45 || c.needs.water < 45),
+    ) ?? (t.kind === 'child_needs' ? p.family.children.find((c) => c.id === t.childId) : undefined);
+  // Look after yourself first: a parent who collapses can't feed anyone.
+  const selfOk = needs.water >= 30 && needs.food >= 25 && needs.energy >= 15;
+  if (hungryChild && p.stage !== 'child' && selfOk) {
+    if (food) {
+      return {
+        thought: `${hungryChild.name} needs feeding.`,
+        goal: 'Feed my child',
+        plan: [
+          { type: 'feed', agentId: hungryChild.id, item: food },
+          ...((inv[food] ?? 0) >= 2
+            ? [{ type: 'feed' as const, agentId: hungryChild.id, item: food }]
+            : []),
+        ],
+      };
+    }
+    const market = p.knownPlaces.find((k) => k.kind === 'market');
+    if (market && p.self.money >= 8) {
+      return {
+        thought: `${hungryChild.name} is hungry and I have nothing. To the market.`,
+        goal: 'Get food for my child',
+        plan: [
+          { type: 'buy', item: 'bread', quantity: 2 },
+          { type: 'feed', agentId: hungryChild.id, item: 'bread' },
+        ],
+      };
+    }
+  }
+  if (p.stage === 'child' || p.stage === 'teen') return null;
+
+  // Initiatives, now and then.
+  const partner = p.family.partner;
+  if (!partner && p.self.age >= 18 && p.self.age <= 50 && roll < 0.04) {
+    const crush = p.knownPeople.find((k) => {
+      const seen = p.visibleAgents.find((v) => v.id === k.id);
+      return !k.role && k.affection >= 25 && seen && k.romance >= 0;
+    });
+    if (crush) {
+      return {
+        thought: `I've grown fond of ${crush.name}. I'll ask.`,
+        goal: 'Ask for partnership',
+        plan: [{ type: 'propose_partnership', agentId: crush.id }],
+      };
+    }
+  }
+  if (
+    partner &&
+    p.self.sex === 'female' &&
+    p.self.age >= 18 &&
+    p.self.age <= 40 &&
+    !p.pregnant &&
+    p.family.children.filter((c) => c.age < 13).length < 2 &&
+    p.family.children.length < 4 &&
+    (p.clock.hour >= 17 || p.clock.hour < 7) &&
+    p.visibleAgents.some((v) => v.id === partner.id && v.distance <= 4) &&
+    roll < 0.35
+  ) {
+    return {
+      thought: `Perhaps it's time for another little one.`,
+      goal: 'Talk about children',
+      plan: [{ type: 'try_for_child', agentId: partner.id }],
+    };
+  }
+  const pupil = p.family.children.find((c) => c.nearby && c.age >= 5 && c.age < 18);
+  if (pupil && roll < 0.12) {
+    const occ = p.self.occupation.toLowerCase();
+    const skill = occ.includes('fish')
+      ? 'fishing'
+      : occ.includes('farm')
+        ? 'farming'
+        : occ.includes('bak')
+          ? 'cooking'
+          : occ.includes('carp')
+            ? 'building'
+            : 'foraging';
+    return {
+      thought: `${pupil.name} should learn a thing or two.`,
+      goal: 'Teach my child',
+      plan: [{ type: 'teach', agentId: pupil.id, skill }],
+    };
+  }
+  if (p.stage === 'elder' && roll < 0.05) {
+    const heir =
+      p.family.children[0] ?? (partner ? { id: partner.id, name: partner.name } : undefined);
+    if (heir)
+      return {
+        thought: `I should settle my affairs. ${heir.name} will have it all.`,
+        goal: 'Make a will',
+        plan: [{ type: 'declare_will', agentId: heir.id }],
+      };
+  }
+  return null;
+}
+
 /** A day's work by occupation, then selling the surplus at the market. */
 function workPlan(p: Perception, roll: number): Decision | null {
   if (roll > 0.75) return null; // everyone needs some time off
@@ -269,7 +515,11 @@ function workPlan(p: Perception, roll: number): Decision | null {
           k.kind === kind && (!produce || k.produce === produce) && (k.lastSeenAmount ?? 1) >= 1,
       )
       .sort((a, b) => a.distance - b.distance)[0];
+  const overflowing = (item: ItemName) =>
+    p.recent.some((r) => r.includes(`won't take any more ${ITEMS[item].label.toLowerCase()}`));
   const sellSurplus = (item: ItemName, keep: number): Intent[] =>
+    overflowing(item) ? [] : sellRaw(item, keep);
+  const sellRaw = (item: ItemName, keep: number): Intent[] =>
     have(item) > keep ? [{ type: 'sell', item, quantity: have(item) - keep }] : [];
 
   if (occ.includes('fish')) {

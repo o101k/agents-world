@@ -1,4 +1,7 @@
 import type {
+  Aptitude,
+  FamilyRole,
+  LifeStage,
   RecipeName,
   Appearance,
   BrainConfig,
@@ -28,8 +31,15 @@ export interface Memory {
 export interface PersonKnowledge {
   /** Name as known to this agent (null = not introduced yet). */
   name: string | null;
-  /** Grows with every conversation. */
+  /** Grows with every conversation (0–100). */
   familiarity: number;
+  /** Liking (−100…100). */
+  affection: number;
+  /** Trust (−100…100). */
+  trust: number;
+  /** Romantic interest (0–100). */
+  romance: number;
+  role?: FamilyRole;
   lastSeenTick: number;
 }
 
@@ -44,6 +54,7 @@ export type ActionState =
   | { type: 'gather'; objectId: string; until: number }
   | { type: 'chop'; objectId: string; until: number }
   | { type: 'craft'; recipe: RecipeName; until: number }
+  | { type: 'build'; objectId: string; until: number }
   | { type: 'eat'; item: ItemName; until: number }
   | { type: 'drink'; until: number }
   | { type: 'sleep'; since: number }
@@ -108,6 +119,25 @@ export interface Agent {
   decisions: number;
   /** Consecutive failed actions; after a few, the agent pauses before deciding again (saves AI calls). */
   failStreak: number;
+
+  // ---- Life cycle (Phase 4)
+  motherId: string | null;
+  fatherId: string | null;
+  childrenIds: string[];
+  partnerId: string | null;
+  /** Inborn learning speed by skill kind (inherited). */
+  aptitude: Aptitude;
+  /** Inborn hardiness (0.8–1.2): health recovery and lifespan (inherited). */
+  constitution: number;
+  /** Pregnancy progress in years (birth at 0.75); `known` once the mother notices. */
+  pregnancy: { fatherId: string; progress: number; known: boolean } | null;
+  will: { heirId: string } | null;
+  /** Newborns are unnamed until a parent names them. */
+  named: boolean;
+  /** Stage at the last check, to notice growing up. */
+  lastStage: LifeStage;
+  /** Last tick this person tried for a child (once per in-game day). */
+  lastChildTry: number;
   /** Market prices as last seen in person. */
   priceKnowledge: {
     tick: number;
@@ -158,5 +188,6 @@ export function remember(
 }
 
 export function fullName(agent: Agent): string {
-  return agent.familyName ? `${agent.name} ${agent.familyName}` : agent.name;
+  const first = agent.name || 'Baby';
+  return agent.familyName ? `${first} ${agent.familyName}` : first;
 }

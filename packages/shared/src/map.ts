@@ -61,6 +61,8 @@ export interface MapObject {
   name?: string;
   /** Doorway tile (inside the footprint) for buildings. */
   door?: Point;
+  /** Construction progress 0–1 for buildings being built (absent = finished). */
+  progress?: number;
 }
 
 export interface WorldMap {

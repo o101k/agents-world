@@ -19,7 +19,17 @@ export type EventKind =
   | 'gave'
   | 'offer'
   | 'stole'
-  | 'attacked';
+  | 'attacked'
+  | 'fed'
+  | 'taught'
+  | 'partnered'
+  | 'separated'
+  | 'pregnant'
+  | 'born'
+  | 'named'
+  | 'grew_up'
+  | 'inherited'
+  | 'built';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

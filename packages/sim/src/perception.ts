@@ -1,4 +1,12 @@
-import { OBJECT_LABELS, Tile, tickToClock, type KnownPlace, type Perception } from '@aw/shared';
+import {
+  OBJECT_LABELS,
+  Tile,
+  stageOf,
+  tickToClock,
+  type KnownPlace,
+  type Perception,
+} from '@aw/shared';
+import { ABILITIES } from './life.ts';
 import type { Agent, Memory } from './agent.ts';
 import { distanceToObject, mapCache, objectsNear } from './spatial.ts';
 import type { WorldState } from './world.ts';
@@ -192,15 +200,44 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     (m) => `${stamp(m.tick)} ${m.text}`,
   );
   const knownPeople = Object.entries(agent.people)
-    .filter(([, p]) => p.name)
+    .filter(([id, p]) => p.name && state.agents.find((a) => a.id === id)?.alive)
     .map(([id, p]) => ({
       id,
       name: p.name!,
       familiarity: Math.round(p.familiarity),
+      affection: Math.round(p.affection ?? 0),
+      trust: Math.round(p.trust ?? 0),
+      romance: Math.round(p.romance ?? 0),
+      ...(p.role ? { role: p.role } : {}),
       lastSeenTick: p.lastSeenTick,
     }))
-    .sort((a, b) => b.familiarity - a.familiarity)
+    .sort((a, b) => (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity)
     .slice(0, 30);
+  const find = (id: string | null) => (id ? state.agents.find((a) => a.id === id) : undefined);
+  const partner = find(agent.partnerId);
+  const sees = (o: Agent) =>
+    senses &&
+    (Math.max(Math.abs(o.x - agent.x), Math.abs(o.y - agent.y)) <= radius ||
+      (o.indoorsId !== null && o.x === agent.x && o.y === agent.y));
+  const family = {
+    partner: partner?.alive ? { id: partner.id, name: nameAsKnown(agent, partner) } : null,
+    children: agent.childrenIds
+      .map(find)
+      .filter((c): c is Agent => Boolean(c?.alive))
+      .map((c) => ({
+        id: c.id,
+        name: nameAsKnown(agent, c),
+        age: Math.floor(c.age),
+        nearby: sees(c),
+        ...(sees(c) ? { needs: { ...c.needs } } : {}),
+      })),
+    parents: [find(agent.motherId), find(agent.fatherId)]
+      .filter((p): p is Agent => Boolean(p))
+      .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive })),
+  };
+  const requests = state.requests
+    .filter((r) => r.to === agent.id)
+    .map((r) => ({ kind: r.kind, fromId: r.from, fromName: nameAsKnown(agent, find(r.from)!) }));
 
   return {
     agentId: agent.id,
@@ -252,6 +289,12 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         };
       }),
     treesNearby: senses ? countTrees(state, agent, isNight ? 4 : 8) : 0,
+    stage: stageOf(agent.age),
+    canDo: ABILITIES[stageOf(agent.age)],
+    family,
+    pregnant: Boolean(agent.pregnancy?.known),
+    language: Math.round(agent.skills.language ?? 100),
+    requests,
   };
 }
 

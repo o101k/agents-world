@@ -14,8 +14,16 @@ describe('world state', () => {
   it('starts at 07:00 on day 1 with the sample cast and default settings', () => {
     const state = createWorldState({ seed: 'x' });
     expect(state.tick).toBe(7 * 60);
-    expect(state.agents.length).toBe(8);
+    expect(state.agents.length).toBe(11);
     expect(state.agents.every((a) => a.homeId)).toBe(true);
+    const maren = state.agents.find((a) => a.name === 'Maren')!;
+    const tobias = state.agents.find((a) => a.name === 'Tobias')!;
+    const lise = state.agents.find((a) => a.name === 'Lise')!;
+    expect(maren.partnerId).toBe(tobias.id);
+    expect(lise.motherId).toBe(maren.id);
+    expect(lise.fatherId).toBe(tobias.id);
+    expect(maren.people[lise.id]?.role).toBe('child');
+    expect(lise.people[maren.id]?.role).toBe('mother');
     expect(state.map.width).toBe(64);
     expect(state.settings.daysPerYear).toBe(4);
   });

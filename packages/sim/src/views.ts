@@ -1,11 +1,12 @@
 import {
   OBJECT_LABELS,
   describeIntent,
+  stageOf,
   type Activity,
   type AgentDetail,
   type AgentView,
 } from '@aw/shared';
-import type { Agent } from './agent.ts';
+import { fullName, type Agent } from './agent.ts';
 import { mapCache } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
@@ -48,7 +49,7 @@ export function activity(agent: Agent): Activity {
 export function agentView(agent: Agent): AgentView {
   return {
     id: agent.id,
-    name: agent.familyName ? `${agent.name} ${agent.familyName}` : agent.name,
+    name: fullName(agent),
     x: agent.x,
     y: agent.y,
     facing: agent.facing,
@@ -59,6 +60,7 @@ export function agentView(agent: Agent): AgentView {
     age: Math.floor(agent.age),
     appearance: agent.appearance,
     speech: agent.speech?.text,
+    stage: stageOf(agent.age),
   };
 }
 
@@ -113,9 +115,30 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
         id,
         name: p.name ?? '(not introduced)',
         familiarity: Math.round(p.familiarity),
+        affection: Math.round(p.affection ?? 0),
+        trust: Math.round(p.trust ?? 0),
+        romance: Math.round(p.romance ?? 0),
+        ...(p.role ? { role: p.role } : {}),
         lastSeenTick: p.lastSeenTick,
       }))
-      .sort((a, b) => b.familiarity - a.familiarity),
+      .sort((a, b) => (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity),
+    family: {
+      mother: person(state, agent.motherId),
+      father: person(state, agent.fatherId),
+      partner: person(state, agent.partnerId),
+      children: agent.childrenIds
+        .map((id) => person(state, id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p)),
+    },
+    aptitude: { ...agent.aptitude },
+    constitution: agent.constitution,
+    pregnancy: agent.pregnancy
+      ? {
+          fatherName: person(state, agent.pregnancy.fatherId)?.name ?? 'unknown',
+          progress: agent.pregnancy.progress / 0.75,
+        }
+      : null,
+    will: agent.will ? { heirName: person(state, agent.will.heirId)?.name ?? 'unknown' } : null,
     spentUsd: agent.spentUsd,
     decisions: agent.decisions,
     owns: Object.entries(state.owners)
@@ -124,4 +147,9 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
     death: agent.death,
     bornTick: agent.bornTick,
   };
+}
+
+function person(state: WorldState, id: string | null) {
+  const a = id ? state.agents.find((x) => x.id === id) : undefined;
+  return a ? { id: a.id, name: fullName(a), alive: a.alive } : null;
 }

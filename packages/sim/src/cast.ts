@@ -1,6 +1,8 @@
 import {
   SKILL_NAMES,
+  stageOf,
   type Appearance,
+  type Aptitude,
   type BrainConfig,
   type ItemName,
   type Personality,
@@ -34,6 +36,11 @@ export interface AgentSpec {
   brain?: BrainConfig;
   /** Knows the village layout (true for residents, false for newcomers). */
   knowsVillage?: boolean;
+  /** Starting cast only: partner and parents by first name (linked after everyone exists). */
+  partner?: string;
+  parents?: string[];
+  aptitude?: Partial<Aptitude>;
+  constitution?: number;
 }
 
 export const SKIN_TONES = ['#f5d0b0', '#ecc19c', '#d9a57a', '#b8835a', '#8d5a3a', '#603c24'];
@@ -62,6 +69,11 @@ export const SHIRT_COLORS = [
   '#8a4a3a',
 ];
 export const PANTS_COLORS = ['#3a3a4a', '#5a4a3a', '#4a5a6a', '#6a5a4a', '#2a3a2a', '#4a3a4a'];
+
+/** Language ability expected at an age (children learn to talk over their first years). */
+export function languageBaseline(age: number): number {
+  return Math.round(Math.min(100, Math.max(0, (age - 0.8) * 28)));
+}
 
 export const DEFAULT_BRAIN: BrainConfig = { provider: 'mock', model: '', effort: 'frugal' };
 
@@ -97,7 +109,11 @@ export function createAgent(
   if (spec.age >= 16) {
     for (const s of SKILL_NAMES) skills[s] = Math.round(rng.range(5, 20));
     skills.foraging = Math.round(rng.range(15, 35));
+  } else if (spec.age >= 5) {
+    skills.foraging = Math.round(spec.age * 1.5);
   }
+  skills.language = languageBaseline(spec.age);
+  const apt = () => Math.round(rng.range(0.8, 1.2) * 100) / 100;
   Object.assign(skills, spec.skills);
   return {
     id: opts.id,
@@ -146,12 +162,28 @@ export function createAgent(
     decisions: 0,
     priceKnowledge: null,
     failStreak: 0,
+    motherId: null,
+    fatherId: null,
+    childrenIds: [],
+    partnerId: null,
+    aptitude: {
+      physical: apt(),
+      craft: apt(),
+      social: apt(),
+      intellectual: apt(),
+      ...spec.aptitude,
+    },
+    constitution: spec.constitution ?? Math.round(rng.range(0.85, 1.15) * 100) / 100,
+    pregnancy: null,
+    will: null,
+    named: true,
+    lastStage: stageOf(spec.age),
+    lastChildTry: -1e9,
   };
 }
 
 /**
- * The sample cast: four households of adults in a small village.
- * (Babies and children join in the life-cycle phase.)
+ * The sample cast: five households — eight adults plus a baby, a toddler and a child.
  */
 export const SAMPLE_CAST: AgentSpec[] = [
   {
@@ -160,6 +192,7 @@ export const SAMPLE_CAST: AgentSpec[] = [
     sex: 'female',
     age: 34,
     household: 0,
+    partner: 'Tobias',
     occupation: 'farmer',
     traits: 'Practical, stubborn, quietly kind. Hates waste.',
     background:
@@ -205,6 +238,7 @@ export const SAMPLE_CAST: AgentSpec[] = [
     sex: 'male',
     age: 19,
     household: 1,
+    parents: ['Elsbeth'],
     occupation: "baker's apprentice",
     traits: 'Restless, clever, impatient. Dreams of leaving the village.',
     background:
@@ -220,6 +254,7 @@ export const SAMPLE_CAST: AgentSpec[] = [
     sex: 'male',
     age: 45,
     household: 2,
+    partner: 'Wenna',
     occupation: 'carpenter',
     traits: 'Quiet, honest to a fault, slow to anger and slow to forgive.',
     background: 'Built half the houses in the village. Runs the workshop. Married to Wenna.',
@@ -271,5 +306,37 @@ export const SAMPLE_CAST: AgentSpec[] = [
     skills: { caregiving: 80, foraging: 35 },
     money: 55,
     inventory: { vegetables: 2, bread: 1 },
+  },
+  {
+    name: 'Lise',
+    familyName: 'Holt',
+    sex: 'female',
+    age: 0.5,
+    household: 0,
+    parents: ['Maren', 'Tobias'],
+    occupation: 'baby',
+    traits: '',
+    background: 'Maren and Tobias’s first child, six months old.',
+  },
+  {
+    name: 'Oskar',
+    familyName: 'Venn',
+    sex: 'male',
+    age: 2,
+    household: 2,
+    parents: ['Wenna', 'Aldric'],
+    occupation: 'toddler',
+    background: 'The youngest Venn, into everything.',
+  },
+  {
+    name: 'Mira',
+    familyName: 'Venn',
+    sex: 'female',
+    age: 7,
+    household: 2,
+    parents: ['Wenna', 'Aldric'],
+    occupation: 'child',
+    background: 'Aldric and Wenna’s daughter. Follows her mother into the forest to learn plants.',
+    personality: { openness: 75, extraversion: 60 },
   },
 ];

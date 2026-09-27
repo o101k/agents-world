@@ -23,7 +23,7 @@ describe('WorldManager', () => {
         .sort(),
     ).toEqual(['Alpha', 'Bravo']);
     expect(a.mapWidth).toBe(48);
-    expect(a.population).toBe(8);
+    expect(a.population).toBe(11);
     expect(b.seed).toMatch(/^[0-9a-f]{8}$/);
 
     await wm.activate(a.id);

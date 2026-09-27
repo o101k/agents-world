@@ -10,17 +10,18 @@ import {
   type Bundle,
   type ItemName,
   type WorldSettings,
+  stageOf,
 } from '@aw/shared';
 import { initialMarket, type MarketState } from './market.ts';
 import type { Agent } from './agent.ts';
 import { SAMPLE_CAST, type AgentSpec } from './cast.ts';
 import type { Agent as AgentT } from './agent.ts';
-import { DEFAULT_BRAIN } from './cast.ts';
-import { addAgent, introduceResidents } from './population.ts';
+import { DEFAULT_BRAIN, languageBaseline } from './cast.ts';
+import { addAgent, introduceResidents, linkFamilies } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 
-export const WORLD_STATE_VERSION = 4;
+export const WORLD_STATE_VERSION = 5;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -63,6 +64,10 @@ export interface WorldState {
   nextOfferNum: number;
   /** Owners of buildings by object id (houses: the household; bakery/workshop: their keepers). */
   owners: Record<string, string[]>;
+  /** Partnership proposals and requests to try for a child, awaiting an answer. */
+  requests: { kind: 'proposal' | 'child_request'; from: string; to: string; tick: number }[];
+  /** Bumped whenever the map changes (e.g. a new house), so viewers reload it. */
+  mapVersion: number;
 }
 
 /** JSON-safe form of WorldState, used for snapshots. */
@@ -117,12 +122,15 @@ export function createWorldState({
     offers: [],
     nextOfferNum: 1,
     owners: {},
+    requests: [],
+    mapVersion: 0,
   };
   withRng(state, (r) => {
     state.resources = initialResources(map, r);
     for (const spec of cast) addAgent(state, { knowsVillage: true, ...spec }, r);
   });
   introduceResidents(state);
+  linkFamilies(state, cast);
   assignOwnership(state);
   return state;
 }
@@ -162,14 +170,49 @@ export function serializeWorldState(state: WorldState): SerializedWorldState {
 export function deserializeWorldState(data: SerializedWorldState | LegacyV1State): WorldState {
   if (data.version === 1) return upgradeV1(data as LegacyV1State);
   if (data.version === 2) {
-    return upgradeV3(upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) }));
+    return upgradeV4(
+      upgradeV3(upgradeV2({ ...(data as SerializedWorldState), map: decodeMap(data.map) })),
+    );
   }
+  if (data.version === 4)
+    return upgradeV4({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
   if (data.version === 3)
     return upgradeV3({ ...(data as SerializedWorldState), map: decodeMap(data.map) });
   if (data.version !== WORLD_STATE_VERSION) {
     throw new Error(`Unsupported world state version ${data.version}`);
   }
   return { ...(data as SerializedWorldState), map: decodeMap(data.map) };
+}
+
+/** Phase 3 → 4: families, relationships, aptitude and life-cycle fields. */
+function upgradeV4(state: WorldState): WorldState {
+  state.version = WORLD_STATE_VERSION;
+  state.requests ??= [];
+  state.mapVersion ??= 0;
+  const rng = new Rng(state.rng);
+  for (const a of state.agents as Partial<AgentT>[]) {
+    a.motherId ??= null;
+    a.fatherId ??= null;
+    a.childrenIds ??= [];
+    a.partnerId ??= null;
+    a.aptitude ??= { physical: 1, craft: 1, social: 1, intellectual: 1 };
+    a.constitution ??= 1;
+    a.pregnancy ??= null;
+    a.will ??= null;
+    a.named ??= true;
+    a.lastStage ??= stageOf(a.age ?? 30);
+    a.lastChildTry ??= -1e9;
+    if (a.skills && a.skills.language === undefined)
+      a.skills.language = languageBaseline(a.age ?? 30);
+    for (const p of Object.values(a.people ?? {})) {
+      p.affection ??= 10;
+      p.trust ??= 10;
+      p.romance ??= 0;
+    }
+  }
+  state.rng = rng.state();
+  linkFamilies(state, SAMPLE_CAST);
+  return state;
 }
 
 /** Phase 2 → 3: add the market, trade offers, ownership, field crops and price knowledge. */
@@ -236,6 +279,8 @@ function upgradeV1(old: LegacyV1State): WorldState {
     offers: [],
     nextOfferNum: 1,
     owners: {},
+    requests: [],
+    mapVersion: 0,
   };
   withRng(state, (r) => {
     state.resources = initialResources(state.map, r);

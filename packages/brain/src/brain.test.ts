@@ -6,7 +6,8 @@ import { OpenAIProvider } from './openai.ts';
 import { DEFAULT_PRICES, costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { BrainRouter, instinctApplies } from './router.ts';
-import { parseDecision } from './schema.ts';
+import { IntentSchema } from '@aw/shared';
+import { ACTIONS, parseDecision } from './schema.ts';
 
 function perception(over: Partial<Perception> = {}): Perception {
   return {
@@ -58,7 +59,18 @@ function perception(over: Partial<Perception> = {}): Perception {
     ],
     recent: ['[Day 1 09:00] I drank water.'],
     memories: ['[Day 1 07:00] Tobias said to me: “Morning!”'],
-    knownPeople: [{ id: 'a2', name: 'Tobias Holt', familiarity: 90, lastSeenTick: 590 }],
+    knownPeople: [
+      {
+        id: 'a2',
+        name: 'Tobias Holt',
+        familiarity: 90,
+        affection: 70,
+        trust: 60,
+        romance: 60,
+        role: 'partner',
+        lastSeenTick: 590,
+      },
+    ],
     personality: {
       openness: 45,
       conscientiousness: 82,
@@ -71,6 +83,23 @@ function perception(over: Partial<Perception> = {}): Perception {
     marketPrices: null,
     offers: [],
     treesNearby: 3,
+    stage: 'adult',
+    canDo: [
+      'go_to',
+      'gather',
+      'eat',
+      'drink',
+      'sleep',
+      'rest',
+      'explore',
+      'talk_to',
+      'feed',
+      'name_child',
+    ],
+    family: { partner: { id: 'a2', name: 'Tobias Holt' }, children: [], parents: [] },
+    pregnant: false,
+    language: 100,
+    requests: [],
     ...over,
   };
 }
@@ -104,6 +133,13 @@ describe('prompts', () => {
       },
     });
     expect(userPrompt(p)).toContain('Tobias Holt (a2) just said to you: “Fancy a fish?”');
+  });
+});
+
+describe('decide tool schema', () => {
+  it('offers every action the simulation understands', () => {
+    const simActions = IntentSchema.options.map((o) => o.shape.type.value).sort();
+    expect([...ACTIONS].sort()).toEqual(simActions);
   });
 });
 

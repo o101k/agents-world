@@ -1,6 +1,8 @@
 import {
   ITEM_NAMES,
   RECIPE_NAMES,
+  SKILL_NAMES,
+  type SkillName,
   type Bundle,
   type Decision,
   type Intent,
@@ -19,6 +21,25 @@ export const ACTIONS = [
   'rest',
   'explore',
   'talk_to',
+  'chop_wood',
+  'craft',
+  'buy',
+  'sell',
+  'give',
+  'offer_trade',
+  'respond_offer',
+  'steal',
+  'attack',
+  'feed',
+  'teach',
+  'propose_partnership',
+  'respond_proposal',
+  'end_partnership',
+  'try_for_child',
+  'respond_child_request',
+  'name_child',
+  'declare_will',
+  'build_house',
 ] as const;
 
 /**
@@ -69,9 +90,29 @@ export const DECIDE_SCHEMA = {
           ask_quantity: { type: 'integer' },
           ask_coins: { type: 'integer' },
           offer_id: { type: 'string', description: 'For respond_offer.' },
-          accept: { type: 'boolean', description: 'For respond_offer.' },
+          accept: {
+            type: 'boolean',
+            description: 'For respond_offer / respond_proposal / respond_child_request.',
+          },
+          skill: { type: 'string', enum: [...SKILL_NAMES], description: 'For teach.' },
+          name: { type: 'string', description: 'For name_child: the first name you give.' },
         },
         required: ['action'],
+      },
+    },
+    feelings: {
+      type: 'array',
+      description: 'Optional: how your feelings toward people changed just now (each −3…3).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          target: { type: 'string', description: 'Person id.' },
+          affection: { type: 'integer' },
+          trust: { type: 'integer' },
+          romance: { type: 'integer' },
+        },
+        required: ['target'],
       },
     },
     remember: {
@@ -106,6 +147,8 @@ interface RawStep {
   ask_coins?: unknown;
   offer_id?: unknown;
   accept?: unknown;
+  skill?: unknown;
+  name?: unknown;
 }
 
 const asItem = (v: unknown): ItemName | undefined =>
@@ -227,10 +270,71 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
       case 'attack':
         if (target) plan.push({ type: 'attack', agentId: target });
         break;
+      case 'feed': {
+        const item = asItem(step.item);
+        if (target && item) plan.push({ type: 'feed', agentId: target, item });
+        break;
+      }
+      case 'teach':
+        if (
+          target &&
+          typeof step.skill === 'string' &&
+          (SKILL_NAMES as string[]).includes(step.skill)
+        ) {
+          plan.push({ type: 'teach', agentId: target, skill: step.skill as SkillName });
+        }
+        break;
+      case 'propose_partnership':
+        if (target) plan.push({ type: 'propose_partnership', agentId: target });
+        break;
+      case 'respond_proposal':
+        if (target)
+          plan.push({
+            type: 'respond_proposal',
+            fromId: target,
+            accept: step.accept === true || step.accept === 'true',
+          });
+        break;
+      case 'end_partnership':
+        plan.push({ type: 'end_partnership' });
+        break;
+      case 'try_for_child':
+        if (target) plan.push({ type: 'try_for_child', agentId: target });
+        break;
+      case 'respond_child_request':
+        if (target)
+          plan.push({
+            type: 'respond_child_request',
+            fromId: target,
+            accept: step.accept === true || step.accept === 'true',
+          });
+        break;
+      case 'name_child':
+        if (target && typeof step.name === 'string' && step.name.trim()) {
+          plan.push({ type: 'name_child', childId: target, name: step.name.trim().slice(0, 40) });
+        }
+        break;
+      case 'declare_will':
+        if (target) plan.push({ type: 'declare_will', agentId: target });
+        break;
+      case 'build_house':
+        plan.push({ type: 'build_house' });
+        break;
     }
   }
   if (plan.length === 0) plan.push({ type: 'rest', minutes: 20 });
   const decision: Decision = { thought, goal, plan };
+  if (Array.isArray(obj.feelings)) {
+    decision.feelings = (obj.feelings as Record<string, unknown>[])
+      .filter((f) => f && typeof f.target === 'string')
+      .slice(0, 10)
+      .map((f) => ({
+        agentId: String(f.target),
+        affection: Number(f.affection) || 0,
+        trust: Number(f.trust) || 0,
+        romance: Number(f.romance) || 0,
+      }));
+  }
   const r = obj.remember as { text?: unknown; importance?: unknown } | undefined;
   if (r && typeof r.text === 'string' && r.text.trim()) {
     decision.remember = {

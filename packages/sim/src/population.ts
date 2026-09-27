@@ -1,4 +1,5 @@
 import { Tile, type MapObject, type Point } from '@aw/shared';
+import type { FamilyRole } from '@aw/shared';
 import type { Agent } from './agent.ts';
 import { createAgent, type AgentSpec } from './cast.ts';
 import type { Rng } from './rng.ts';
@@ -72,11 +73,60 @@ export function introduceResidents(state: WorldState): void {
   for (const a of residents) {
     for (const b of residents) {
       if (a === b || a.people[b.id]) continue;
+      const housemates = a.homeId === b.homeId;
       a.people[b.id] = {
         name: b.familyName ? `${b.name} ${b.familyName}` : b.name,
-        familiarity: a.homeId === b.homeId ? 90 : 30,
+        familiarity: housemates ? 90 : 30,
+        affection: housemates ? 50 : 5,
+        trust: housemates ? 50 : 10,
+        romance: 0,
         lastSeenTick: state.tick,
       };
+    }
+  }
+}
+
+/** Starting cast: connect partners and parents named in the specs, with family roles. */
+export function linkFamilies(state: WorldState, cast: AgentSpec[]): void {
+  const byName = (name: string) => state.agents.find((a) => a.name === name && a.alive);
+  const role = (a: Agent, b: Agent, r: FamilyRole, affection: number) => {
+    const p = a.people[b.id];
+    if (p) {
+      p.role = r;
+      p.affection = Math.max(p.affection, affection);
+      p.trust = Math.max(p.trust, 60);
+      p.familiarity = Math.max(p.familiarity, 90);
+    }
+  };
+  for (const spec of cast) {
+    const me = byName(spec.name);
+    if (!me) continue;
+    const partner = spec.partner ? byName(spec.partner) : undefined;
+    if (partner && partner !== me) {
+      me.partnerId = partner.id;
+      partner.partnerId = me.id;
+      role(me, partner, 'partner', 70);
+      role(partner, me, 'partner', 70);
+      if (me.people[partner.id]) me.people[partner.id]!.romance = 60;
+      if (partner.people[me.id]) partner.people[me.id]!.romance = 60;
+    }
+    for (const parentName of spec.parents ?? []) {
+      const parent = byName(parentName);
+      if (!parent) continue;
+      if (parent.sex === 'female') me.motherId = parent.id;
+      else me.fatherId = parent.id;
+      if (!parent.childrenIds.includes(me.id)) parent.childrenIds.push(me.id);
+      role(me, parent, parent.sex === 'female' ? 'mother' : 'father', 70);
+      role(parent, me, 'child', 80);
+    }
+  }
+  // Siblings: share a parent.
+  for (const a of state.agents) {
+    for (const b of state.agents) {
+      if (a === b) continue;
+      const shared =
+        (a.motherId && a.motherId === b.motherId) || (a.fatherId && a.fatherId === b.fatherId);
+      if (shared) role(a, b, 'sibling', 45);
     }
   }
 }

@@ -33,7 +33,14 @@ export interface Personality {
 }
 
 export type SkillName =
-  'foraging' | 'fishing' | 'farming' | 'cooking' | 'building' | 'trading' | 'caregiving';
+  | 'foraging'
+  | 'fishing'
+  | 'farming'
+  | 'cooking'
+  | 'building'
+  | 'trading'
+  | 'caregiving'
+  | 'language';
 export const SKILL_NAMES: SkillName[] = [
   'foraging',
   'fishing',
@@ -42,7 +49,61 @@ export const SKILL_NAMES: SkillName[] = [
   'building',
   'trading',
   'caregiving',
+  'language',
 ];
+
+/** Inborn learning speed (0.7–1.3) by kind of skill; inherited from parents. */
+export interface Aptitude {
+  physical: number;
+  craft: number;
+  social: number;
+  intellectual: number;
+}
+
+export const SKILL_APTITUDE: Record<SkillName, keyof Aptitude> = {
+  foraging: 'physical',
+  fishing: 'physical',
+  farming: 'physical',
+  cooking: 'craft',
+  building: 'craft',
+  trading: 'social',
+  caregiving: 'social',
+  language: 'intellectual',
+};
+
+export type LifeStage = 'infant' | 'toddler' | 'child' | 'teen' | 'adult' | 'elder';
+
+export function stageOf(age: number): LifeStage {
+  if (age < 1) return 'infant';
+  if (age < 3) return 'toddler';
+  if (age < 13) return 'child';
+  if (age < 18) return 'teen';
+  if (age < 60) return 'adult';
+  return 'elder';
+}
+
+export const STAGE_LABELS: Record<LifeStage, string> = {
+  infant: 'Baby',
+  toddler: 'Toddler',
+  child: 'Child',
+  teen: 'Teenager',
+  adult: 'Adult',
+  elder: 'Elder',
+};
+
+export type FamilyRole = 'mother' | 'father' | 'child' | 'sibling' | 'partner' | 'former partner';
+
+/** How one person feels about another (affection/trust −100…100; familiarity/romance 0…100). */
+export interface RelationshipView {
+  id: string;
+  name: string;
+  familiarity: number;
+  affection: number;
+  trust: number;
+  romance: number;
+  role?: FamilyRole;
+  lastSeenTick: number;
+}
 
 export type ProviderId = 'mock' | 'anthropic' | 'openai' | 'openai_compatible';
 export type EffortLevel = 'frugal' | 'standard' | 'deep';
@@ -81,6 +142,7 @@ export interface AgentView {
   appearance: Appearance;
   /** Words said in the last few in-game minutes (speech bubble). */
   speech?: string;
+  stage: LifeStage;
 }
 
 export interface MemoryView {
@@ -123,7 +185,17 @@ export interface AgentDetail extends AgentView {
   knownPlaces: number;
   recent: { tick: number; text: string }[];
   memories: MemoryView[];
-  people: { id: string; name: string; familiarity: number; lastSeenTick: number }[];
+  people: RelationshipView[];
+  family: {
+    mother: { id: string; name: string; alive: boolean } | null;
+    father: { id: string; name: string; alive: boolean } | null;
+    partner: { id: string; name: string; alive: boolean } | null;
+    children: { id: string; name: string; alive: boolean }[];
+  };
+  aptitude: Aptitude;
+  constitution: number;
+  pregnancy: { fatherName: string; progress: number } | null;
+  will: { heirName: string } | null;
   death?: { tick: number; cause: string };
   bornTick: number;
   spentUsd: number;
