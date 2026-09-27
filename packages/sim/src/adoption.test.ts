@@ -169,6 +169,38 @@ describe('orphans and adoption', () => {
     expect(piet.memories.some((m) => m.text.includes('no home'))).toBe(true);
   });
 
+  it('a yes to someone who has since lost their home fails, and is not taken as a no', () => {
+    const s = fresh();
+    orphanTheVenns(s);
+    const piet = who(s, 'Piet');
+    const mira = who(s, 'Mira');
+    adjacent(piet, mira);
+    run(s, { [piet.id]: [{ type: 'adopt_child', childId: mira.id }] }, 3);
+    piet.homeId = null;
+    run(s, { [mira.id]: [{ type: 'respond_adoption', fromId: piet.id, accept: true }] }, 2);
+    expect(mira.adoptiveParentIds).toEqual([]);
+    expect(mira.memories.some((m) => m.text.includes('no home to take me'))).toBe(true);
+    expect(mira.memories.some((m) => m.text.includes("don't want to be adopted"))).toBe(false);
+  });
+
+  it('an older child asleep indoors is not asked until they are up', () => {
+    const s = fresh();
+    orphanTheVenns(s);
+    const piet = who(s, 'Piet');
+    const mira = who(s, 'Mira');
+    const home = s.map.objects.find((o) => o.id === mira.homeId)!;
+    mira.x = home.door!.x;
+    mira.y = home.door!.y;
+    mira.indoorsId = home.id;
+    mira.asleep = true;
+    mira.action = { type: 'sleep', since: s.tick };
+    piet.x = home.door!.x + 1;
+    piet.y = home.door!.y;
+    run(s, { [piet.id]: [{ type: 'adopt_child', childId: mira.id }] }, 2);
+    expect(s.requests.some((r) => r.kind === 'adoption')).toBe(false);
+    expect(piet.memories.some((m) => m.text.includes('asleep indoors'))).toBe(true);
+  });
+
   it('adoptive parents can name an unnamed baby', () => {
     const s = fresh();
     orphanTheVenns(s);

@@ -945,19 +945,18 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
       if (!isOrphan(state, other))
         return fail(ctx, agent, `${who} still has a parent to look after them.`);
       if (!agent.homeId) return fail(ctx, agent, `I have no home to take ${who} into.`);
-      // Little ones are at home indoors: go to their door.
-      if (other.indoorsId) {
+      const stage = stageOf(other.age);
+      const little = stage === 'infant' || stage === 'toddler';
+      if (little && other.indoorsId) {
+        // Little ones indoors are fetched from their door, asleep or not.
         const home = mapCache(state.map).byId.get(other.indoorsId);
-        if (
-          home?.door &&
-          Math.max(Math.abs(agent.x - home.door.x), Math.abs(agent.y - home.door.y)) > 1
-        ) {
+        if (!home?.door) return fail(ctx, agent, `I can't get to ${who}.`);
+        if (Math.max(Math.abs(agent.x - home.door.x), Math.abs(agent.y - home.door.y)) > 1) {
           ctx.walkTo(agent, [home.door], intent, 'their home');
           return;
         }
       } else if (!approach(ctx, agent, other, intent, 2, 'speak with')) return;
-      const stage = stageOf(other.age);
-      if (stage === 'infant' || stage === 'toddler') {
+      if (little) {
         // Too little to be asked: whoever takes them in becomes their family.
         adopt(ctx, agent, other);
         return;
@@ -1008,7 +1007,9 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
       state.requests = state.requests.filter((r) => r !== req);
       const who = nameAsKnown(agent, other);
       if (!isOrphan(state, agent)) return fail(ctx, agent, 'I already have a family.');
-      if (!intent.accept || !other.homeId) {
+      if (intent.accept && !other.homeId)
+        return fail(ctx, agent, `${who} has no home to take me into any more.`);
+      if (!intent.accept) {
         remember(agent, tick, `I told ${who} I don't want to be adopted.`, 6, 'conversation', [
           other.id,
         ]);
