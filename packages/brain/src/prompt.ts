@@ -263,9 +263,11 @@ export function userPrompt(p: Perception): string {
   if (p.knownPlaces.length) {
     lines.push('Places you know (nearest first):');
     for (const k of p.knownPlaces.slice(0, 24)) {
+      const produce = k.produce ? ` (${ITEM_LABELS[k.produce].toLowerCase()})` : '';
       const amount =
         k.lastSeenAmount !== undefined ? `, last time you saw ${k.lastSeenAmount} to gather` : '';
-      lines.push(`- ${k.name} [${k.id}], ${k.distance} steps${amount}`);
+      const owner = k.owner ? `, owned by ${k.owner}` : '';
+      lines.push(`- ${k.name}${produce} [${k.id}], ${k.distance} steps${amount}${owner}`);
     }
   } else {
     lines.push('You do not know any places here yet.');

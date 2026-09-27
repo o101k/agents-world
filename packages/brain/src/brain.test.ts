@@ -45,7 +45,27 @@ function perception(over: Partial<Perception> = {}): Perception {
         distance: 1,
         lastSeenTick: 500,
       },
-      { id: 'house-1', kind: 'house', name: 'House 1', x: 1, y: 1, distance: 4, lastSeenTick: 500 },
+      {
+        id: 'house-1',
+        kind: 'house',
+        name: 'House 1',
+        x: 1,
+        y: 1,
+        distance: 4,
+        owner: 'you',
+        lastSeenTick: 500,
+      },
+      {
+        id: 'field-1',
+        kind: 'field',
+        name: 'Field 1',
+        x: 3,
+        y: 9,
+        distance: 5,
+        produce: 'wheat',
+        lastSeenAmount: 12,
+        lastSeenTick: 500,
+      },
       {
         id: 'berry_bush-3',
         kind: 'berry_bush',
@@ -120,6 +140,8 @@ describe('prompts', () => {
     expect(user).toContain('Tobias Holt [a2]');
     expect(user).toContain('Village well [well-1]');
     expect(user).toContain('last time you saw 3 to gather');
+    expect(user).toContain('House 1 [house-1], 4 steps, owned by you');
+    expect(user).toContain('Field 1 (wheat) [field-1]');
     expect(user).toContain('Memories that come to mind');
   });
 
