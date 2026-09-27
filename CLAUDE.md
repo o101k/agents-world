@@ -21,15 +21,15 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 
 ## Current status
 
-| Phase                         | Status                            |
-| ----------------------------- | --------------------------------- |
-| 0 – Skeleton                  | **Done — awaiting owner testing** |
-| 1 – A world that runs (no AI) | Next                              |
-| 2 – Minds                     | Planned                           |
-| 3 – Work, trade, money        | Planned                           |
-| 4 – Life cycle                | Planned                           |
-| 5 – A long life               | Planned                           |
-| 6 – Replay and scale          | Planned                           |
+| Phase                         | Status  |
+| ----------------------------- | ------- |
+| 0 – Skeleton                  | Done    |
+| 1 – A world that runs (no AI) | Done    |
+| 2 – Minds                     | Done    |
+| 3 – Work, trade, money        | Done    |
+| 4 – Life cycle                | Done    |
+| 5 – A long life               | Next    |
+| 6 – Replay and scale          | Planned |
 
 ## Commands
 
@@ -279,9 +279,9 @@ teacher and a closer relationship).
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | **0 – Skeleton** ✅                  | Repo setup; `npm start` launches helper + opens browser; worlds screen (create/switch/delete); generated village map; pan/zoom; CLAUDE.md, README, DESIGN.md                                                                                                                                | Make two worlds with different maps, delete one                                    |
 | **1 – A world that runs (no AI)** ✅ | Ticks, clock, day/night, needs, health and death, gather/eat/drink/sleep, Mock brains, play/pause/speed, click agents/objects for details, live event log, follow a person, exact save and resume                                                                                           | Villagers survive (or don't) on autopilot; stop and restart the helper → same tick |
-| **2 – Minds**                        | Provider layer + key settings, per-agent model/effort + world default, request queue, world waits, cost tracking + cap, perception limits, thoughts/goals/plans, memory stream + recall, conversations + overhearing, mind inspector (incl. raw prompt/reply), spawn agent from description | Real AI villagers plan, talk, remember; read their minds; watch spending           |
-| **3 – Work, trade, money**           | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
-| **4 – Life cycle**                   | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
+| **2 – Minds** ✅                     | Provider layer + key settings, per-agent model/effort + world default, request queue, world waits, cost tracking + cap, perception limits, thoughts/goals/plans, memory stream + recall, conversations + overhearing, mind inspector (incl. raw prompt/reply), spawn agent from description | Real AI villagers plan, talk, remember; read their minds; watch spending           |
+| **3 – Work, trade, money** ✅        | Skills, crafting chains, jobs and hiring, town market, trade/gifts/loans, ownership, theft and fights, reputation via gossip                                                                                                                                                                | An economy emerges: prices, jobs, crime                                            |
+| **4 – Life cycle** ✅                | Aging slider, life stages, AI-from-birth babies with developmental limits, caretaking, teaching, relationships, partnering, conception/pregnancy/birth, genetics, estates/wills, old-age death, family tree, three starting-cast options                                                    | A couple has a baby that learns to talk from them                                  |
 | **5 – A long life**                  | Forgetting + nightly consolidation, life chapters, childhood memory fading, world events, timeline search, per-agent life story                                                                                                                                                             | Several generations with bounded memory; trigger a drought                         |
 | **6 – Replay and scale**             | Map scrubbing to any past moment, 100–200 agents on bigger maps, seasons, polish                                                                                                                                                                                                            | Scrub back to day 12; ~150-person stress test                                      |
 
@@ -297,6 +297,9 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — Process note.** Some scripted doc edits in Phases 1–3 silently failed after Prettier
+  reformatted tables, leaving this status table and `docs/DESIGN.md` stale; both were rewritten at
+  the end of Phase 4. Edits are now checked (they fail loudly if the text to replace isn't found).
 - **2026-09-27 — Phase 4 details.** (a) Stages: baby < 1, toddler < 3, child < 13, teen < 18, adult
   < 60, elder. Each stage has an allowed action list enforced by the sim (babies: rest, sleep,
   babble; toddlers add walking, eating, drinking, simple gathering; children can't craft, fight or
