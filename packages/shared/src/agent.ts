@@ -198,7 +198,8 @@ export interface AgentDetail extends AgentView {
     mother: { id: string; name: string; alive: boolean } | null;
     father: { id: string; name: string; alive: boolean } | null;
     partner: { id: string; name: string; alive: boolean } | null;
-    children: { id: string; name: string; alive: boolean }[];
+    children: { id: string; name: string; alive: boolean; adopted?: boolean }[];
+    adoptiveParents: { id: string; name: string; alive: boolean }[];
   };
   aptitude: Aptitude;
   constitution: number;

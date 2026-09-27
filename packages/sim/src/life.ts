@@ -36,6 +36,7 @@ const ADULT_ONLY: IntentType[] = [
   'declare_will',
   'build_house',
   'name_child',
+  'adopt_child',
 ];
 const ALL: IntentType[] = [
   'go_to',
@@ -58,6 +59,7 @@ const ALL: IntentType[] = [
   'feed',
   'teach',
   'tend',
+  'respond_adoption',
   ...ADULT_ONLY,
 ];
 
@@ -310,8 +312,10 @@ function callCaretakers(ctx: Ctx, child: Agent, need: NeedName): void {
     const family =
       child.motherId === other.id ||
       child.fatherId === other.id ||
+      child.adoptiveParentIds.includes(other.id) ||
       (child.homeId && other.homeId === child.homeId);
-    if (!family) continue;
+    // A child with no parents left cries for anyone grown-up who can hear.
+    if (!family && !(other.age >= 18 && isOrphan(state, child))) continue;
     const together =
       (child.indoorsId && other.x === child.x && other.y === child.y) ||
       Math.max(Math.abs(other.x - child.x), Math.abs(other.y - child.y)) <= 8;
@@ -581,6 +585,8 @@ type LifeIntent = Extract<
       | 'try_for_child'
       | 'respond_child_request'
       | 'name_child'
+      | 'adopt_child'
+      | 'respond_adoption'
       | 'declare_will';
   }
 >;
@@ -921,10 +927,121 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
     }
     case 'name_child': {
       if (!other) return fail(ctx, agent, "I can't find that child.");
-      if (other.motherId !== agent.id && other.fatherId !== agent.id)
+      if (
+        other.motherId !== agent.id &&
+        other.fatherId !== agent.id &&
+        !other.adoptiveParentIds.includes(agent.id)
+      )
         return fail(ctx, agent, `${nameAsKnown(agent, other)} isn't my child to name.`);
       if (other.named) return fail(ctx, agent, `Our child already has a name: ${other.name}.`);
       setName(ctx, other, intent.name, agent);
+      return;
+    }
+    case 'adopt_child': {
+      if (!other || other === agent) return fail(ctx, agent, "I can't find that child.");
+      const who = nameAsKnown(agent, other);
+      if (!other.alive) return fail(ctx, agent, `${who} has died.`);
+      if (other.age >= 18) return fail(ctx, agent, `${who} is grown up and can't be adopted.`);
+      if (!isOrphan(state, other))
+        return fail(ctx, agent, `${who} still has a parent to look after them.`);
+      if (!agent.homeId) return fail(ctx, agent, `I have no home to take ${who} into.`);
+      // Little ones are at home indoors: go to their door.
+      if (other.indoorsId) {
+        const home = mapCache(state.map).byId.get(other.indoorsId);
+        if (
+          home?.door &&
+          Math.max(Math.abs(agent.x - home.door.x), Math.abs(agent.y - home.door.y)) > 1
+        ) {
+          ctx.walkTo(agent, [home.door], intent, 'their home');
+          return;
+        }
+      } else if (!approach(ctx, agent, other, intent, 2, 'speak with')) return;
+      const stage = stageOf(other.age);
+      if (stage === 'infant' || stage === 'toddler') {
+        // Too little to be asked: whoever takes them in becomes their family.
+        adopt(ctx, agent, other);
+        return;
+      }
+      state.requests = state.requests.filter(
+        (r) => !(r.kind === 'adoption' && r.from === agent.id && r.to === other.id),
+      );
+      state.requests.push({ kind: 'adoption', from: agent.id, to: other.id, tick });
+      agent.speech = {
+        text: `${other.name}, would you like to come and live with us?`,
+        until: tick + 30,
+      };
+      emit(
+        ctx,
+        'said',
+        [agent.id, other.id],
+        `${fullName(agent)} offered to adopt ${fullName(other)}.`,
+        3,
+      );
+      remember(agent, tick, `I offered to take ${who} in as my own child.`, 6, 'conversation', [
+        other.id,
+      ]);
+      meet(other, agent, tick, true);
+      if (!other.asleep) {
+        remember(
+          other,
+          tick,
+          `${nameAsKnown(other, agent)} offered to take me in as their child.`,
+          7,
+          'conversation',
+          [agent.id],
+        );
+        if (!other.awaiting)
+          other.awaiting = {
+            kind: 'adoption_offer',
+            fromId: agent.id,
+            fromName: nameAsKnown(other, agent),
+          };
+      }
+      agent.action = { type: 'rest', until: tick + 3 };
+      return;
+    }
+    case 'respond_adoption': {
+      const req = state.requests.find(
+        (r) => r.kind === 'adoption' && r.from === intent.fromId && r.to === agent.id,
+      );
+      if (!req || !other?.alive) return fail(ctx, agent, 'That offer is no longer open.');
+      state.requests = state.requests.filter((r) => r !== req);
+      const who = nameAsKnown(agent, other);
+      if (!isOrphan(state, agent)) return fail(ctx, agent, 'I already have a family.');
+      if (!intent.accept || !other.homeId) {
+        remember(agent, tick, `I told ${who} I don't want to be adopted.`, 6, 'conversation', [
+          other.id,
+        ]);
+        remember(
+          other,
+          tick,
+          `${nameAsKnown(other, agent)} didn't want me to adopt them.`,
+          6,
+          'conversation',
+          [agent.id],
+        );
+        emit(
+          ctx,
+          'said',
+          [agent.id, other.id],
+          `${fullName(agent)} turned down ${fullName(other)}'s offer to adopt them.`,
+          3,
+        );
+        if (!other.awaiting && !other.asleep)
+          other.awaiting = {
+            kind: 'adoption_answered',
+            childName: nameAsKnown(other, agent),
+            accepted: false,
+          };
+        return;
+      }
+      adopt(ctx, other, agent);
+      if (!other.awaiting && !other.asleep)
+        other.awaiting = {
+          kind: 'adoption_answered',
+          childName: nameAsKnown(other, agent),
+          accepted: true,
+        };
       return;
     }
     case 'declare_will': {
@@ -946,6 +1063,143 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
         [other.id],
       );
       return;
+    }
+  }
+}
+
+// ------------------------------------------------------------------ orphans & adoption
+
+/** A person's living parents: birth parents and adoptive parents. */
+export function livingParents(state: WorldState, child: Agent): Agent[] {
+  const out: Agent[] = [];
+  for (const id of [child.motherId, child.fatherId, ...child.adoptiveParentIds]) {
+    const p = byId(state, id);
+    if (p?.alive && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/** Under 18 with no living parent, birth or adoptive. */
+export function isOrphan(state: WorldState, child: Agent): boolean {
+  return child.alive && child.age < 18 && livingParents(state, child).length === 0;
+}
+
+/**
+ * Take a child in as one's own. The adopter's partner becomes a parent too; the child moves into
+ * their home and their children become the child's brothers and sisters. Birth parents stay on
+ * record (genes and the family tree), and the child keeps their name.
+ */
+function adopt(ctx: Ctx, adopter: Agent, child: Agent): void {
+  const { state } = ctx;
+  const tick = state.tick;
+  const partner = byId(state, adopter.partnerId);
+  const parents = [adopter];
+  if (partner?.alive && partner.partnerId === adopter.id && partner.age >= 18)
+    parents.push(partner);
+  // Brothers and sisters before the child joins, so the child isn't their own sibling.
+  const siblings: Agent[] = [];
+  for (const p of parents)
+    for (const id of p.childrenIds) {
+      const s = byId(state, id);
+      if (s?.alive && s !== child && !siblings.includes(s)) siblings.push(s);
+    }
+  for (const p of parents) {
+    if (!p.childrenIds.includes(child.id)) p.childrenIds.push(child.id);
+    if (!child.adoptiveParentIds.includes(p.id)) child.adoptiveParentIds.push(p.id);
+    const r = relation(p, child, tick);
+    Object.assign(r, {
+      name: fullName(child),
+      familiarity: Math.max(r.familiarity, 40),
+      affection: clampRel(Math.max(r.affection, 40) + 20),
+      trust: Math.max(r.trust, 40),
+      role: 'child' as const,
+    });
+    const c = relation(child, p, tick);
+    Object.assign(c, {
+      name: fullName(p),
+      familiarity: Math.max(c.familiarity, 40),
+      affection: clampRel(Math.max(c.affection, 30) + 20),
+      trust: clampRel(Math.max(c.trust, 40) + 10),
+      role: p.sex === 'female' ? ('mother' as const) : ('father' as const),
+    });
+  }
+  for (const s of siblings) {
+    for (const [a, b] of [
+      [s, child],
+      [child, s],
+    ] as const) {
+      const r = relation(a, b, tick);
+      if (!r.role) r.role = 'sibling';
+      r.name ??= fullName(b);
+      r.familiarity = Math.max(r.familiarity, 20);
+      r.affection = Math.max(r.affection, 20);
+    }
+  }
+  // A new home. Babies are carried there (the infant rule keeps them indoors at home).
+  child.homeId = adopter.homeId;
+  if (adopter.homeId) child.knowledge[adopter.homeId] = { lastSeenTick: tick };
+  if (child.indoorsId && child.indoorsId !== adopter.homeId) child.indoorsId = null;
+  state.requests = state.requests.filter((r) => !(r.kind === 'adoption' && r.to === child.id));
+
+  const names = parents.map((p) => fullName(p)).join(' and ');
+  emit(
+    ctx,
+    'adopted',
+    [child.id, ...parents.map((p) => p.id)],
+    `${names} adopted ${fullName(child)}.`,
+    5,
+  );
+  for (const p of parents) {
+    remember(
+      p,
+      tick,
+      `We took ${nameAsKnown(p, child)} in: they are our child now.`,
+      9,
+      'experience',
+      [child.id, ...parents.filter((q) => q !== p).map((q) => q.id)],
+    );
+  }
+  remember(
+    child,
+    tick,
+    `${parents.map((p) => nameAsKnown(child, p)).join(' and ')} took me in. I have a family again.`,
+    9,
+    'experience',
+    parents.map((p) => p.id),
+  );
+}
+
+/**
+ * When someone dies, any child of theirs left with no parent at all is an orphan. The child
+ * knows; the household, the child's grown-up relatives and grown-ups nearby hear of it.
+ */
+export function noticeOrphans(ctx: Ctx, dead: Agent): void {
+  const { state } = ctx;
+  for (const id of dead.childrenIds) {
+    const child = byId(state, id);
+    if (!child || !isOrphan(state, child)) continue;
+    emit(ctx, 'orphaned', [child.id, dead.id], `${fullName(child)} has lost their last parent.`, 4);
+    remember(child, state.tick, 'I have no mother or father any more.', 9, 'experience', [dead.id]);
+    for (const other of state.agents) {
+      if (other === child || other === dead || !other.alive || other.age < 18) continue;
+      const household =
+        (dead.homeId && other.homeId === dead.homeId) ||
+        (child.homeId && other.homeId === child.homeId);
+      const relative = Boolean(other.people[child.id]?.role);
+      const near = (p: Agent) => Math.max(Math.abs(other.x - p.x), Math.abs(other.y - p.y)) <= 8;
+      const nearby = !other.asleep && (near(dead) || near(child));
+      if (!household && !relative && !nearby) continue;
+      const name = nameAsKnown(other, child);
+      remember(
+        other,
+        state.tick,
+        `${name} has no parents left to look after them.`,
+        6,
+        'experience',
+        [child.id, dead.id],
+      );
+      if (!other.awaiting && !other.asleep)
+        other.awaiting = { kind: 'orphaned', childId: child.id, childName: name };
     }
   }
 }

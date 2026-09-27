@@ -152,13 +152,22 @@ export function AgentInspector({
           {agent.family.father && (
             <PersonRow label="Father" p={agent.family.father} onPick={onPick} />
           )}
+          {agent.family.adoptiveParents.map((p) => (
+            <PersonRow key={p.id} label="Adoptive parent" p={p} onPick={onPick} />
+          ))}
           {agent.family.children.map((c) => (
-            <PersonRow key={c.id} label="Child" p={c} onPick={onPick} />
+            <PersonRow
+              key={c.id}
+              label={c.adopted ? 'Adopted child' : 'Child'}
+              p={c}
+              onPick={onPick}
+            />
           ))}
         </dl>
         {!agent.family.partner &&
           !agent.family.mother &&
           !agent.family.father &&
+          agent.family.adoptiveParents.length === 0 &&
           agent.family.children.length === 0 && (
             <p className="muted small">No family in the village.</p>
           )}

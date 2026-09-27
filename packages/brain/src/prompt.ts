@@ -105,6 +105,10 @@ const ACTION_HELP: Record<string, string> = {
   try_for_child: 'try_for_child {target: your partner} (they must agree)',
   respond_child_request: 'respond_child_request {target: your partner, accept: true or false}',
   name_child: 'name_child {target: your unnamed baby, name: a first name}',
+  adopt_child:
+    'adopt_child {target: a child with no parents left} (take them into your home as your own; a child of 3 or older must agree)',
+  respond_adoption:
+    'respond_adoption {target: the grown-up who offered to adopt you, accept: true or false}',
   declare_will: 'declare_will {target: who inherits everything you own when you die}',
   build_house:
     'build_house (start or continue building a house, or rebuild your burnt one; each stretch uses 3 planks)',
@@ -223,6 +227,14 @@ function triggerText(p: Perception): string {
       return `Your child was just born — ${t.childLabel} [${t.childId}]! The baby still needs a name (name_child).`;
     case 'child_needs':
       return `${t.childName} [${t.childId}] is crying — ${t.need === 'food' ? 'hungry' : 'thirsty'}.`;
+    case 'orphaned':
+      return `${t.childName} [${t.childId}] has lost their last parent and has nobody to look after them. You could adopt them (adopt_child), help in other ways, or leave it to others.`;
+    case 'adoption_offer':
+      return `${t.fromName} (${t.fromId}) has offered to take you in as their own child and give you a home. Answer with respond_adoption.`;
+    case 'adoption_answered':
+      return t.accepted
+        ? `${t.childName} said yes: they are your child now and will live in your home.`
+        : `${t.childName} didn't want to be adopted.`;
     case 'grew_up':
       return `You have grown up a little: you are now ${t.stage === 'adult' ? 'an adult' : `a ${t.stage}`}.`;
     case 'unwell':
@@ -380,7 +392,9 @@ export function userPrompt(p: Perception): string {
     lines.push('Your family:');
     if (fam.partner) lines.push(`- Partner: ${fam.partner.name} [${fam.partner.id}]`);
     for (const par of fam.parents)
-      lines.push(`- Parent: ${par.name} [${par.id}]${par.alive ? '' : ' (dead)'}`);
+      lines.push(
+        `- ${par.adoptive ? 'Adoptive parent' : 'Parent'}: ${par.name} [${par.id}]${par.alive ? '' : ' (dead)'}`,
+      );
     for (const c of fam.children) {
       const needs = c.needs
         ? ` — right now: food ${Math.round(c.needs.food)}, water ${Math.round(c.needs.water)}${c.needs.food < 40 || c.needs.water < 40 ? ' (needs feeding!)' : ''}`
@@ -397,7 +411,9 @@ export function userPrompt(p: Perception): string {
       lines.push(
         r.kind === 'proposal'
           ? `${r.fromName} [${r.fromId}] has asked you to be their partner and is waiting for your answer.`
-          : `${r.fromName} [${r.fromId}] has asked whether you would like to try for a child and is waiting for your answer.`,
+          : r.kind === 'adoption'
+            ? `${r.fromName} [${r.fromId}] has offered to adopt you and is waiting for your answer.`
+            : `${r.fromName} [${r.fromId}] has asked whether you would like to try for a child and is waiting for your answer.`,
       );
     }
   }

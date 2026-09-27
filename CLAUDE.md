@@ -299,6 +299,17 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-09-27 — Orphan adoption.** An orphan is anyone under 18 with no living birth or adoptive
+  parent. When the last parent dies the child, the household, the child's relatives and grown-ups
+  nearby are told (new `orphaned` trigger and event), and an orphan's cry reaches any adult in
+  earshot. New adult action `adopt_child` (needs a home): babies and toddlers are taken in at
+  once, a child of 3+ must agree (`respond_adoption`, which children and teens can do). The
+  adopter's partner adopts too, so same-sex couples can now raise children. Birth parents stay
+  on record (genes, family tree) and the child keeps their name; adoptive parents are listed
+  separately (`adoptiveParentIds`) but otherwise count as parents: naming, crying, estates and
+  the child's `mother`/`father` relationship role. The mock brain accepts most offers and a kind
+  adult with a home sometimes adopts. State v8.
+
 - **2026-09-27 — No formatting check (owner).** The owner doesn't care about formatting: CI no
   longer checks it and `format:check` is gone. `npm run format` (Prettier) stays as an optional
   tool. Lint stays in CI because it enforces code rules (deterministic sim, UI imports), not style.
@@ -374,7 +385,7 @@ Newest first. Record every change to an agreed decision here.
   moves in. Conception needs a mutual yes (`try_for_child` + `respond_child_request`), partners of
   opposite sex, mother 18–45 (fertility declines after 35), health; ~35% per try at best; pregnancy
   0.75 years (tracked in age-years, so the aging slider applies); ~3% of births harm the mother.
-  Same-sex couples can partner but not conceive (adoption not implemented yet). (f) Genetics: skin
+  Same-sex couples can partner but not conceive (they can adopt: see Orphan adoption). (f) Genetics: skin
   from either parent or blended, hair from a parent (5% new), temperament = parents' average pulled
   25% to the middle ± noise, aptitude and constitution averaged ± noise. Family name: the father's if
   the parents are partners, else the mother's. Babies get a name from their parents (or an automatic

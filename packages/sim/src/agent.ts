@@ -138,7 +138,10 @@ export interface Agent {
   // ---- Life cycle (Phase 4)
   motherId: string | null;
   fatherId: string | null;
+  /** Birth children and adopted children alike. */
   childrenIds: string[];
+  /** People who adopted this person (the birth parents stay in motherId/fatherId). */
+  adoptiveParentIds: string[];
   partnerId: string | null;
   /** Inborn learning speed by skill kind (inherited). */
   aptitude: Aptitude;

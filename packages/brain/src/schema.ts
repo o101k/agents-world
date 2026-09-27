@@ -38,6 +38,8 @@ export const ACTIONS = [
   'try_for_child',
   'respond_child_request',
   'name_child',
+  'adopt_child',
+  'respond_adoption',
   'declare_will',
   'build_house',
   'tend',
@@ -93,7 +95,8 @@ export const DECIDE_SCHEMA = {
           offer_id: { type: 'string', description: 'For respond_offer.' },
           accept: {
             type: 'boolean',
-            description: 'For respond_offer / respond_proposal / respond_child_request.',
+            description:
+              'For respond_offer / respond_proposal / respond_child_request / respond_adoption.',
           },
           skill: { type: 'string', enum: [...SKILL_NAMES], description: 'For teach.' },
           name: { type: 'string', description: 'For name_child: the first name you give.' },
@@ -325,6 +328,17 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
         if (target && typeof step.name === 'string' && step.name.trim()) {
           plan.push({ type: 'name_child', childId: target, name: step.name.trim().slice(0, 40) });
         }
+        break;
+      case 'adopt_child':
+        if (target) plan.push({ type: 'adopt_child', childId: target });
+        break;
+      case 'respond_adoption':
+        if (target)
+          plan.push({
+            type: 'respond_adoption',
+            fromId: target,
+            accept: step.accept === true || step.accept === 'true',
+          });
         break;
       case 'declare_will':
         if (target) plan.push({ type: 'declare_will', agentId: target });

@@ -48,7 +48,7 @@ the simulation understands.
 - **Resume** = latest snapshot + replay of logged inputs up to the saved tick; inputs already logged
   for the next tick are re-queued and outstanding decisions re-asked. Tests check that crash-resume
   and stop/restart both match an uninterrupted run exactly.
-- World state has a version; older saves are upgraded on load, step by step (v1 → v7).
+- World state has a version; older saves are upgraded on load, step by step (v1 → v8).
 - **Replay** (`apps/server/src/worlds/replayer.ts`) uses the same mechanism for any past tick: the
   nearest earlier snapshot (one per in-game day is kept forever) plus the logged inputs since, run
   through `step` with no brains and nothing written. The last replayed state is cached, so
@@ -59,7 +59,7 @@ the simulation understands.
 World file (SQLite, WAL, migrations via `PRAGMA user_version`): `meta`, `snapshots` (gzipped JSON,
 pruned to one per day after two days), `tick_inputs`, `events`, `llm_calls`.
 
-## World state (v7)
+## World state (v8)
 
 `seed, tick, rng, settings {daysPerYear, defaultBrain}, map {width, height, tiles, objects},
 agents[], resources{}, market {stock}, offers[], requests[], owners{}, nextAgentNum, nextOfferNum,
@@ -70,7 +70,7 @@ An **agent** holds identity (name, family name, sex, age in years), appearance, 
 Five), traits, background, occupation, home, position, needs, health, inventory, money, skills,
 knowledge (places seen, last-seen amounts, market prices seen), people (relationships), memory
 (recent + long-term stream), brain config, current thought/goal/plan/action, family links,
-aptitude, constitution, pregnancy, will, sickness and immunity, the forgotten list, and the day of
+aptitude, constitution, pregnancy, will, adoptive parents, sickness and immunity, the forgotten list, and the day of
 the last reflection and age of the last life chapter.
 
 ## The tick engine (`packages/sim/src/engine.ts`)
@@ -210,6 +210,15 @@ it means. The mock brain stocks more food in autumn and winter.
 - Old-age hazard 0.3%/year at 50 doubling every 8 years ÷ constitution. `settleEstate`: will heir →
   partner → children → housemates; buildings become co-owned by heirs. `mournDeath` informs family
   and those nearby.
+- Orphans and adoption: a person under 18 with no living parent (birth or adoptive) is an orphan.
+  When the last parent dies, `noticeOrphans` records an `orphaned` event, tells the child, and
+  alerts grown-ups in the household, the child's relatives and anyone nearby (`orphaned` trigger).
+  An orphan's cry reaches any grown-up in earshot. An adult with a home can `adopt_child`: babies
+  and toddlers are taken in at once; a child of 3 or more is asked (`adoption` request →
+  `respond_adoption`). The adopter's partner adopts too. The child moves into their home, keeps
+  their name and birth parents on record (`motherId`/`fatherId`, genes, tree), gains
+  `adoptiveParentIds`, and joins `childrenIds` — so adoptive parents can name, are called by and
+  leave their estate to them like birth children.
 - `build_house` on a free plot near the market (3 planks per hour-long stretch, ~10 stretches);
   map changes bump `mapVersion`.
 

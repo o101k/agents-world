@@ -3,7 +3,12 @@ import { TICKS_PER_DAY, TICKS_PER_HOUR } from '@aw/shared';
 import { step } from './engine.ts';
 import { buildPerception } from './perception.ts';
 import { calendarView, seasonOf } from './seasons.ts';
-import { createWorldState, deserializeWorldState, serializeWorldState } from './world.ts';
+import {
+  WORLD_STATE_VERSION,
+  createWorldState,
+  deserializeWorldState,
+  serializeWorldState,
+} from './world.ts';
 
 const fresh = () => {
   const s = createWorldState({ seed: 'seasons', mapSize: 'small' });
@@ -63,7 +68,7 @@ describe('seasons', () => {
     old.version = 6;
     delete old.calendar;
     const up = deserializeWorldState(old);
-    expect(up.version).toBe(7);
+    expect(up.version).toBe(WORLD_STATE_VERSION);
     expect(up.calendar.year).toBe(3); // 10 days at 4 days a year
   });
 });

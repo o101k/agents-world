@@ -165,6 +165,7 @@ export function createAgent(
     motherId: null,
     fatherId: null,
     childrenIds: [],
+    adoptiveParentIds: [],
     partnerId: null,
     aptitude: {
       physical: apt(),

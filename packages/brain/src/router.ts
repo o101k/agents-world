@@ -58,6 +58,7 @@ export function priorityOf(trigger: DecisionTrigger): number {
     case 'offer_received':
     case 'proposal':
     case 'child_request':
+    case 'adoption_offer':
     case 'attacked':
     case 'robbed':
       return 0;
@@ -67,6 +68,7 @@ export function priorityOf(trigger: DecisionTrigger): number {
     case 'unwell':
     case 'action_failed':
     case 'child_born':
+    case 'orphaned':
       return 1;
     case 'reflect':
       return 3;

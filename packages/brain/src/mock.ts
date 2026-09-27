@@ -441,6 +441,31 @@ function lifePlan(p: Perception, roll: number): Decision | null {
       plan: [{ type: 'respond_child_request', fromId: t.fromId, accept: yes }],
     };
   }
+  if (t.kind === 'adoption_offer') {
+    const who = p.knownPeople.find((k) => k.id === t.fromId);
+    const yes = (who?.trust ?? 0) >= -10 && roll < 0.85;
+    return {
+      thought: yes
+        ? `${t.fromName} wants to give me a home. Yes, please.`
+        : "I'm not ready for that.",
+      goal: yes ? 'Join a new family' : 'Stay on my own',
+      plan: [{ type: 'respond_adoption', fromId: t.fromId, accept: yes }],
+    };
+  }
+  // A kind grown-up with a home may take in a child who has lost their parents.
+  if (
+    t.kind === 'orphaned' &&
+    (p.stage === 'adult' || p.stage === 'elder') &&
+    p.self.homeId &&
+    p.family.children.filter((c) => c.age < 18).length < 4 &&
+    roll < 0.3 + p.personality.agreeableness / 200
+  ) {
+    return {
+      thought: `${t.childName} has nobody now. We'll take them in.`,
+      goal: `Adopt ${t.childName}`,
+      plan: [{ type: 'adopt_child', childId: t.childId }],
+    };
+  }
   // Feed hungry children we can see (or were told about).
   const hungryChild =
     p.family.children.find(
