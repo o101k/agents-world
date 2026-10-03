@@ -42,3 +42,14 @@ export interface GenerateRequest {
 
 /** Thrown when the model declines to answer. */
 export class RefusalError extends Error {}
+
+/** Thrown when a Claude subscription's usage limit (5-hour or weekly) is used up. */
+export class UsageLimitError extends Error {
+  constructor(
+    message: string,
+    /** When the limit resets (ms since epoch), if the provider said. */
+    readonly resetsAt?: number,
+  ) {
+    super(message);
+  }
+}

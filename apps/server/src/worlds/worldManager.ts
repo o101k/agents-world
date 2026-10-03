@@ -159,7 +159,12 @@ export class WorldManager {
     const cast = generateCast(seed, { adults: opt.adults, children: opt.children });
     if (!opt.useAi) return cast;
     // Flesh out each adult with the first AI provider that's set up.
-    const order: BrainConfig['provider'][] = ['anthropic', 'openai', 'openai_compatible'];
+    const order: BrainConfig['provider'][] = [
+      'anthropic',
+      'openai',
+      'openai_compatible',
+      'claude_plan',
+    ];
     const provider = order.find((p) => this.brains.has(p));
     if (!provider) return cast;
     const brain: BrainConfig = { provider, model: '', effort: 'frugal' };

@@ -105,7 +105,7 @@ export interface RelationshipView {
   lastSeenTick: number;
 }
 
-export type ProviderId = 'mock' | 'anthropic' | 'openai' | 'openai_compatible';
+export type ProviderId = 'mock' | 'anthropic' | 'openai' | 'openai_compatible' | 'claude_plan';
 export type EffortLevel = 'frugal' | 'standard' | 'deep';
 
 export interface BrainConfig {

@@ -14,8 +14,9 @@ write a chapter of their life story every year, form beliefs and forget what did
 send droughts, storms, sickness, fires and bumper harvests, search the whole history, and read
 anyone's life story. The year turns through spring, summer, autumn and winter; you can scrub the
 map back to any moment of a world's history; and villages of 150+ people run on the huge map.
-Each person can think with an AI of your choice (Claude, OpenAI, or any OpenAI-compatible service
-such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Mock brain. See
+Each person can think with an AI of your choice (Claude through your own Claude Pro/Max
+subscription or an API key, OpenAI, or any OpenAI-compatible service such as OpenRouter or a local
+Ollama/LM Studio), or with the free rule-based Mock brain. See
 [`CLAUDE.md`](CLAUDE.md) for the full plan and [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
 
 ## Requirements
@@ -75,6 +76,26 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
   in-game minute it had reached.
 
 ### Giving villagers AI brains
+
+**With your Claude subscription (Pro or Max), no API key:**
+
+1. Install Claude Code on your Mac: in Terminal run `curl -fsSL https://claude.ai/install.sh | bash`.
+2. Run `claude` once and log in with the Claude account that has your plan. You can close it after.
+3. In Agents World open **⚙ AI settings**. The **Claude subscription** card should say _Ready_
+   (press **Check** if you logged in while the helper was running). Pick a default model there:
+   Haiku makes your limits last longest; Sonnet and Opus are smarter but use them faster.
+4. In a world, open the **World** tab → **Default brain**, choose **Claude subscription**, a model
+   and an effort, tick "Also switch everyone alive", and save (or set one person in their inspector).
+
+Villagers then share your plan's 5-hour and weekly limits with your own Claude use. It costs no
+extra money and the spending cap doesn't apply. When the limit runs out, time pauses and resumes by
+itself when the limit resets (or press Play to try sooner). Agents World never sees your Claude
+login: it runs the official `claude` command, which Anthropic allows for your own projects, and
+never uses `ANTHROPIC_API_KEY` for these calls. Each decision takes a few seconds longer than with an
+API key because it starts a `claude` process. If calls fail with an unknown option, run
+`claude update`.
+
+**With API keys:**
 
 1. Click **⚙ AI settings** (on the worlds screen, or ⚙ in a world's top bar) and add a key:
    - **Anthropic**: paste your API key. Default model `claude-haiku-4-5` (the cheapest Claude model).

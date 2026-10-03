@@ -7,7 +7,7 @@ import type {
   ProviderId,
 } from '@aw/shared';
 import { MockBrain, mockDecide } from './mock.ts';
-import { RefusalError, type BrainProvider, type BrainResult } from './types.ts';
+import { RefusalError, UsageLimitError, type BrainProvider, type BrainResult } from './types.ts';
 
 export interface RoutedResult {
   result: BrainResult | null;
@@ -20,6 +20,8 @@ export interface RoutedResult {
   fallback?: boolean;
   error?: string;
   timedOut?: boolean;
+  /** The Claude subscription's usage limit is used up (the decision was not made). */
+  limit?: { message: string; resetsAt?: number };
 }
 
 /**
@@ -97,6 +99,8 @@ const CONCURRENCY: Record<ProviderId, number> = {
   anthropic: 6,
   openai: 6,
   openai_compatible: 2,
+  // Each call starts a `claude` process, and a subscription is for one person's use.
+  claude_plan: 3,
 };
 
 export class BrainRouter {
@@ -188,6 +192,14 @@ export class BrainRouter {
         };
       return { result: out, provider: provider.id, model: out.trace?.model ?? config.model };
     } catch (err) {
+      if (err instanceof UsageLimitError)
+        return {
+          result: null,
+          provider: provider.id,
+          model: config.model,
+          error: `Usage limit: ${err.message}`.slice(0, 500),
+          limit: { message: err.message, resetsAt: err.resetsAt },
+        };
       // Never stall the world on a failed call: the person hesitates briefly and tries again later.
       const refused = err instanceof RefusalError;
       const decision: Decision = {

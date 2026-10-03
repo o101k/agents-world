@@ -49,6 +49,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const [tab, setTab] = useState<Tab>('people');
   const selection = useWorld((s) => s.selection);
   const capReached = useWorld((s) => s.runner.capReached);
+  const planLimit = useWorld((s) => s.runner.planLimit);
   const [spawning, setSpawning] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const replaying = useWorld((s) => s.replay !== null);
@@ -188,6 +189,19 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         <div className="banner banner-warn" role="alert">
           The spending cap is reached, so time is paused. Raise the cap (click the spending meter)
           or switch people to the free Mock brain, then press Play.
+        </div>
+      )}
+      {planLimit && (
+        <div className="banner banner-warn" role="alert">
+          Your Claude subscription's usage limit is used up, so time is paused. It resumes by itself
+          around{' '}
+          {new Date(planLimit.resumeAt).toLocaleString(undefined, {
+            weekday: 'short',
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+          , or press Play to try sooner. Switching people to Haiku or Frugal makes the limit last
+          longer.
         </div>
       )}
       <ConditionsBar map={shownMap} />

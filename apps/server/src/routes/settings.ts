@@ -4,7 +4,7 @@ import { PricesUpdate, ProviderUpdate, type SettingsResponse } from '@aw/shared'
 import type { SettingsStore } from '../settings.ts';
 import { NotFoundError } from '../worlds/worldManager.ts';
 
-const PROVIDERS = new Set(['anthropic', 'openai', 'openai_compatible']);
+const PROVIDERS = new Set(['anthropic', 'openai', 'openai_compatible', 'claude_plan']);
 
 export function registerSettingsRoutes(
   app: FastifyInstance,
@@ -19,11 +19,20 @@ export function registerSettingsRoutes(
     '/api/settings/providers/:id',
     async (req): Promise<SettingsResponse> => {
       if (!PROVIDERS.has(req.params.id)) throw new NotFoundError('Unknown provider');
-      settings.updateProvider(req.params.id as 'anthropic', ProviderUpdate.parse(req.body ?? {}));
+      const update = ProviderUpdate.parse(req.body ?? {});
+      settings.updateProvider(req.params.id as 'anthropic', update);
+      if (req.params.id === 'claude_plan') await settings.checkClaudePlan();
       refresh();
       return settings.view();
     },
   );
+
+  /** Re-checks that Claude Code is installed and signed in (after the owner logs in). */
+  app.post('/api/settings/providers/claude_plan/check', async (): Promise<SettingsResponse> => {
+    await settings.checkClaudePlan();
+    refresh();
+    return settings.view();
+  });
 
   app.put('/api/settings/prices', async (req): Promise<SettingsResponse> => {
     settings.updatePrices(PricesUpdate.parse(req.body ?? {}));

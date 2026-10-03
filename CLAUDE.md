@@ -299,6 +299,17 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-03 — Claude subscription as a provider (owner request).** New provider `claude_plan`:
+  villagers can think on the owner's Claude Pro/Max plan (its 5-hour and weekly limits) instead of
+  an API key; API keys stay as before. Anthropic forbids apps from offering claude.ai login or
+  using subscription tokens, but allows running the unmodified Claude Code CLI / Agent SDK signed
+  in with your own plan for your own projects (and that usage draws on plan limits). So the helper
+  runs `claude -p` with structured output and all of Claude Code's tools, MCP, skills and CLAUDE.md
+  switched off, and never touches the login. Model = Claude Code alias (default `haiku`) chosen in
+  the usual brain editor; effort Frugal/Standard/Deep also sets Claude's effort low/medium/high.
+  Plan calls cost $0 against the spending cap. A used-up limit pauses the world and auto-resumes at
+  the reset time (30 min if unknown). Setup steps are in Settings and the README.
+
 - **2026-10-03 — Node 24 LTS, pinned (owner request).** `.nvmrc` pins Node 24.21.0, the latest
   stable (LTS) release; Node 26 is still "Current" until it turns LTS. CI reads its version from
   `.nvmrc`, `engines` is `>=24` and `@types/node` follows 24. npm 11 (bundled with Node 24) only runs
@@ -325,7 +336,6 @@ Newest first. Record every change to an agreed decision here.
 - **2026-09-27 — No formatting check (owner).** The owner doesn't care about formatting: CI no
   longer checks it and `format:check` is gone. `npm run format` (Prettier) stays as an optional
   tool. Lint stays in CI because it enforces code rules (deterministic sim, UI imports), not style.
-
 
 - **2026-09-27 — Tests and CI (owner request).** GitHub Actions workflow `.github/workflows/ci.yml`
   on pushes to `master` and every PR (not every branch push, which ran everything twice for a

@@ -1,4 +1,5 @@
 export * from './anthropic.ts';
+export * from './claudeCli.ts';
 export * from './mock.ts';
 export * from './openai.ts';
 export * from './person.ts';

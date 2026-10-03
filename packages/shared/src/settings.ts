@@ -11,6 +11,8 @@ export interface ModelPrice {
 
 export interface ProviderStatus {
   id: Exclude<ProviderId, 'mock'>;
+  /** 'api' = pay per token with an API key; 'plan' = your Claude subscription via Claude Code. */
+  kind: 'api' | 'plan';
   label: string;
   configured: boolean;
   /** e.g. "sk-…abcd" — never the key itself. */
@@ -19,6 +21,10 @@ export interface ProviderStatus {
   keySource: 'settings' | 'environment' | null;
   baseUrl: string | null;
   defaultModel: string;
+  /** Plan providers: where the `claude` command is (or null). */
+  cliPath?: string | null;
+  /** Plan providers: a plain sentence on whether it's ready, and what to do if not. */
+  message?: string;
 }
 
 export interface SettingsResponse {
@@ -32,6 +38,8 @@ export const ProviderUpdate = z.object({
   apiKey: z.string().max(500).optional(),
   baseUrl: z.string().max(300).optional(),
   defaultModel: z.string().max(200).optional(),
+  /** Plan providers: full path to the `claude` command; empty string = find it automatically. */
+  cliPath: z.string().max(500).optional(),
 });
 export type ProviderUpdate = z.infer<typeof ProviderUpdate>;
 
@@ -47,7 +55,7 @@ export const PricesUpdate = z.record(
 );
 
 export const BrainConfigSchema = z.object({
-  provider: z.enum(['mock', 'anthropic', 'openai', 'openai_compatible']),
+  provider: z.enum(['mock', 'anthropic', 'openai', 'openai_compatible', 'claude_plan']),
   model: z.string().max(200),
   effort: z.enum(['frugal', 'standard', 'deep']),
 });

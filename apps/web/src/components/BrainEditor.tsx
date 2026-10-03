@@ -1,12 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { BrainConfig, EffortLevel, ProviderId } from '@aw/shared';
 import { api } from '../api.ts';
+import { PLAN_MODELS } from '../planModels.ts';
 import { useSettings } from '../settingsStore.ts';
 
 const EFFORT_HELP: Record<EffortLevel, string> = {
   frugal: 'Cheapest: short prompts, routine needs handled by instinct, check-ins every 8 h.',
   standard: 'More memories in each prompt, AI handles everything, check-ins every 4 h.',
   deep: 'Most memories and deeper thinking, check-ins every 3 h. Costs the most.',
+};
+
+const PLAN_EFFORT: Record<EffortLevel, string> = {
+  frugal: 'low',
+  standard: 'medium',
+  deep: 'high',
 };
 
 /** Pick provider, model and effort for a person (or the world default). Remount with a new key to reset. */
@@ -31,7 +38,7 @@ export function BrainEditor({
     if (!settings) void load();
   }, [settings, load]);
   useEffect(() => {
-    if (brain.provider === 'mock') return;
+    if (brain.provider === 'mock' || brain.provider === 'claude_plan') return;
     let cancelled = false;
     api
       .providerModels(brain.provider)
@@ -71,26 +78,50 @@ export function BrainEditor({
         <>
           {!configured(brain.provider) && (
             <p className="warn small">
-              This provider has no key yet, so the free mock brain will stand in.{' '}
+              {current?.kind === 'plan'
+                ? 'Claude Code isn’t set up yet, so the free mock brain will stand in.'
+                : 'This provider has no key yet, so the free mock brain will stand in.'}{' '}
               <button className="linkish" onClick={() => setOpen(true)}>
                 Open settings
               </button>
             </p>
           )}
-          <label>
-            Model
-            <input
-              list={`models-${brain.provider}`}
-              value={brain.model}
-              placeholder={current?.defaultModel ? `default: ${current.defaultModel}` : 'model id'}
-              onChange={(e) => setBrain({ ...brain, model: e.target.value })}
-            />
-            <datalist id={`models-${brain.provider}`}>
-              {models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </label>
+          {current?.kind === 'plan' ? (
+            <label>
+              Model
+              <select
+                value={brain.model}
+                onChange={(e) => setBrain({ ...brain, model: e.target.value })}
+              >
+                <option value="">Default ({current.defaultModel})</option>
+                {PLAN_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+                {brain.model && !PLAN_MODELS.some((m) => m.id === brain.model) && (
+                  <option value={brain.model}>{brain.model}</option>
+                )}
+              </select>
+            </label>
+          ) : (
+            <label>
+              Model
+              <input
+                list={`models-${brain.provider}`}
+                value={brain.model}
+                placeholder={
+                  current?.defaultModel ? `default: ${current.defaultModel}` : 'model id'
+                }
+                onChange={(e) => setBrain({ ...brain, model: e.target.value })}
+              />
+              <datalist id={`models-${brain.provider}`}>
+                {models.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </label>
+          )}
           <label>
             Effort
             <select
@@ -102,7 +133,11 @@ export function BrainEditor({
               <option value="deep">Deep</option>
             </select>
           </label>
-          <p className="muted small">{EFFORT_HELP[brain.effort]}</p>
+          <p className="muted small">
+            {EFFORT_HELP[brain.effort]}
+            {current?.kind === 'plan' &&
+              ` Uses your Claude plan’s limits (Claude effort: ${PLAN_EFFORT[brain.effort]}).`}
+          </p>
         </>
       )}
       {extra}
