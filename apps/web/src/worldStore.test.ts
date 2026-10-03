@@ -10,6 +10,7 @@ const runner: RunnerStatus = {
   spentUsd: 0,
   capUsd: 1,
   capReached: false,
+  planLimit: null,
 };
 
 const view = {

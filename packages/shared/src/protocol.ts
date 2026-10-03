@@ -69,6 +69,11 @@ export interface RunnerStatus {
   capUsd: number;
   /** Paused because the spending cap was reached. */
   capReached: boolean;
+  /**
+   * Paused because the Claude subscription's usage limit is used up; time resumes by itself at
+   * resumeAt (ms since epoch), when the limit should have reset.
+   */
+  planLimit: { message: string; resumeAt: number } | null;
 }
 
 export interface WorldViewResponse {

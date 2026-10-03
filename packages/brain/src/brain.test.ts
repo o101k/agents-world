@@ -1,6 +1,10 @@
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DecisionRequest, Perception } from '@aw/shared';
 import { AnthropicProvider } from './anthropic.ts';
+import { checkClaudeCli, ClaudePlanProvider, findClaudeCli, parseResetTime } from './claudeCli.ts';
 import { mockDecide } from './mock.ts';
 import { OpenAIProvider } from './openai.ts';
 import { DEFAULT_PRICES, costOf } from './pricing.ts';
@@ -622,5 +626,130 @@ describe('adoption', () => {
       );
     }
     expect(adopted).toBe(true);
+  });
+});
+
+/**
+ * A stand-in for the `claude` command: records how it was called, then answers like
+ * `claude -p --output-format json` would (FAKE_MODE: ok | limit | logged_out | api_key).
+ */
+function fakeClaude(): { dir: string; command: string; calls: () => Record<string, unknown>[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-fake-claude-'));
+  const log = join(dir, 'calls.jsonl');
+  const command = join(dir, 'claude');
+  writeFileSync(
+    command,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+let input = '';
+process.stdin.on('data', (d) => (input += d));
+process.stdin.on('end', () => {
+  const mode = process.env.FAKE_MODE || 'ok';
+  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input, apiKey: process.env.ANTHROPIC_API_KEY ?? null }) + '\\n');
+  if (args[0] === '--version') return console.log('2.1.300 (Claude Code)');
+  if (args[0] === 'auth') {
+    const loggedIn = mode !== 'logged_out';
+    console.log(JSON.stringify({ loggedIn, authMethod: !loggedIn ? 'none' : mode === 'api_key' ? 'api_key' : 'claude.ai' }));
+    process.exit(loggedIn ? 0 : 1);
+  }
+  if (mode === 'limit') {
+    console.log(JSON.stringify({ type: 'result', is_error: true, subtype: 'success', result: 'Claude AI usage limit reached|1759780800' }));
+    process.exit(1);
+  }
+  console.log(JSON.stringify({
+    type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn',
+    result: '', usage: { input_tokens: 900, output_tokens: 80, cache_read_input_tokens: 100 },
+    modelUsage: { 'claude-haiku-4-5-20251001': {} },
+    structured_output: { thought: 'Thirsty.', goal: 'Drink', plan: [{ action: 'drink' }] },
+  }));
+});
+`,
+  );
+  chmodSync(command, 0o755);
+  const calls = () =>
+    readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  return { dir, command, calls };
+}
+
+describe('Claude subscription (Claude Code CLI)', () => {
+  const baseEnv = { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-should-not-be-used' };
+
+  it('decides through `claude -p` with no tools, the decide schema and no API key', async () => {
+    const fake = fakeClaude();
+    const provider = new ClaudePlanProvider(fake.command, 'haiku', baseEnv);
+    const p = perception();
+    const res = await provider.decide(request(p), {
+      provider: 'claude_plan',
+      model: '',
+      effort: 'frugal',
+    });
+    expect(res.decision.goal).toBe('Drink');
+    expect(res.usage).toMatchObject({ inputTokens: 1000, outputTokens: 80, costUsd: 0 });
+    expect(res.trace?.model).toBe('claude-haiku-4-5-20251001');
+    const [call] = fake.calls();
+    const args = call!.args as string[];
+    expect(args.slice(0, 3)).toEqual(['-p', '--output-format', 'json']);
+    expect(args[args.indexOf('--model') + 1]).toBe('haiku');
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+    expect(JSON.parse(args[args.indexOf('--json-schema') + 1]!)).toHaveProperty('properties.plan');
+    expect(args).not.toContain('--effort'); // Haiku has none
+    expect(call!.input).toBe(userPrompt(p));
+    expect(call!.apiKey).toBeNull(); // so the CLI uses the subscription, not an API key
+  });
+
+  it('passes the chosen model and maps effort levels to Claude effort', async () => {
+    const fake = fakeClaude();
+    const provider = new ClaudePlanProvider(fake.command, 'haiku', baseEnv);
+    await provider.decide(request(perception()), {
+      provider: 'claude_plan',
+      model: 'sonnet',
+      effort: 'deep',
+    });
+    const args = fake.calls()[0]!.args as string[];
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('reports a used-up plan limit to the router with its reset time', async () => {
+    const fake = fakeClaude();
+    const provider = new ClaudePlanProvider(fake.command, 'haiku', {
+      ...baseEnv,
+      FAKE_MODE: 'limit',
+    });
+    const router = new BrainRouter([provider]);
+    const out = await router.decide(request(perception()), {
+      provider: 'claude_plan',
+      model: '',
+      effort: 'standard',
+    });
+    expect(out.result).toBeNull();
+    expect(out.limit?.resetsAt).toBe(1759780800_000);
+  });
+
+  it('checks that Claude Code is installed and signed in with a Claude account', async () => {
+    const fake = fakeClaude();
+    expect((await checkClaudeCli(fake.command, baseEnv)).usesPlan).toBe(true);
+    const keyed = await checkClaudeCli(fake.command, { ...baseEnv, FAKE_MODE: 'api_key' });
+    expect(keyed.usesPlan).toBe(false);
+    expect(keyed.message).toMatch(/API key/);
+    const out = await checkClaudeCli(fake.command, { ...baseEnv, FAKE_MODE: 'logged_out' });
+    expect(out.loggedIn).toBe(false);
+    expect((await checkClaudeCli(null, baseEnv)).message).toMatch(/not installed/);
+    expect(findClaudeCli({ PATH: fake.dir })).toBe(fake.command);
+    expect(findClaudeCli({})).toBeNull();
+  });
+
+  it('reads reset times from the limit message', () => {
+    const now = new Date(2026, 9, 3, 18, 30);
+    expect(parseResetTime('Claude AI usage limit reached|1759780800', now)).toBe(1759780800_000);
+    const at = new Date(parseResetTime("You've hit your limit · resets 9pm", now)!);
+    expect([at.getDate(), at.getHours()]).toEqual([3, 21]);
+    const tomorrow = new Date(parseResetTime('resets 5:15am', now)!);
+    expect([tomorrow.getDate(), tomorrow.getHours(), tomorrow.getMinutes()]).toEqual([4, 5, 15]);
+    expect(parseResetTime('Something else went wrong', now)).toBeUndefined();
   });
 });

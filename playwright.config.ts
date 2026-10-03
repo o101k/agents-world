@@ -26,6 +26,12 @@ export default defineConfig({
     command: 'npm run start -w @aw/server',
     url: `http://127.0.0.1:${PORT}/api/health`,
     reuseExistingServer: false,
-    env: { AGENTS_WORLD_HOME: dataDir, AW_NO_OPEN: '1', AW_PORT: String(PORT) },
+    env: {
+      AGENTS_WORLD_HOME: dataDir,
+      AW_NO_OPEN: '1',
+      AW_PORT: String(PORT),
+      // Never reach a real Claude subscription from tests, even where Claude Code is installed.
+      AW_CLAUDE_CLI: 'off',
+    },
   },
 });

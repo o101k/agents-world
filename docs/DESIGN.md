@@ -228,7 +228,8 @@ it means. The mock brain stocks more food in autumn and winter.
   `AnthropicProvider` (official SDK; system prompt marked for caching; `tool_choice: auto`;
   `output_config.effort` only on models that take it), `OpenAIProvider` (official SDK for OpenAI
   and any OpenAI-compatible base URL; named function call; `reasoning_effort` on reasoning models),
-  and `MockBrain` (a free rulebook over the perception — work by occupation, trade, family care,
+  `ClaudePlanProvider` (the owner's Claude Pro/Max subscription through the official Claude Code CLI,
+  see below), and `MockBrain` (a free rulebook over the perception — work by occupation, trade, family care,
   nursing the sick, sheltering from storms, rebuilding after a fire, a plain nightly diary,
   courtship, conflict responses).
 - `prompt.ts`: stage-aware system prompt (identity, temperament, how life works, allowed actions)
@@ -237,9 +238,22 @@ it means. The mock brain stocks more food in autumn and winter.
 - `schema.ts`: one flat `decide` tool (`action`, `target`, item/quantity/coins, recipe, trade
   fields, offer id, accept, skill, name; plus `feelings`, `remember`, `diary` and `beliefs`),
   parsed to typed intents (a reflection never carries a plan).
-- `router.ts`: per-provider concurrency (6 hosted, 2 local), timeout, Mock fallback for providers
+- `router.ts`: per-provider concurrency (6 hosted, 2 local, 3 Claude Code processes), timeout, Mock fallback for providers
   without keys, **instinct** for Frugal people's routine needs (and feeling ill, and the nightly
   diary), errors/refusals → a short pause.
+- `claudeCli.ts`: runs `claude -p --output-format json --json-schema <decide schema>` with our own
+  system prompt (`--system-prompt`), the user prompt on stdin, `--model` (alias `haiku`/`sonnet`/
+  `opus` or a full id), `--effort` low/medium/high from Frugal/Standard/Deep (not on Haiku), and
+  everything Claude Code would add switched off (`--tools ""`, `--strict-mcp-config`,
+  `--disable-slash-commands`, `--safe-mode`, `--no-session-persistence`, an empty temp folder as
+  working directory). `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/base URL are removed from its
+  environment so it always uses the subscription login. `--bare` is never used (it ignores
+  subscription logins). The helper never reads or stores the login: Anthropic forbids apps from
+  using subscription tokens directly but allows running the CLI or Agent SDK in your own projects.
+  Usage is recorded as tokens with cost $0. `checkClaudeCli` runs `claude --version` and
+  `claude auth status` (no AI call) at startup and on **Check**; the provider exists only when it
+  is signed in with a Claude account. A used-up plan limit throws `UsageLimitError` (with the reset
+  time when the message has one); concurrency is 3 processes.
 - `pricing.ts`: default Claude prices; editable table; unknown models at a pessimistic $3/$15.
 - `person.ts`: turns an observer's description into a person (AI or offline).
 
@@ -248,37 +262,42 @@ it means. The mock brain stocks more food in autumn and winter.
 `SettingsStore` keeps keys in `~/.agents-world/secrets.json` (mode 600) or env vars; URLs, default
 models and prices in `settings.json`. The browser only sees hints like `sk-…abcd`. Each decision's
 cost travels with the logged input; the world total is `meta.spentUsd`. Before any paid decision
-the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event.
+the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event. Claude
+subscription calls don't count as paid. When one hits the plan's usage limit, that person continues
+their current plan (re-asked later), the runner pauses with a `limit_reached` event and
+`runner.planLimit = { message, resumeAt }`, and a timer presses Play again at the reset time plus a
+minute (30 minutes if unknown); Play clears it sooner. The timer doesn't survive a helper restart.
 
 ## API
 
-| Method | Path                                     | Result                                                             |
-| ------ | ---------------------------------------- | ------------------------------------------------------------------ |
-| GET    | `/api/health`                            | `{ ok, version }`                                                  |
-| GET    | `/api/worlds`                            | `{ worlds, activeWorldId }`                                        |
-| POST   | `/api/worlds`                            | create `{ name, seed?, mapSize?, cast? }` → `{ world }`            |
-| POST   | `/api/worlds/:id/activate`               | make it the active (running) world                                 |
-| GET    | `/api/worlds/:id/view`                   | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
-| POST   | `/api/worlds/:id/control`                | `{ running?, speed? }`                                             |
-| GET    | `/api/worlds/:id/events`                 | `?limit&beforeId&agentId&minImportance&q&atOrBeforeTick`           |
-| GET    | `/api/worlds/:id/agents/:agentId`        | inspector detail                                                   |
-| PUT    | `/api/worlds/:id/agents/:agentId/brain`  | set a person's brain                                               |
-| GET    | `/api/worlds/:id/agents/:agentId/calls`  | recent AI exchanges                                                |
-| GET    | `/api/worlds/:id/family/:agentId`        | family tree                                                        |
-| PUT    | `/api/worlds/:id/default-brain`          | `{ brain, applyToAll }`                                            |
-| PUT    | `/api/worlds/:id/cap`                    | `{ capUsd }`                                                       |
-| PUT    | `/api/worlds/:id/aging`                  | `{ daysPerYear }`                                                  |
-| GET    | `/api/worlds/:id/market`                 | `{ stock, quotes, moneySupply }`                                   |
-| POST   | `/api/worlds/:id/spawn`                  | `{ description, name?, sex?, age? }` → `{ agentId }`               |
-| POST   | `/api/worlds/:id/world-event`            | `{ kind, intensity?, hours?, targetId? }`                          |
-| GET    | `/api/worlds/:id/agents/:agentId/story`  | `{ entries }`: their events + diary/chapters, oldest first         |
-| GET    | `/api/worlds/:id/replay`                 | `?tick&mapVersion` → the world then (map only if it differs)       |
-| GET    | `/api/worlds/:id/replay/agents/:agentId` | `?tick` → a person as they were then                               |
-| DELETE | `/api/worlds/:id`                        | delete permanently                                                 |
-| GET    | `/api/settings`                          | providers (no keys), prices, data folder                           |
-| PUT    | `/api/settings/providers/:id`            | `{ apiKey?, baseUrl?, defaultModel? }`                             |
-| PUT    | `/api/settings/prices`                   | `{ model: { input, output } \| null }`                             |
-| GET    | `/api/providers/:id/models`              | model list (doubles as a connection test)                          |
+| Method | Path                                        | Result                                                             |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------ |
+| GET    | `/api/health`                               | `{ ok, version }`                                                  |
+| GET    | `/api/worlds`                               | `{ worlds, activeWorldId }`                                        |
+| POST   | `/api/worlds`                               | create `{ name, seed?, mapSize?, cast? }` → `{ world }`            |
+| POST   | `/api/worlds/:id/activate`                  | make it the active (running) world                                 |
+| GET    | `/api/worlds/:id/view`                      | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
+| POST   | `/api/worlds/:id/control`                   | `{ running?, speed? }`                                             |
+| GET    | `/api/worlds/:id/events`                    | `?limit&beforeId&agentId&minImportance&q&atOrBeforeTick`           |
+| GET    | `/api/worlds/:id/agents/:agentId`           | inspector detail                                                   |
+| PUT    | `/api/worlds/:id/agents/:agentId/brain`     | set a person's brain                                               |
+| GET    | `/api/worlds/:id/agents/:agentId/calls`     | recent AI exchanges                                                |
+| GET    | `/api/worlds/:id/family/:agentId`           | family tree                                                        |
+| PUT    | `/api/worlds/:id/default-brain`             | `{ brain, applyToAll }`                                            |
+| PUT    | `/api/worlds/:id/cap`                       | `{ capUsd }`                                                       |
+| PUT    | `/api/worlds/:id/aging`                     | `{ daysPerYear }`                                                  |
+| GET    | `/api/worlds/:id/market`                    | `{ stock, quotes, moneySupply }`                                   |
+| POST   | `/api/worlds/:id/spawn`                     | `{ description, name?, sex?, age? }` → `{ agentId }`               |
+| POST   | `/api/worlds/:id/world-event`               | `{ kind, intensity?, hours?, targetId? }`                          |
+| GET    | `/api/worlds/:id/agents/:agentId/story`     | `{ entries }`: their events + diary/chapters, oldest first         |
+| GET    | `/api/worlds/:id/replay`                    | `?tick&mapVersion` → the world then (map only if it differs)       |
+| GET    | `/api/worlds/:id/replay/agents/:agentId`    | `?tick` → a person as they were then                               |
+| DELETE | `/api/worlds/:id`                           | delete permanently                                                 |
+| GET    | `/api/settings`                             | providers (no keys), prices, data folder                           |
+| PUT    | `/api/settings/providers/:id`               | `{ apiKey?, baseUrl?, defaultModel?, cliPath? }`                   |
+| POST   | `/api/settings/providers/claude_plan/check` | re-check Claude Code is installed and signed in                    |
+| PUT    | `/api/settings/prices`                      | `{ model: { input, output } \| null }`                             |
+| GET    | `/api/providers/:id/models`                 | model list (doubles as a connection test)                          |
 
 WebSocket `/ws` pushes `hello`, `worlds_changed`, `frame` (tick, runner status incl. spending,
 agent views, changed resources, map version, active conditions, calendar) and `events`. There is deliberately no endpoint that

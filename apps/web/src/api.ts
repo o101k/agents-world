@@ -68,6 +68,8 @@ export const api = {
   settings: () => request<SettingsResponse>('GET', '/api/settings'),
   updateProvider: (provider: string, update: ProviderUpdate) =>
     request<SettingsResponse>('PUT', `/api/settings/providers/${provider}`, update),
+  checkClaudePlan: () =>
+    request<SettingsResponse>('POST', '/api/settings/providers/claude_plan/check'),
   updatePrices: (prices: Record<string, ModelPrice | null>) =>
     request<SettingsResponse>('PUT', '/api/settings/prices', prices),
   market: (id: string) => request<MarketResponse>('GET', `/api/worlds/${id}/market`),

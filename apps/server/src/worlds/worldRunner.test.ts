@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BrainRouter } from '@aw/brain';
+import { BrainRouter, UsageLimitError } from '@aw/brain';
 import { fnv1a, serializeWorldState } from '@aw/sim';
 import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
@@ -172,6 +172,52 @@ describe('spending cap', () => {
     const calls = runner.state.agents.flatMap((a) => wm.calls(w.id, a.id));
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.reduce((s, c) => s + c.costUsd, 0)).toBeCloseTo(status.spentUsd);
+    await wm.closeAll();
+  });
+});
+
+describe('Claude subscription limit', () => {
+  it('ignores the spending cap, pauses when the plan limit is used up, and Play clears it', async () => {
+    let limited = false;
+    let calls = 0;
+    const plan = {
+      id: 'claude_plan' as const,
+      decide: async () => {
+        calls++;
+        if (limited) throw new UsageLimitError("You've hit your limit", Date.now() + 3_600_000);
+        return {
+          decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+          usage: { inputTokens: 1000, outputTokens: 100, costUsd: 0 },
+        };
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([plan]) });
+    const w = await wm.create({ name: 'Plan', seed: 'plan', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'claude_plan', model: 'haiku', effort: 'standard' },
+      applyToAll: true,
+    });
+    runner.setCap(0); // the cap counts API money only
+    await runUntil(runner, runner.state.tick + 30);
+    expect(calls).toBeGreaterThan(0);
+    expect(runner.status().capReached).toBe(false);
+
+    limited = true;
+    runner.setRunning(true);
+    for (let i = 0; i < 300 && !runner.status().planLimit; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const status = runner.status();
+    expect(status.running).toBe(false);
+    expect(status.planLimit?.resumeAt).toBeGreaterThan(Date.now() + 3_600_000);
+    const events = wm.events(w.id, { limit: 20, minImportance: 5 });
+    expect(events.some((e) => e.kind === 'limit_reached')).toBe(true);
+
+    runner.setRunning(true); // "try sooner"
+    expect(runner.status().planLimit).toBeNull();
+    runner.setRunning(false);
     await wm.closeAll();
   });
 });

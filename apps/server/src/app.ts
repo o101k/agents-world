@@ -31,6 +31,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
   const server = Fastify({ logger: options.logger ?? false });
   const hub = new Hub();
   const settings = new SettingsStore(config.dataDir, options.env);
+  await settings.checkClaudePlan();
   const brains = new BrainRouter(settings.buildProviders());
   const worlds: WorldManager = new WorldManager(config.dataDir, {
     log: options.log,

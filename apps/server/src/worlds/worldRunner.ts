@@ -66,6 +66,8 @@ export class WorldRunner {
     dirty: false,
   };
   private capReached = false;
+  private planLimit: { message: string; resumeAt: number } | null = null;
+  private planTimer: ReturnType<typeof setTimeout> | undefined;
   private changedResources = new Set<string>();
   private lastFrameAt = 0;
   private tickTimes: number[] = [];
@@ -116,6 +118,7 @@ export class WorldRunner {
       spentUsd: this.meta.spentUsd,
       capUsd: this.meta.capUsd,
       capReached: this.capReached,
+      planLimit: this.planLimit,
     };
   }
 
@@ -148,7 +151,10 @@ export class WorldRunner {
   }
 
   setRunning(running: boolean): void {
-    if (running) this.capReached = false; // re-checked before the next paid decision
+    if (running) {
+      this.capReached = false; // re-checked before the next paid decision
+      this.clearPlanLimit();
+    }
     if (this.stopped || this.running === running) return;
     this.running = running;
     this.meta = { ...this.meta, running };
@@ -201,6 +207,7 @@ export class WorldRunner {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.clearPlanLimit();
     this.wakeLoop?.();
     await this.loopDone;
     this.saveNow();
@@ -268,6 +275,7 @@ export class WorldRunner {
       return (
         brain &&
         brain.provider !== 'mock' &&
+        brain.provider !== 'claude_plan' && // paid for by the owner's subscription, not the cap
         this.brains.has(brain.provider) &&
         !instinctApplies(r.perception)
       );
@@ -292,6 +300,45 @@ export class WorldRunner {
     this.capReached = true;
     this.emitFrame(true);
     return true;
+  }
+
+  /**
+   * The Claude subscription's usage limit is used up: pause, say so, and resume by itself once the
+   * limit should have reset (or after 30 minutes when the CLI didn't say when). Pressing Play tries
+   * again sooner.
+   */
+  private pauseForPlanLimit(limit: { message: string; resetsAt?: number }): void {
+    const now = Date.now();
+    const resumeAt = Math.max(now + 60_000, (limit.resetsAt ?? now + 29 * 60_000) + 60_000);
+    const when = new Date(resumeAt).toLocaleString(undefined, {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    this.batch.events.push({
+      tick: this.state.tick,
+      kind: 'limit_reached',
+      actors: [],
+      text: `Your Claude subscription's usage limit is used up. Time is paused and will resume by itself around ${when}; press Play to try sooner.`,
+      importance: 5,
+    });
+    this.batch.dirty = true;
+    if (this.running) this.setRunning(false);
+    this.clearPlanLimit();
+    this.planLimit = { message: limit.message, resumeAt };
+    this.planTimer = setTimeout(
+      () => {
+        if (this.planLimit && !this.stopped) this.setRunning(true);
+      },
+      Math.min(resumeAt - now, 2 ** 31 - 1),
+    );
+    this.emitFrame(true);
+  }
+
+  private clearPlanLimit(): void {
+    clearTimeout(this.planTimer);
+    this.planTimer = undefined;
+    this.planLimit = null;
   }
 
   private async tickOnce(): Promise<void> {
@@ -323,7 +370,9 @@ export class WorldRunner {
         return { request, routed };
       }),
     );
+    let limit: { message: string; resetsAt?: number } | undefined;
     for (const { request, routed } of results) {
+      if (routed.limit && !limit) limit = routed.limit;
       const usage = routed.result?.usage;
       const cost = usage?.costUsd ?? 0;
       if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
@@ -366,6 +415,7 @@ export class WorldRunner {
       else this.enqueue({ kind: 'decision_timeout', agentId: request.agentId });
     }
     this.thinking = 0;
+    if (limit) this.pauseForPlanLimit(limit);
   }
 
   /** Commit everything since the last flush in one transaction, then notify listeners. */

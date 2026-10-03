@@ -87,7 +87,10 @@ test('observer powers: spawn a person and set up AI settings', async ({ page }) 
 
   // Settings open and show the providers; keys are never displayed.
   await page.getByRole('button', { name: '⚙ AI settings' }).click();
-  await expect(page.locator('.provider-card', { hasText: 'Anthropic' })).toBeVisible();
+  await expect(page.locator('.provider-card', { hasText: 'Anthropic (Claude)' })).toBeVisible();
+  await expect(page.locator('.provider-card', { hasText: 'Claude subscription' })).toContainText(
+    'Not set up',
+  );
   await page.getByRole('button', { name: 'Close' }).click();
 
   await page.getByLabel('Name').fill('Spawn Village');

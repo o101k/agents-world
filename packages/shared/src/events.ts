@@ -13,6 +13,7 @@ export type EventKind =
   | 'decided'
   | 'said'
   | 'cap_reached'
+  | 'limit_reached'
   | 'observer'
   | 'crafted'
   | 'traded'
