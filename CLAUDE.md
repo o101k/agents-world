@@ -299,6 +299,10 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-03 — Node pinned (owner request).** `.nvmrc` pins Node 22.23.3 (latest 22 LTS, what
+  CI was already resolving `22` to); CI reads its version from `.nvmrc`. `engines` stays `>=22`
+  so newer Node still installs; the pin is the tested version, not a hard limit.
+
 - **2026-10-03 — Minimum nap.** Someone who goes to sleep by day while already rested now sleeps
   at least an hour before getting up. Before, they woke and asked for a new decision every couple
   of minutes (babies did this for about an hour every dawn), wasting AI calls: a test adult made 60

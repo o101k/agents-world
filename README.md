@@ -20,7 +20,9 @@ such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Moc
 
 ## Requirements
 
-- **Node.js 22 or newer.** On macOS: `brew install node` (or the installer from nodejs.org).
+- **Node.js 22 or newer.** The tested version is pinned in [`.nvmrc`](.nvmrc) (22.23.3, the
+  version CI uses). With [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use` in the
+  project folder. Otherwise on macOS: `brew install node@22` (or the installer from nodejs.org).
   Check with `node -v`.
 - A modern browser (Chrome, Safari, Firefox, Edge).
 
