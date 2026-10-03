@@ -174,7 +174,7 @@ Browser (the viewer)                        Local helper process (Node, on the M
 | `apps/server`              | Local helper: tick loop, saving, keys, talks to browser                        | —                                                     |
 | `apps/web`                 | UI                                                                             | Keys, AI, rules                                       |
 
-**Tech stack:** TypeScript everywhere · Node.js 22+ helper with Fastify + WebSocket, loopback only ·
+**Tech stack:** TypeScript everywhere · Node.js 24+ helper with Fastify + WebSocket, loopback only ·
 SQLite (better-sqlite3), one file per world · PixiJS map + React panels (Vite) · official SDKs
 `@anthropic-ai/sdk` and `openai` (the latter also for OpenRouter/compatible via base URL) · Zod ·
 Vitest + Playwright · npm workspaces.
@@ -298,6 +298,12 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-10-03 — Node 24 LTS, pinned (owner request).** `.nvmrc` pins Node 24.21.0, the latest
+  stable (LTS) release; Node 26 is still "Current" until it turns LTS. CI reads its version from
+  `.nvmrc`, `engines` is `>=24` and `@types/node` follows 24. npm 11 (bundled with Node 24) only runs
+  dependency install scripts listed in `allowScripts`, so `package.json` approves `better-sqlite3`
+  (its build step is a no-op when a prebuilt binary fits the machine) and `esbuild`.
 
 - **2026-10-03 — Minimum nap.** Someone who goes to sleep by day while already rested now sleeps
   at least an hour before getting up. Before, they woke and asked for a new decision every couple
