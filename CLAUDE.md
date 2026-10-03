@@ -299,6 +299,11 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-03 — Minimum nap.** Someone who goes to sleep by day while already rested now sleeps
+  at least an hour before getting up. Before, they woke and asked for a new decision every couple
+  of minutes (babies did this for about an hour every dawn), wasting AI calls: a test adult made 60
+  calls in 2 hours, now 2.
+
 - **2026-09-27 — Orphan adoption.** An orphan is anyone under 18 with no living birth or adoptive
   parent. When the last parent dies the child, the household, the child's relatives and grown-ups
   nearby are told (new `orphaned` trigger and event), and an orphan's cry reaches any adult in

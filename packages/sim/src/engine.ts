@@ -107,6 +107,9 @@ const RATES = {
   coolTwilight: 2,
 };
 const H = TICKS_PER_HOUR;
+/** Shortest sleep, in minutes, before a rested sleeper gets up by day. */
+const MIN_NAP = 60;
+
 /** How long an awake agent may go without a fresh decision, by effort level. */
 const CHECK_IN_TICKS: Record<string, number> = { frugal: 8 * H, standard: 4 * H, deep: 3 * H };
 const checkInFor = (a: Agent) => CHECK_IN_TICKS[a.brain.effort] ?? 4 * H;
@@ -415,8 +418,11 @@ function updateBody(ctx: Ctx, agent: Agent): void {
 
   if (asleep) {
     const { hour } = tickToClock(state.tick);
-    // Sleep through the night; by day, get up once rested.
-    const rested = hour >= 5 && hour < 21 && n.energy >= 90;
+    // Sleep through the night; by day, get up once rested. Lying down while already rested
+    // still means a nap of at least an hour, or the person wakes (and asks for a decision)
+    // every couple of minutes.
+    const slept = agent.action?.type === 'sleep' ? state.tick - agent.action.since : Infinity;
+    const rested = hour >= 5 && hour < 21 && n.energy >= 90 && slept >= MIN_NAP;
     const desperate = n.food < 8 || n.water < 8;
     if (rested || desperate) {
       // Hunger or thirst can drag even an exhausted person to their feet for a while.
