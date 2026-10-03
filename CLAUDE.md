@@ -303,7 +303,8 @@ Newest first. Record every change to an agreed decision here.
   stable (LTS) release; Node 26 is still "Current" until it turns LTS. CI reads its version from
   `.nvmrc`, `engines` is `>=24` and `@types/node` follows 24. npm 11 (bundled with Node 24) only runs
   dependency install scripts listed in `allowScripts`, so `package.json` approves `better-sqlite3`
-  (its build step is a no-op when a prebuilt binary fits the machine) and `esbuild`.
+  (its build step is a no-op when a prebuilt binary fits the machine) and `esbuild`, and denies
+  `fsevents` (macOS-only; it ships its binary prebuilt and has nothing to run).
 
 - **2026-10-03 — Minimum nap.** Someone who goes to sleep by day while already rested now sleeps
   at least an hour before getting up. Before, they woke and asked for a new decision every couple
