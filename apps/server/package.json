@@ -10,6 +10,7 @@
     "stress": "tsx scripts/stress.ts"
   },
   "dependencies": {
+    "@aw/brain": "*",
     "@aw/shared": "*",
     "@aw/sim": "*",
     "@fastify/static": "^10.1.5",
@@ -18,12 +19,11 @@
     "fastify": "^5.12.5",
     "open": "^11.0.4",
     "tsx": "^4.23.15",
-    "zod": "^4.6.5",
-    "@aw/brain": "*"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^22.19.0",
+    "@types/node": "^24.19.1",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0"
   }

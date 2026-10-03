@@ -5,7 +5,7 @@
   "description": "A browser-based 2D life simulation where every human is an independent AI agent.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "workspaces": [
     "packages/*",
@@ -34,5 +34,9 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true
   }
 }

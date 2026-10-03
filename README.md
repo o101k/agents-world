@@ -20,9 +20,9 @@ such as OpenRouter or a local Ollama/LM Studio), or with the free rule-based Moc
 
 ## Requirements
 
-- **Node.js 22 or newer.** The tested version is pinned in [`.nvmrc`](.nvmrc) (22.23.3, the
-  version CI uses). With [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use` in the
-  project folder. Otherwise on macOS: `brew install node@22` (or the installer from nodejs.org).
+- **Node.js 24 or newer.** The tested version is pinned in [`.nvmrc`](.nvmrc) (24.21.0, the
+  current LTS and the version CI uses). With [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use`
+  in the project folder. Otherwise on macOS: `brew install node@24` (or the LTS installer from nodejs.org).
   Check with `node -v`.
 - A modern browser (Chrome, Safari, Firefox, Edge).
 
@@ -207,5 +207,5 @@ docs/DESIGN.md    design doc
 - **"Port 4747 is already in use"**: the helper is probably already running in another terminal.
   Open http://127.0.0.1:4747, or stop the other one, or use `AW_PORT=4800 npm start`.
 - **The page says it can't reach the helper**: start it with `npm start`; the page reconnects by itself.
-- **`npm install` fails building `better-sqlite3`**: make sure you're on Node 22+; on macOS you may
+- **`npm install` fails building `better-sqlite3`**: make sure you're on Node 24+; on macOS you may
   need the Xcode command line tools (`xcode-select --install`).
