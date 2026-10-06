@@ -61,12 +61,24 @@ export class NoDecisionError extends Error {
   }
 }
 
-/** Thrown when a Claude subscription's usage limit (5-hour or weekly) is used up. */
-export class UsageLimitError extends Error {
+/**
+ * Thrown when a provider says "too many requests" or "limit used up": an API rate limit (HTTP 429)
+ * or the Claude subscription's 5-hour / weekly limit. The world pauses until it lifts.
+ */
+export class RateLimitError extends Error {
   constructor(
+    /** The provider's own words. */
     message: string,
-    /** When the limit resets (ms since epoch), if the provider said. */
-    readonly resetsAt?: number,
+    readonly details: {
+      /** When the limit lifts (ms since epoch), if the provider said. */
+      resetsAt?: number;
+      /** HTTP status, e.g. 429. */
+      status?: number;
+      /** Which limit, in plain words (e.g. "requests per minute", "5-hour plan limit"). */
+      limit?: string;
+      /** The provider's retry-after, in seconds. */
+      retryAfterSec?: number;
+    } = {},
   ) {
     super(message);
   }

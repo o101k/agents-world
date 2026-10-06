@@ -1330,3 +1330,10 @@ input[type='range'] {
   border-top: 1px solid var(--border);
   border-radius: 0 0 var(--radius) var(--radius);
 }
+.rate-limit-message {
+  margin: 4px 0;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  opacity: 0.9;
+  overflow-wrap: anywhere;
+}

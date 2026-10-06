@@ -312,6 +312,15 @@ Newest first. Record every change to an agreed decision here.
   never overlap, each with a tail pointing at its speaker. (d) `findPathToAny` no longer returns
   the start object itself as a path (it could have made a saved walk refer to the person).
 
+- **2026-10-06 — Rate limits from any provider pause the world (owner request).** A 429 or used-up
+  quota from the Anthropic, OpenAI or OpenAI-compatible API (and the Claude subscription's plan
+  limit, as before) pauses time with a banner and a timeline entry naming the person, provider,
+  model, HTTP status, which limit, retry-after and the provider's message. Time resumes by itself
+  when the provider said when the limit lifts (retry-after or a reset header); otherwise an API
+  limit waits for Play (the subscription keeps its 30-minute retry). The decision that hit the
+  limit is asked again on resume instead of the person carrying on with their old plan. The SDKs
+  no longer retry 429s themselves, so a limit is never hidden behind a decision timeout.
+
 - **2026-10-06 — Pick brains when creating a world, and a brains dialog in the world (owner
   request).** New worlds no longer start everyone on the Mock brain without asking: after the form,
   **Next: choose brains** shows the starting villagers (previewed by the helper from the seed and

@@ -66,7 +66,7 @@ const idle: RunnerStatus = {
   spentUsd: 0,
   capUsd: 1,
   capReached: false,
-  planLimit: null,
+  rateLimit: null,
 };
 
 export const useWorld = create<WorldRuntime>((set, get) => ({

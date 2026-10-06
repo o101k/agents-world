@@ -259,7 +259,7 @@ it means. The mock brain stocks more food in autumn and winter.
   using subscription tokens directly but allows running the CLI or Agent SDK in your own projects.
   Usage is recorded as tokens with cost $0. `checkClaudeCli` runs `claude --version` and
   `claude auth status` (no AI call) at startup and on **Check**; the provider exists only when it
-  is signed in with a Claude account. A used-up plan limit throws `UsageLimitError` (with the reset
+  is signed in with a Claude account. A used-up plan limit throws `RateLimitError` (with the reset
   time when the message has one); concurrency is 3 processes.
 - `pricing.ts`: default Claude prices; editable table; unknown models at a pessimistic $3/$15.
 - `person.ts`: turns an observer's description into a person (AI or offline).
@@ -270,10 +270,21 @@ it means. The mock brain stocks more food in autumn and winter.
 models and prices in `settings.json`. The browser only sees hints like `sk-…abcd`. Each decision's
 cost travels with the logged input; the world total is `meta.spentUsd`. Before any paid decision
 the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event. Claude
-subscription calls don't count as paid. When one hits the plan's usage limit, that person continues
-their current plan (re-asked later), the runner pauses with a `limit_reached` event and
-`runner.planLimit = { message, resumeAt }`, and a timer presses Play again at the reset time plus a
-minute (30 minutes if unknown); Play clears it sooner. The timer doesn't survive a helper restart.
+subscription calls don't count as paid.
+
+**Rate limits** (any provider): `limits.ts` turns an SDK's HTTP 429 into a `RateLimitError` with
+the provider's message, which limit ran out (from the `anthropic-ratelimit-*` / `x-ratelimit-*`
+headers with nothing remaining, or `insufficient_quota`) and when it lifts (`retry-after`, else the
+reset header); the Claude subscription throws the same error for its plan limits. The SDKs are told
+not to retry a 429 themselves (a fetch wrapper adds `x-should-retry: false`), since sleeping through
+retry-after inside a decision would hit the decision timeout and hide the limit. The router returns
+`limit` instead of a decision. The runner pauses with a `limit_reached` event naming the person,
+provider, model, status, limit, retry-after and message, and sets `runner.rateLimit` (a
+`RateLimitNotice`) for the banner. The requests that hit the limit stay outstanding and the tick
+doesn't advance, so they're asked again on resume (other people's decisions from the same tick are
+kept). A timer presses Play again when the limit lifts (+2 s; +1 min for the plan); when the
+provider didn't say, an API limit waits for Play and the plan is retried after 30 minutes. Play
+clears it sooner. The timer doesn't survive a helper restart (the world stays paused).
 
 **Choosing brains** (`apps/web/src/components/BrainsModal.tsx`): one dialog for both a new world
 and a running one. Before creating, `/api/cast-preview` returns the starting villagers (same seed
