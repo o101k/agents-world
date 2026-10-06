@@ -1,7 +1,15 @@
 import { z } from 'zod';
-import type { AgentDetail, AgentView, LlmCallView } from './agent.ts';
+import type {
+  AgentDetail,
+  AgentView,
+  BrainConfig,
+  LifeStage,
+  LlmCallView,
+  Sex,
+} from './agent.ts';
 import type { WorldEvent } from './events.ts';
 import type { WireMap } from './map.ts';
+import { BrainConfigSchema } from './settings.ts';
 import type { CalendarView } from './time.ts';
 import type { WorldMeta, WorldSettings } from './world.ts';
 
@@ -45,8 +53,70 @@ export const CreateWorldRequest = z.object({
   seed: z.string().trim().max(64).optional(),
   mapSize: z.enum(['small', 'medium', 'large', 'huge']).default('medium'),
   cast: CastOption.default({ mode: 'sample' }),
+  /** Brain for each starting villager, in cast order (see CastPreviewResponse). Missing = defaultBrain. */
+  brains: z.array(BrainConfigSchema).max(250).optional(),
+  /** Brain for newborns and spawned people (and any villager without one in `brains`). Default: mock. */
+  defaultBrain: BrainConfigSchema.optional(),
 });
 export type CreateWorldRequest = z.input<typeof CreateWorldRequest>;
+
+/** Who the starting villagers of a new world will be, so brains can be picked before it's created. */
+export const CastPreviewRequest = z.object({
+  /** Empty = the server picks a random seed and returns it; create the world with that seed. */
+  seed: z.string().trim().max(64).optional(),
+  cast: CastOption.default({ mode: 'sample' }),
+});
+export type CastPreviewRequest = z.input<typeof CastPreviewRequest>;
+
+export interface CastPreviewPerson {
+  /** Position in the cast; CreateWorldRequest.brains uses the same order. */
+  index: number;
+  name: string;
+  familyName: string;
+  sex: Sex;
+  age: number;
+  occupation: string;
+}
+
+export interface CastPreviewResponse {
+  /** The seed the preview was made with (generated casts depend on it). */
+  seed: string;
+  people: CastPreviewPerson[];
+}
+
+/** AI usage, from the world's log of AI calls. */
+export interface BrainUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
+/** One person in the brains dialog: who they are, their brain and what it has used so far. */
+export interface BrainRow extends BrainUsage {
+  id: string;
+  /** Full name. */
+  name: string;
+  age: number;
+  stage: LifeStage;
+  alive: boolean;
+  brain: BrainConfig;
+}
+
+export interface BrainsResponse {
+  defaultBrain: BrainConfig;
+  /** Everyone who has lived in the world (the dead too, for their spending). */
+  people: BrainRow[];
+  /** Every AI call in the world, including ones not tied to a villager (e.g. drafting a spawn). */
+  totals: BrainUsage;
+}
+
+/** Give several people the same brain at once. */
+export const SetBrainsRequest = z.object({
+  agentIds: z.array(z.string().max(40)).min(1).max(1000),
+  brain: BrainConfigSchema,
+});
+export type SetBrainsRequest = z.infer<typeof SetBrainsRequest>;
 
 export interface WorldsResponse {
   worlds: WorldMeta[];

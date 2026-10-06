@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorldsResponse } from '@aw/shared';
+import type { BrainsResponse, CastPreviewResponse, WorldsResponse } from '@aw/shared';
 import { buildApp, type App } from './app.ts';
 import type { ServerConfig } from './config.ts';
 
@@ -183,5 +183,147 @@ describe('HTTP API', () => {
     });
     expect(story.statusCode).toBe(200);
     expect(Array.isArray(story.json().entries)).toBe(true);
+  });
+
+  it('previews the starting cast before a world is created', async () => {
+    const preview = await app.server.inject({
+      method: 'POST',
+      url: '/api/cast-preview',
+      headers: HOST,
+      payload: { cast: { mode: 'generated', adults: 6, children: 2, useAi: false } },
+    });
+    expect(preview.statusCode).toBe(200);
+    const body = preview.json() as CastPreviewResponse;
+    expect(body.seed).toMatch(/^[0-9a-f]{8}$/);
+    expect(body.people).toHaveLength(8);
+    expect(body.people[0]).toMatchObject({ index: 0, sex: expect.any(String) });
+
+    // The same seed gives the same people, and an empty request previews the sample cast.
+    const again = await app.server.inject({
+      method: 'POST',
+      url: '/api/cast-preview',
+      headers: HOST,
+      payload: { seed: body.seed, cast: { mode: 'generated', adults: 6, children: 2 } },
+    });
+    expect(again.json()).toEqual(body);
+    const sample = (
+      await app.server.inject({ method: 'POST', url: '/api/cast-preview', headers: HOST })
+    ).json() as CastPreviewResponse;
+    expect(sample.people.map((p) => p.name)).toContain('Maren');
+    expect(sample.people).toHaveLength(11);
+
+    // Nothing was created, and bad requests are 400s.
+    expect(
+      ((await app.server.inject({ url: '/api/worlds', headers: HOST })).json() as WorldsResponse)
+        .worlds,
+    ).toHaveLength(0);
+    for (const payload of [
+      { cast: { mode: 'custom', people: [] } },
+      {
+        cast: {
+          mode: 'custom',
+          people: [
+            { name: 'X', sex: 'male', age: 20 },
+            { name: 'X', sex: 'female', age: 20 },
+          ],
+        },
+      },
+    ]) {
+      const bad = await app.server.inject({
+        method: 'POST',
+        url: '/api/cast-preview',
+        headers: HOST,
+        payload,
+      });
+      expect(bad.statusCode).toBe(400);
+    }
+  });
+
+  it('creates a world with chosen brains and changes them later, one or many at once', async () => {
+    const claude = { provider: 'anthropic', model: 'claude-haiku-4-5', effort: 'standard' };
+    const plan = { provider: 'claude_plan', model: 'haiku', effort: 'deep' };
+    const bad = await app.server.inject({
+      method: 'POST',
+      url: '/api/worlds',
+      headers: HOST,
+      payload: { name: 'Bad', mapSize: 'small', brains: [{ provider: 'nope' }] },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const created = await app.server.inject({
+      method: 'POST',
+      url: '/api/worlds',
+      headers: HOST,
+      payload: {
+        name: 'Brains',
+        seed: 'br',
+        mapSize: 'small',
+        brains: [claude, plan],
+        defaultBrain: plan,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().world.id as string;
+    const brainsUrl = `/api/worlds/${id}/brains`;
+    // Only the active world can be looked at.
+    expect((await app.server.inject({ url: brainsUrl, headers: HOST })).statusCode).toBe(409);
+    await app.server.inject({ method: 'POST', url: `/api/worlds/${id}/activate`, headers: HOST });
+
+    const first = (
+      await app.server.inject({ url: brainsUrl, headers: HOST })
+    ).json() as BrainsResponse;
+    expect(first.defaultBrain).toEqual(plan);
+    expect(first.people).toHaveLength(11);
+    expect(first.people.map((p) => p.brain)).toEqual([claude, ...Array(10).fill(plan)]);
+    expect(first.people[0]).toMatchObject({
+      id: 'a1',
+      name: 'Maren Holt',
+      age: 34,
+      stage: 'adult',
+      alive: true,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+    });
+    expect(first.totals).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+
+    // Change three at once: the answer already shows the change.
+    const put = await app.server.inject({
+      method: 'PUT',
+      url: brainsUrl,
+      headers: HOST,
+      payload: { agentIds: ['a2', 'a3', 'a4'], brain: claude },
+    });
+    expect(put.statusCode).toBe(200);
+    const after = put.json() as BrainsResponse;
+    expect(after.people.filter((p) => p.brain.provider === 'anthropic').map((p) => p.id)).toEqual([
+      'a1',
+      'a2',
+      'a3',
+      'a4',
+    ]);
+    expect(after.defaultBrain).toEqual(plan);
+    expect((await app.server.inject({ url: brainsUrl, headers: HOST })).json()).toEqual(after);
+
+    for (const [payload, status] of [
+      [{ agentIds: ['a1', 'a999'], brain: claude }, 404],
+      [{ agentIds: [], brain: claude }, 400],
+      [{ agentIds: ['a1'], brain: { provider: 'nope', model: '', effort: 'frugal' } }, 400],
+      [{ agentIds: ['a1'] }, 400],
+    ] as const) {
+      const res = await app.server.inject({
+        method: 'PUT',
+        url: brainsUrl,
+        headers: HOST,
+        payload,
+      });
+      expect(res.statusCode).toBe(status);
+    }
+    // A refused request changes nobody.
+    expect(
+      (await app.server.inject({ url: brainsUrl, headers: HOST })).json<BrainsResponse>().people[0]!
+        .brain,
+    ).toEqual(claude);
   });
 });

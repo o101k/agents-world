@@ -299,6 +299,18 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-06 — Pick brains when creating a world, and a brains dialog in the world (owner
+  request).** New worlds no longer start everyone on the Mock brain without asking: after the form,
+  **Next: choose brains** shows the starting villagers (previewed by the helper from the seed and
+  cast option, so it matches what gets created) and the owner sets a brain per person or in bulk
+  (select all / adults / children), plus the default for newborns and spawns. Everyone starts on
+  the first configured provider (frugal, provider's default model), else Mock. The same dialog
+  opens in a world from **🧠 Brains**, adding each person's AI calls, tokens in/out and cost, and
+  village totals (from the `llm_calls` log, refreshed every 3 s; the dead are hidden but counted).
+  Bulk changes are one `set_brains` input. Bug fixed on the way: babies born in the world got the
+  Mock brain instead of the world's default brain; they now get the default (replays of old
+  stretches follow today's rule).
+
 - **2026-10-03 — Claude subscription as a provider (owner request).** New provider `claude_plan`:
   villagers can think on the owner's Claude Pro/Max plan (its 5-hour and weekly limits) instead of
   an API key; API keys stay as before. Anthropic forbids apps from offering claude.ai login or

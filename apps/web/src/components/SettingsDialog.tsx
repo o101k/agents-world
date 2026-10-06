@@ -98,9 +98,9 @@ function PlanCard({
             Press <strong>Check</strong> below. It should say Ready.
           </li>
           <li>
-            Choose <strong>Claude subscription</strong> as the provider in the World tab (Default
-            brain, with “Also switch everyone alive” to move the whole village) or in a person’s
-            Brain section, then pick a model and an effort.
+            Choose <strong>Claude subscription</strong> as the provider when you pick brains for a
+            new world, or later with the <strong>🧠 Brains</strong> button (one person or the whole
+            village at once), then pick a model and an effort.
           </li>
         </ol>
         <ul className="muted small">

@@ -4,6 +4,7 @@ import {
   DEFAULT_CAP_USD,
   DEFAULT_SPEED,
   TICKS_PER_DAY,
+  type BrainUsage,
   type LlmCallView,
   type WorldEvent,
   type WorldMeta,
@@ -386,6 +387,38 @@ export class WorldFile {
       response: (r.response as string | null) ?? null,
       error: (r.error as string | null) ?? null,
     }));
+  }
+
+  /**
+   * What each person's AI has used so far: one row per `agent_id` in the log of AI calls (calls
+   * that aren't tied to anyone show up under their own id). Cost is rounded to a millionth of a
+   * dollar so sums of many small prices don't show float noise.
+   */
+  usageByAgent(): Map<string, BrainUsage> {
+    const rows = this.db
+      .prepare(
+        `SELECT agent_id, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens,
+          SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd
+         FROM llm_calls GROUP BY agent_id`,
+      )
+      .all() as {
+      agent_id: string;
+      calls: number;
+      input_tokens: number;
+      output_tokens: number;
+      cost_usd: number;
+    }[];
+    return new Map(
+      rows.map((r) => [
+        r.agent_id,
+        {
+          calls: r.calls,
+          inputTokens: r.input_tokens,
+          outputTokens: r.output_tokens,
+          costUsd: Math.round(r.cost_usd * 1e6) / 1e6,
+        },
+      ]),
+    );
   }
 
   transaction<T>(fn: () => T): T {

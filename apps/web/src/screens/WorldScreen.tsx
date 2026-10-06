@@ -12,6 +12,7 @@ import { api } from '../api.ts';
 import { AgentInspector } from '../components/AgentInspector.tsx';
 import { EventLog } from '../components/EventLog.tsx';
 import { BrainEditor } from '../components/BrainEditor.tsx';
+import { WorldBrainsDialog } from '../components/WorldBrainsDialog.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
@@ -52,6 +53,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const planLimit = useWorld((s) => s.runner.planLimit);
   const [spawning, setSpawning] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [brainsOpen, setBrainsOpen] = useState(false);
   const replaying = useWorld((s) => s.replay !== null);
   // The map as it was, when replaying a moment before the map changed (e.g. before a house).
   const [pastMap, setPastMap] = useState<{ version: number; map: WorldMap } | null>(null);
@@ -171,6 +173,13 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </button>
         <button
           className="btn btn-small"
+          onClick={() => setBrainsOpen(true)}
+          title="Choose which AI each person thinks with, and see what they have spent"
+        >
+          🧠 Brains
+        </button>
+        <button
+          className="btn btn-small"
           onClick={() => setSpawning(true)}
           title="Bring a new person into the world"
         >
@@ -208,6 +217,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
+      {brainsOpen && <WorldBrainsDialog worldId={worldId} onClose={() => setBrainsOpen(false)} />}
       {spawning && (
         <SpawnDialog
           worldId={worldId}
@@ -277,7 +287,14 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                 <p className="muted">Click a person or anything on the map.</p>
               ))}
             {tab === 'people' && <PeopleList onPick={pickAgent} />}
-            {tab === 'world' && view && <WorldInfo worldId={worldId} view={view} map={map} />}
+            {tab === 'world' && view && (
+              <WorldInfo
+                worldId={worldId}
+                view={view}
+                map={map}
+                onOpenBrains={() => setBrainsOpen(true)}
+              />
+            )}
           </div>
         </aside>
       </div>
@@ -289,10 +306,12 @@ function WorldInfo({
   worldId,
   view,
   map,
+  onOpenBrains,
 }: {
   worldId: string;
   view: WorldViewResponse;
   map: WorldMap | null;
+  onOpenBrains: () => void;
 }) {
   const [settings, setSettings] = useState(view.settings);
   const [applyToAll, setApplyToAll] = useState(false);
@@ -336,7 +355,10 @@ function WorldInfo({
       <h3>Default brain</h3>
       <p className="muted small">
         Used for newborns and spawned people. You can also set each person’s brain in their
-        inspector.
+        inspector, or everyone at once in{' '}
+        <button className="linkish" onClick={onOpenBrains}>
+          Brains &amp; spending…
+        </button>
       </p>
       <BrainEditor
         key={JSON.stringify(settings.defaultBrain)}

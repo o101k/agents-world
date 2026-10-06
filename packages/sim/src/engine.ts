@@ -80,6 +80,8 @@ export type TickInput =
   | { kind: 'decision_timeout'; agentId: string }
   | { kind: 'spawn_agent'; spec: AgentSpec }
   | { kind: 'set_brain'; agentId: string; brain: BrainConfig }
+  /** Give several people the same brain in one go (people who don't exist are skipped). */
+  | { kind: 'set_brains'; agentIds: string[]; brain: BrainConfig }
   | { kind: 'set_default_brain'; brain: BrainConfig; applyToAll?: boolean }
   | { kind: 'set_days_per_year'; value: number }
   | { kind: 'world_event'; event: WorldEventSpec };
@@ -302,6 +304,13 @@ function applyInput(ctx: Ctx, input: TickInput): void {
     case 'set_brain': {
       const agent = findAgent(state, input.agentId);
       if (agent) agent.brain = { ...input.brain };
+      return;
+    }
+    case 'set_brains': {
+      for (const id of input.agentIds) {
+        const agent = findAgent(state, id);
+        if (agent) agent.brain = { ...input.brain };
+      }
       return;
     }
     case 'set_default_brain':

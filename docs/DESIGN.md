@@ -40,7 +40,7 @@ the simulation understands.
 
 - All randomness in the sim comes from `Rng` (sfc32); its state is part of `WorldState`.
 - `step(state, inputs)` is the only way the world changes. Inputs are brain decisions (with their
-  cost), decision timeouts and observer commands (`spawn_agent`, `set_brain`, `set_default_brain`,
+  cost), decision timeouts and observer commands (`spawn_agent`, `set_brain`, `set_brains`, `set_default_brain`,
   `set_days_per_year`, `world_event`).
 - The runner logs every input the moment it's queued (tagged with the tick it applies to), commits
   inputs + events + meta in one transaction per loop iteration, and writes a full snapshot every
@@ -268,19 +268,29 @@ their current plan (re-asked later), the runner pauses with a `limit_reached` ev
 `runner.planLimit = { message, resumeAt }`, and a timer presses Play again at the reset time plus a
 minute (30 minutes if unknown); Play clears it sooner. The timer doesn't survive a helper restart.
 
+**Choosing brains** (`apps/web/src/components/BrainsModal.tsx`): one dialog for both a new world
+and a running one. Before creating, `/api/cast-preview` returns the starting villagers (same seed
+and cast option → same people in the same order; AI flesh-out never changes names), the owner picks
+a brain per person or in bulk, and `POST /api/worlds` takes `brains` (in cast order) and
+`defaultBrain`. In a world, `GET /api/worlds/:id/brains` sums `llm_calls` per person (calls, tokens
+in/out, cost) and the dialog polls it every 3 s; bulk changes are one `set_brains` input.
+
 ## API
 
 | Method | Path                                        | Result                                                             |
 | ------ | ------------------------------------------- | ------------------------------------------------------------------ |
 | GET    | `/api/health`                               | `{ ok, version }`                                                  |
 | GET    | `/api/worlds`                               | `{ worlds, activeWorldId }`                                        |
-| POST   | `/api/worlds`                               | create `{ name, seed?, mapSize?, cast? }` → `{ world }`            |
+| POST   | `/api/cast-preview`                         | `{ seed?, cast }` → `{ seed, people }` (who a new world will have) |
+| POST   | `/api/worlds`                               | create `{ name, seed?, mapSize?, cast?, brains?, defaultBrain? }`  |
 | POST   | `/api/worlds/:id/activate`                  | make it the active (running) world                                 |
 | GET    | `/api/worlds/:id/view`                      | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
 | POST   | `/api/worlds/:id/control`                   | `{ running?, speed? }`                                             |
 | GET    | `/api/worlds/:id/events`                    | `?limit&beforeId&agentId&minImportance&q&atOrBeforeTick`           |
 | GET    | `/api/worlds/:id/agents/:agentId`           | inspector detail                                                   |
 | PUT    | `/api/worlds/:id/agents/:agentId/brain`     | set a person's brain                                               |
+| GET    | `/api/worlds/:id/brains`                    | everyone's brain + AI usage, village totals, default brain         |
+| PUT    | `/api/worlds/:id/brains`                    | `{ agentIds, brain }`: same brain for many people (one input)      |
 | GET    | `/api/worlds/:id/agents/:agentId/calls`     | recent AI exchanges                                                |
 | GET    | `/api/worlds/:id/family/:agentId`           | family tree                                                        |
 | PUT    | `/api/worlds/:id/default-brain`             | `{ brain, applyToAll }`                                            |

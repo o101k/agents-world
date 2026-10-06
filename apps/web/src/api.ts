@@ -3,10 +3,14 @@ import type {
   FamilyNode,
   MarketResponse,
   BrainConfig,
+  BrainsResponse,
+  CastPreviewRequest,
+  CastPreviewResponse,
   CallsResponse,
   ModelPrice,
   ProviderUpdate,
   SettingsResponse,
+  SetBrainsRequest,
   SpawnRequest,
   WorldSettings,
   ControlRequest,
@@ -41,6 +45,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 }
 
 export const api = {
+  castPreview: (req: CastPreviewRequest) =>
+    request<CastPreviewResponse>('POST', '/api/cast-preview', req),
   listWorlds: () => request<WorldsResponse>('GET', '/api/worlds'),
   createWorld: (req: CreateWorldRequest) => request<WorldResponse>('POST', '/api/worlds', req),
   activateWorld: (id: string) => request<WorldResponse>('POST', `/api/worlds/${id}/activate`),
@@ -59,6 +65,9 @@ export const api = {
     request<CallsResponse>('GET', `/api/worlds/${id}/agents/${agentId}/calls`),
   setBrain: (id: string, agentId: string, brain: BrainConfig) =>
     request<AgentResponse>('PUT', `/api/worlds/${id}/agents/${agentId}/brain`, brain),
+  brains: (id: string) => request<BrainsResponse>('GET', `/api/worlds/${id}/brains`),
+  setBrains: (id: string, req: SetBrainsRequest) =>
+    request<BrainsResponse>('PUT', `/api/worlds/${id}/brains`, req),
   setDefaultBrain: (id: string, brain: BrainConfig, applyToAll: boolean) =>
     request<WorldSettings>('PUT', `/api/worlds/${id}/default-brain`, { brain, applyToAll }),
   setCap: (id: string, capUsd: number) =>

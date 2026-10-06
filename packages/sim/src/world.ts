@@ -4,6 +4,7 @@ import {
   TICKS_PER_HOUR,
   decodeMap,
   encodeMap,
+  type BrainConfig,
   type MapSize,
   type WireMap,
   type WorldMap,
@@ -88,6 +89,8 @@ export interface CreateWorldOptions {
   cast?: AgentSpec[];
   /** In-game hour the world starts at. */
   startHour?: number;
+  /** Brain for newborns, spawned people and cast members without their own. Default: mock. */
+  defaultBrain?: BrainConfig;
 }
 
 export function initialResources(map: WorldMap, rng: Rng): Record<string, ResourceState> {
@@ -112,6 +115,7 @@ export function createWorldState({
   mapSize = 'medium',
   cast = SAMPLE_CAST,
   startHour = 7,
+  defaultBrain = DEFAULT_BRAIN,
 }: CreateWorldOptions): WorldState {
   const size = MAP_SIZES[mapSize];
   const rng = Rng.fromSeed(`${seed}:world`);
@@ -131,7 +135,7 @@ export function createWorldState({
     seed,
     tick: startHour * TICKS_PER_HOUR,
     rng: rng.state(),
-    settings: { daysPerYear: DEFAULT_DAYS_PER_YEAR, defaultBrain: { ...DEFAULT_BRAIN } },
+    settings: { daysPerYear: DEFAULT_DAYS_PER_YEAR, defaultBrain: { ...defaultBrain } },
     map,
     agents: [],
     resources: {},
