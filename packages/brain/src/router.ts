@@ -7,7 +7,13 @@ import type {
   ProviderId,
 } from '@aw/shared';
 import { MockBrain, mockDecide } from './mock.ts';
-import { RefusalError, UsageLimitError, type BrainProvider, type BrainResult } from './types.ts';
+import {
+  NoDecisionError,
+  RefusalError,
+  UsageLimitError,
+  type BrainProvider,
+  type BrainResult,
+} from './types.ts';
 
 export interface RoutedResult {
   result: BrainResult | null;
@@ -210,7 +216,11 @@ export class BrainRouter {
         plan: [{ type: 'rest', minutes: 15 }],
       };
       return {
-        result: { decision },
+        // A completed call that gave no decision was still paid for.
+        result: {
+          decision,
+          usage: refused || err instanceof NoDecisionError ? err.usage : undefined,
+        },
         provider: provider.id,
         model: config.model,
         error: `${refused ? 'Refused' : 'Error'}: ${(err as Error).message}`.slice(0, 500),

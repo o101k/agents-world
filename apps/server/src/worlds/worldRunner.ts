@@ -17,6 +17,7 @@ import {
   step,
   type TickInput,
   type WorldState,
+  resourceAmount,
 } from '@aw/sim';
 import type { CallRecord, WorldFile } from './worldFile.ts';
 
@@ -128,7 +129,8 @@ export class WorldRunner {
 
   resourceAmounts(): Record<string, number> {
     const out: Record<string, number> = {};
-    for (const [id, r] of Object.entries(this.state.resources)) out[id] = Math.floor(r.amount);
+    for (const id of Object.keys(this.state.resources))
+      out[id] = Math.floor(resourceAmount(this.state, id) ?? 0);
     return out;
   }
 
@@ -454,7 +456,7 @@ export class WorldRunner {
     this.lastFrameAt = now;
     const resources: Record<string, number> = {};
     for (const id of this.changedResources)
-      resources[id] = Math.floor(this.state.resources[id]?.amount ?? 0);
+      resources[id] = Math.floor(resourceAmount(this.state, id) ?? 0);
     this.changedResources.clear();
     this.hooks.onFrame({
       mapVersion: this.state.mapVersion,

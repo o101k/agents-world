@@ -42,6 +42,7 @@ import {
   type Agent,
   type AgentSpec,
   type TickInput,
+  resourceAmount,
 } from '@aw/sim';
 import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
@@ -330,7 +331,8 @@ export class WorldManager {
   replay(worldId: string, tick: number, viewerMapVersion?: number): ReplayResponse {
     const { state, firstTick, lastTick } = this.replayState(worldId, tick);
     const resources: Record<string, number> = {};
-    for (const [id, r] of Object.entries(state.resources)) resources[id] = Math.floor(r.amount);
+    for (const id of Object.keys(state.resources))
+      resources[id] = Math.floor(resourceAmount(state, id) ?? 0);
     return {
       tick: state.tick,
       firstTick,

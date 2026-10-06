@@ -24,6 +24,7 @@ import { DEFAULT_BRAIN, languageBaseline } from './cast.ts';
 import { addAgent, introduceResidents, linkFamilies } from './population.ts';
 import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
+import { mapCache } from './spatial.ts';
 
 export const WORLD_STATE_VERSION = 8;
 
@@ -191,6 +192,19 @@ export function findAgent(state: WorldState, id: string | null | undefined): Age
     agentIndexes.set(state.agents, index);
   }
   return index.byId.get(id);
+}
+
+/** Wood on a full-grown tree. Trees are only tracked in `state.resources` while recovering. */
+export const TREE_WOOD = 4;
+
+/**
+ * How much a harvestable object holds right now: its tracked amount, TREE_WOOD for a tree that
+ * isn't tracked (full-grown), undefined for anything else.
+ */
+export function resourceAmount(state: WorldState, objectId: string): number | undefined {
+  const r = state.resources[objectId];
+  if (r) return r.amount;
+  return mapCache(state.map).byId.get(objectId)?.kind === 'tree' ? TREE_WOOD : undefined;
 }
 
 /** Run `fn` with the world's RNG and store the advanced RNG state back. */

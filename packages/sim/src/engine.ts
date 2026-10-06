@@ -72,7 +72,7 @@ import {
   objectsNear,
   treesNear,
 } from './spatial.ts';
-import { findAgent, withRng, type WorldState } from './world.ts';
+import { TREE_WOOD, findAgent, resourceAmount, withRng, type WorldState } from './world.ts';
 
 /** Everything the simulation consumes besides its own state. Logged per tick for exact replay. */
 export type TickInput =
@@ -1134,7 +1134,7 @@ function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived
   const { state } = ctx;
   const { map } = state;
   const cache = mapCache(map);
-  const woodLeft = (id: string) => state.resources[id]?.amount ?? 4;
+  const woodLeft = (id: string) => resourceAmount(state, id) ?? 0;
   let tree = objectId ? cache.byId.get(objectId) : undefined;
   if (tree && tree.kind !== 'tree') tree = undefined;
   if (!tree) {
@@ -1161,7 +1161,12 @@ function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived
 function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
   const { state } = ctx;
   agent.action = null;
-  const r = (state.resources[treeId] ??= { amount: 4, max: 4, regenPerDay: 1, item: 'wood' });
+  const r = (state.resources[treeId] ??= {
+    amount: TREE_WOOD,
+    max: TREE_WOOD,
+    regenPerDay: 1,
+    item: 'wood',
+  });
   const tools = useTools(ctx, agent);
   const got = Math.min(2 + (tools ? 1 : 0), Math.floor(r.amount));
   if (got <= 0) return fail(ctx, agent, 'That tree had no more wood worth taking.');

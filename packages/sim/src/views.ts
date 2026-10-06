@@ -34,6 +34,7 @@ export function activity(agent: Agent): Activity {
     case 'chop':
       return 'gathering';
     case 'craft':
+    case 'build':
       return 'working';
     case 'eat':
       return 'eating';
@@ -41,6 +42,15 @@ export function activity(agent: Agent): Activity {
       return 'drinking';
     case 'rest':
       return 'resting';
+    case 'sleep':
+      return 'sleeping';
+    case undefined:
+      break;
+    default: {
+      // Compile-time exhaustiveness; an unknown action in an old save falls through safely.
+      const unhandled: never = agent.action;
+      void unhandled;
+    }
   }
   return agent.awaiting ? 'thinking' : 'idle';
 }
