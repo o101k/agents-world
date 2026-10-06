@@ -243,10 +243,17 @@ export function lifeTick(ctx: Ctx, agent: Agent, ageStep: number): void {
   if (stage === 'infant') {
     const home = agent.homeId ? mapCache(state.map).byId.get(agent.homeId) : undefined;
     if (home?.door) {
-      agent.x = home.door.x;
-      agent.y = home.door.y;
       // A burnt (or burning) home gives no shelter: the baby is outside on the doorstep.
       agent.indoorsId = usable(state, home.id) ? home.id : null;
+      // Indoors the baby is "at the door"; outdoors it only needs to stay near it (the
+      // separation pass keeps people off each other's tiles, so don't fight it every tick).
+      if (
+        agent.indoorsId ||
+        Math.max(Math.abs(agent.x - home.door.x), Math.abs(agent.y - home.door.y)) > 1
+      ) {
+        agent.x = home.door.x;
+        agent.y = home.door.y;
+      }
     }
     agent.action =
       agent.action?.type === 'sleep'

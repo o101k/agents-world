@@ -65,6 +65,7 @@ export function agentView(agent: Agent): AgentView {
     facing: agent.facing,
     activity: activity(agent),
     indoors: agent.indoorsId !== null,
+    ...(agent.indoorsId ? { indoorsId: agent.indoorsId } : {}),
     alive: agent.alive,
     sex: agent.sex,
     age: Math.floor(agent.age),

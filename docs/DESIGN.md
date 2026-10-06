@@ -88,7 +88,14 @@ the last reflection and age of the last life chapter.
    03:00, children's temperament drifting toward their carers, and the night's reflection request);
    the current action advances (walking one tile per tick — half speed
    for toddlers and the very old — gathering, chopping, crafting, building, eating, drinking); the
-   next plan step starts; decision points are raised.
+   next plan step starts; decision points are raised. Outdoors there is **one person per tile**
+   (`occupancy.ts`; people indoors don't take room). A line of walkers moves up together and
+   walkers whose ways cross (head-on or round a corner) pass at once; someone idling in the way
+   (resting, eating) steps aside; otherwise the walker steps round through a short detour, plans a
+   new route round a standing blocker, and finally squeezes past (swaps places: after 2 ticks for
+   a sleeper, 4 for someone standing, 10 for another walker). Plans prefer free goal tiles and
+   route round people standing still. At the end of every tick a deterministic separation pass
+   moves anyone still sharing a tile (first in the list keeps it) to the nearest free one.
 4. Every 5 ticks each awake person looks around (8 tiles by day, 4 at night) and updates knowledge.
 
 Decision points: spawned, woke up, plan done, action failed, urgent need (once per dip), spoken to,
@@ -329,8 +336,8 @@ is ever called in tests: everything uses the Mock brain or a fake HTTP server.
   (down/up/side × 2 walk frames) painted from their own colours, with an outline.
 - `renderer.ts` (PixiJS v8): ground in 32×32-tile chunks with cull areas; objects and people in one
   depth-sorted layer; people tween between frames; children drawn smaller; sleepers lie down;
-  babies and indoor sleepers hidden; the dead become gravestones; half-built houses fade in; speech
-  bubbles, name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. Weather:
+  nobody is ever hidden: a house with someone inside is drawn cut away (roof off, `house_open*`; other buildings turn see-through) and its occupants stand on distinct spots in the room (`layout.ts` `interiorSpots`, sorted by id); sprites in front of a person (roofs, tree canopies) fade to 40% via a per-tile object grid; the dead become gravestones; half-built houses fade in; speech
+  bubbles (laid out together each frame by `layoutBubbles` so none overlap, tails pointing at the speaker), name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. Weather:
   storms darken the map and draw falling rain (screen space); droughts give a hot, bleached tint;
   burning buildings get flickering flames and smoke; ruins are drawn blackened; the sick look pale
   green; winter frosts the land and autumn warms it. It animates only while something moves (or

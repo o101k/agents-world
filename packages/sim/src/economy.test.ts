@@ -79,6 +79,8 @@ describe('economy', () => {
   it('chops wood from a nearby tree', () => {
     const s = fresh();
     const a = s.agents.find((x) => x.id === 'a5')!;
+    // A housemate rests right outside a5's door, the only way out: step them aside.
+    s.agents.find((x) => x.id === 'a6')!.y += 2;
     run(s, 'a5', [{ type: 'chop_wood' }], 600);
     expect(a.inventory.wood ?? 0).toBeGreaterThanOrEqual(2);
   });

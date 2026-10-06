@@ -36,7 +36,8 @@ import { applyReflection, memoryTick, reinforceRecalled } from './memory.ts';
 import { calendarTick, seasonEffects } from './seasons.ts';
 import { NUTRITION, isFood } from './items.ts';
 import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
-import { findPathToAny } from './pathfinding.ts';
+import { findPathToAny, type CostFn } from './pathfinding.ts';
+import { crowd, occupantAt, occupies } from './occupancy.ts';
 import { buildPerception, nameAsKnown } from './perception.ts';
 import {
   applyFeelings,
@@ -130,6 +131,8 @@ export interface Ctx {
   rng: Rng;
   events: WorldEvent[];
   changed: Set<string>;
+  /** People who already moved this tick (a head-on swap moves two at once). */
+  moved: Set<string>;
   die: (agent: Agent, cause?: string) => void;
   addPerson: (spec: AgentSpec) => Agent;
   walkTo: (agent: Agent, goals: Point[], then: Intent | null, what: string) => boolean;
@@ -153,6 +156,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
     rng: undefined as unknown as Rng,
     events: [],
     changed: new Set(),
+    moved: new Set(),
     die: (agent, cause) => die(ctx, agent, cause),
     addPerson: (spec) => addAgent(state, spec, ctx.rng),
     walkTo: (agent, goals, then, what) => walkTo(ctx, agent, goals, then, what),
@@ -197,6 +201,7 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       }
       if ((state.tick + i) % 5 === 0) look(state, agent);
     }
+    separatePeople(ctx);
   });
   return {
     events: ctx.events,
@@ -572,6 +577,7 @@ function progressAction(ctx: Ctx, agent: Agent): void {
   if (!action) return;
   switch (action.type) {
     case 'walk': {
+      if (ctx.moved.has(agent.id)) return; // already swapped places this tick
       const next = action.path[action.step];
       if (!next) {
         agent.action = null;
@@ -580,9 +586,13 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       }
       if (!isWalkable(state.map, next.x, next.y)) return fail(ctx, agent, 'My way was blocked.');
       if (walksSlowly(agent) && state.tick % 2 === 1) return;
+      const other = occupantAt(state, next.x, next.y, agent);
+      if (other && !passBy(ctx, agent, action, other)) return;
+      action.blocked = 0;
       agent.facing = facingTo(agent, next);
       agent.x = next.x;
       agent.y = next.y;
+      ctx.moved.add(agent.id);
       action.step++;
       if (action.step >= action.path.length) {
         agent.action = null;
@@ -638,6 +648,229 @@ function progressAction(ctx: Ctx, agent: Agent): void {
   }
 }
 
+type WalkAction = Extract<NonNullable<Agent['action']>, { type: 'walk' }>;
+
+/** Blocked ticks at which to step round whoever is in the way (rejoining the route further on). */
+const DETOUR_AT = [1, 3];
+/** Blocked ticks before planning a whole new route round someone standing still. */
+const REPLAN_AT = 2;
+/** Blocked ticks before squeezing past someone (swapping places with them). */
+const SQUEEZE_STANDER = 4;
+const SQUEEZE_WALKER = 10;
+/** Sleepers (and the collapsed) don't get up for anyone: step over them sooner. */
+const SQUEEZE_SLEEPER = 2;
+
+/**
+ * Someone stands on the walker's next tile. Returns true when the walker may step there now
+ * (whoever was there has moved on); otherwise the walker waits. A line of walkers moves up
+ * together and walkers whose ways cross (head-on, or round a corner) pass each other at once;
+ * anyone else is stepped round if there's room, else waited for, and finally squeezed past,
+ * so crowds always untangle and nobody ever shares a tile.
+ */
+function passBy(ctx: Ctx, agent: Agent, action: WalkAction, other: Agent): boolean {
+  if (moveLine(ctx, agent) || stepAside(ctx, other, action)) return true;
+  const blocked = (action.blocked = (action.blocked ?? 0) + 1);
+  if (DETOUR_AT.includes(blocked) && detour(ctx, agent, action)) return false;
+  if (ctx.moved.has(other.id)) return false;
+  const oa = other.action?.type === 'walk' ? other.action : null;
+  if (!oa && blocked === REPLAN_AT && replanAround(ctx, agent, action)) return false;
+  // Someone walking will usually move on soon (pushing them back costs them a step), so they
+  // are only squeezed past in a real jam.
+  const squeezeAt = oa ? SQUEEZE_WALKER : other.asleep ? SQUEEZE_SLEEPER : SQUEEZE_STANDER;
+  if (blocked < squeezeAt) return false;
+  // Squeeze past: swap places. A walker pushed back a tile steps forward again next.
+  const from = { x: other.x, y: other.y };
+  other.x = agent.x;
+  other.y = agent.y;
+  if (oa) {
+    oa.path.splice(oa.step, 0, from);
+    other.facing = facingTo(other, from);
+  }
+  ctx.moved.add(other.id);
+  return true;
+}
+
+/**
+ * The walkers ahead (each on the tile the one behind wants next) all step forward together if
+ * the line ends at a free tile or loops back to `agent` (people passing each other). Moves
+ * everyone in the line except `agent`, and returns true if it did.
+ */
+function moveLine(ctx: Ctx, agent: Agent): boolean {
+  const { state } = ctx;
+  const line: Agent[] = [];
+  const targets: Point[] = [];
+  let cur = agent;
+  for (;;) {
+    if (line.length >= 24) return false;
+    const ca = cur.action as WalkAction;
+    const next = ca.path[ca.step]!;
+    const occ = occupantAt(state, next.x, next.y, cur);
+    if (!occ || occ === agent) break;
+    const oa = occ.action;
+    const theirs = oa?.type === 'walk' ? oa.path[oa.step] : undefined;
+    if (
+      !theirs ||
+      ctx.moved.has(occ.id) ||
+      line.includes(occ) ||
+      !isWalkable(state.map, theirs.x, theirs.y) ||
+      (walksSlowly(occ) && state.tick % 2 === 1)
+    )
+      return false;
+    line.push(occ);
+    targets.push(theirs);
+    cur = occ;
+  }
+  if (line.length === 0) return false;
+  for (let k = 0; k < line.length; k++) {
+    const p = line[k]!;
+    const t = targets[k]!;
+    const pa = p.action as WalkAction;
+    p.facing = facingTo(p, t);
+    p.x = t.x;
+    p.y = t.y;
+    pa.step++;
+    pa.blocked = 0;
+    ctx.moved.add(p.id);
+  }
+  return true;
+}
+
+/**
+ * Someone idling in the way (resting, eating, chatting, waiting for their thoughts) steps to a
+ * free tile beside them that isn't on the walker's way. Returns true if they did.
+ */
+function stepAside(ctx: Ctx, other: Agent, action: WalkAction): boolean {
+  const type = other.action?.type;
+  if (other.asleep || ctx.moved.has(other.id) || (type && type !== 'rest' && type !== 'eat'))
+    return false;
+  const { state } = ctx;
+  const ahead = action.path.slice(Math.max(0, action.step - 1), action.step + 3);
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ] as const) {
+    const x = other.x + dx;
+    const y = other.y + dy;
+    if (
+      !isWalkable(state.map, x, y) ||
+      ahead.some((p) => p.x === x && p.y === y) ||
+      occupantAt(state, x, y, other)
+    )
+      continue;
+    other.facing = facingTo(other, { x, y });
+    other.x = x;
+    other.y = y;
+    ctx.moved.add(other.id);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Step round people in the way: a short route (others as walls) from here to a free tile a few
+ * steps further along the current route, which then carries on as before.
+ */
+function detour(ctx: Ctx, agent: Agent, action: WalkAction): boolean {
+  const { state } = ctx;
+  const { map } = state;
+  const others = crowd(state, agent);
+  const last = action.path.length - 1;
+  let k = -1;
+  for (let j = action.step + 1; j <= Math.min(last, action.step + 5); j++) {
+    const t = action.path[j]!;
+    if (!others.taken(t.x, t.y)) {
+      k = j;
+      break;
+    }
+  }
+  if (k < 0) return false;
+  const goal = action.path[k]!;
+  const base = moveCost(map);
+  const cost: CostFn = (x, y) =>
+    others.taken(x, y) || Math.abs(x - agent.x) > 6 || Math.abs(y - agent.y) > 6
+      ? Infinity
+      : base(x, y);
+  const way = findPathToAny(map.width, map.height, agent, [goal], cost);
+  // Only worth it if it isn't a long way round.
+  if (!way || way.length < 2 || way.length - 1 > k - action.step + 4) return false;
+  action.path = [...way, ...action.path.slice(k + 1)];
+  action.step = 1;
+  return true;
+}
+
+/**
+ * New route from where the person stands to the walk's goals, treating every other outdoor person
+ * as a wall. Returns false when there is none (the walk is left as it was).
+ */
+function replanAround(ctx: Ctx, agent: Agent, action: WalkAction): boolean {
+  const { state } = ctx;
+  const { map } = state;
+  const others = crowd(state, agent);
+  const goals = (action.goals ?? [action.path[action.path.length - 1]!]).filter(
+    (g) => !others.taken(g.x, g.y),
+  );
+  if (goals.length === 0) return false;
+  // Search a window around the start (a failed search would otherwise flood the whole map).
+  const reach =
+    8 + Math.min(...goals.map((g) => Math.abs(g.x - agent.x) + Math.abs(g.y - agent.y)));
+  const base = moveCost(map);
+  const cost: CostFn = (x, y) =>
+    others.taken(x, y) || Math.abs(x - agent.x) > reach || Math.abs(y - agent.y) > reach
+      ? Infinity
+      : base(x, y);
+  const path = findPathToAny(map.width, map.height, agent, goals, cost);
+  if (!path) return false;
+  if (path.length <= 1) {
+    agent.action = null;
+    if (action.then) startIntent(ctx, agent, action.then, true);
+    return true;
+  }
+  action.path = path;
+  action.step = 1;
+  action.blocked = 0;
+  return true;
+}
+
+/**
+ * Safety net, run at the end of every tick: nobody outdoors shares a tile. The first person in
+ * the list keeps the tile; later ones move to the nearest free tile (and re-route if walking).
+ */
+function separatePeople(ctx: Ctx): void {
+  const { state } = ctx;
+  const { map } = state;
+  const w = map.width;
+  const claimed = new Set<number>();
+  let taken: Set<number> | null = null;
+  for (const agent of state.agents) {
+    if (!occupies(agent)) continue;
+    const i = agent.y * w + agent.x;
+    if (!claimed.has(i)) {
+      claimed.add(i);
+      continue;
+    }
+    if (!taken) {
+      taken = new Set();
+      for (const a of state.agents) if (occupies(a)) taken.add(a.y * w + a.x);
+    }
+    const free = nearestWalkable(map, agent, (p) => !taken!.has(p.y * w + p.x), 30);
+    if (!free) continue;
+    agent.x = free.x;
+    agent.y = free.y;
+    const j = free.y * w + free.x;
+    taken.add(j);
+    claimed.add(j);
+    const action = agent.action;
+    if (action?.type === 'walk') {
+      // The old path no longer starts here.
+      agent.action = null;
+      const goals = action.goals ?? [action.path[action.path.length - 1]!];
+      walkTo(ctx, agent, goals, action.then, 'where I was going');
+    }
+  }
+}
+
 function facingTo(from: Point, to: Point): Facing {
   if (to.x > from.x) return 'right';
   if (to.x < from.x) return 'left';
@@ -654,7 +887,13 @@ function walkTo(
   objectId?: string,
 ): boolean {
   const { map } = ctx.state;
-  const path = findPathToAny(map.width, map.height, agent, goals, moveCost(map));
+  const others = crowd(ctx.state, agent);
+  const free = goals.filter((g) => !others.taken(g.x, g.y));
+  const useGoals = free.length > 0 ? free : goals;
+  const base = moveCost(map);
+  // Steer round people standing still (walkers will have moved on).
+  const cost: CostFn = (x, y) => base(x, y) + (others.standing(x, y) ? 4 : 0);
+  const path = findPathToAny(map.width, map.height, agent, useGoals, cost);
   if (!path) {
     // Remember that this place can't be reached from here (so nobody keeps trying).
     if (objectId)
@@ -669,7 +908,7 @@ function walkTo(
     if (then) startIntent(ctx, agent, then, true);
     return true;
   }
-  agent.action = { type: 'walk', path, step: 1, then };
+  agent.action = { type: 'walk', path, step: 1, then, goals: useGoals, blocked: 0 };
   return true;
 }
 
@@ -742,9 +981,20 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       if (arrived) return fail(ctx, agent, 'There was no water where I went to drink.');
       let goals: Point[] = [];
       const source = intent.sourceId ? cache.byId.get(intent.sourceId) : undefined;
-      if (source) goals = interactionTiles(map, source).filter((p) => canDrinkAt(state, p));
+      const others = crowd(state, agent);
+      if (source)
+        goals = interactionTiles(map, source).filter(
+          (p) => canDrinkAt(state, p) && !others.taken(p.x, p.y),
+        );
       if (goals.length === 0) {
-        const spot = nearestWalkable(map, agent, (p) => canDrinkAt(state, p), 120);
+        // The nearest spot nobody is standing on (else just the nearest).
+        const spot =
+          nearestWalkable(
+            map,
+            agent,
+            (p) => !others.taken(p.x, p.y) && canDrinkAt(state, p),
+            120,
+          ) ?? nearestWalkable(map, agent, (p) => canDrinkAt(state, p), 120);
         if (spot) goals = [spot];
       }
       if (goals.length === 0) return fail(ctx, agent, "I couldn't find any water to drink.");
@@ -1082,6 +1332,11 @@ export function approach(
     }
   }
   if (goals.length === 0) goals.push({ x: other.x, y: other.y });
+  else {
+    const others = crowd(ctx.state, agent);
+    const free = goals.filter((g) => !others.taken(g.x, g.y));
+    if (free.length > 0) goals.splice(0, goals.length, ...free);
+  }
   walkTo(ctx, agent, goals, { ...intent, tries: tries + 1 } as Intent, who);
   return false;
 }

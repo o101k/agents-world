@@ -103,6 +103,8 @@ describe('orphans and adoption', () => {
     const oskar = who(s, 'Oskar');
     const lise = who(s, 'Lise');
     // Oskar is wherever he was (maybe indoors at home): Maren goes to him.
+    // Tobias is resting right outside the door, the only way out: step him aside.
+    tobias.y += 2;
     const events = run(s, { [maren.id]: [{ type: 'adopt_child', childId: oskar.id }] }, 120);
     expect(events.some((e) => e.kind === 'adopted')).toBe(true);
     expect(oskar.adoptiveParentIds).toEqual([maren.id, tobias.id]);

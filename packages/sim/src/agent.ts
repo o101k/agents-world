@@ -65,7 +65,16 @@ export interface KnownPlaceState {
 
 /** What the body is doing right now. Multi-tick; plans are made of these. */
 export type ActionState =
-  | { type: 'walk'; path: Point[]; step: number; then: Intent | null }
+  | {
+      type: 'walk';
+      path: Point[];
+      step: number;
+      then: Intent | null;
+      /** Where the walk was headed (all acceptable end tiles), kept for re-routing around people. */
+      goals?: Point[];
+      /** Ticks in a row that someone was standing in the way. */
+      blocked?: number;
+    }
   | { type: 'gather'; objectId: string; until: number }
   | { type: 'chop'; objectId: string; until: number }
   | { type: 'craft'; recipe: RecipeName; until: number }

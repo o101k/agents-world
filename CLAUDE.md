@@ -299,6 +299,19 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-06 — Nobody is ever hidden (owner request).** (a) Outdoors there is one person per
+  tile, enforced by the engine (not just drawn apart): lines of walkers move up together, people
+  passing swap places, idlers step aside, others are routed round and finally squeezed past, and
+  a separation pass at the end of every tick fixes anything else (two people leaving one door,
+  spawns, old saves). People indoors don't take room. Crowds now cost time: in the 250-person
+  stress town deaths over three days went from about 11 to about 22 across five seeds (most in
+  one seed whose only water is a narrow riverbank); 150-person and smaller villages are
+  unchanged. (b) A house with someone inside is drawn cut away, with its occupants on distinct
+  spots in the room (sleepers lying down); other buildings turn see-through. Roofs and tree
+  canopies in front of a person fade. (c) Speech bubbles are laid out together each frame so they
+  never overlap, each with a tail pointing at its speaker. (d) `findPathToAny` no longer returns
+  the start object itself as a path (it could have made a saved walk refer to the person).
+
 - **2026-10-06 — Pick brains when creating a world, and a brains dialog in the world (owner
   request).** New worlds no longer start everyone on the Mock brain without asking: after the form,
   **Next: choose brains** shows the starting villagers (previewed by the helper from the seed and
