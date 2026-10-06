@@ -6,6 +6,7 @@ import type { DecisionRequest, Perception } from '@aw/shared';
 import { AnthropicProvider } from './anthropic.ts';
 import { checkClaudeCli, ClaudePlanProvider, findClaudeCli, parseResetTime } from './claudeCli.ts';
 import { mockDecide } from './mock.ts';
+import { toRateLimitError } from './limits.ts';
 import { OpenAIProvider } from './openai.ts';
 import { DEFAULT_PRICES, costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
@@ -812,6 +813,7 @@ describe('Claude subscription (Claude Code CLI)', () => {
     });
     expect(out.result).toBeNull();
     expect(out.limit?.resetsAt).toBe(1759780800_000);
+    expect(out.limit?.limit).toBe('plan usage limit');
   });
 
   it('checks that Claude Code is installed and signed in with a Claude account', async () => {
@@ -835,5 +837,105 @@ describe('Claude subscription (Claude Code CLI)', () => {
     const tomorrow = new Date(parseResetTime('resets 5:15am', now)!);
     expect([tomorrow.getDate(), tomorrow.getHours(), tomorrow.getMinutes()]).toEqual([4, 5, 15]);
     expect(parseResetTime('Something else went wrong', now)).toBeUndefined();
+  });
+});
+
+describe('rate limits', () => {
+  const tooMany = (body: unknown, headers: Record<string, string>) => {
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      return new Response(JSON.stringify(body), {
+        status: 429,
+        headers: { 'content-type': 'application/json', ...headers },
+      });
+    }) as unknown as typeof fetch;
+    return { fetchFn, calls: () => calls };
+  };
+
+  it('turns an Anthropic 429 into a limit with which limit ran out and when, without retrying', async () => {
+    const fake = tooMany(
+      {
+        type: 'error',
+        error: { type: 'rate_limit_error', message: 'Input tokens per minute exceeded' },
+      },
+      {
+        'retry-after': '17',
+        'anthropic-ratelimit-requests-remaining': '40',
+        'anthropic-ratelimit-input-tokens-remaining': '0',
+        'anthropic-ratelimit-input-tokens-reset': '2026-10-06T23:00:00Z',
+      },
+    );
+    const provider = new AnthropicProvider('k', 'claude-haiku-4-5', () => DEFAULT_PRICES, {
+      fetch: fake.fetchFn,
+    });
+    const before = Date.now();
+    const out = await new BrainRouter([provider]).decide(request(perception()), {
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      effort: 'frugal',
+    });
+    expect(fake.calls()).toBe(1); // the SDK didn't sleep and retry; the world handles it
+    expect(out.result).toBeNull();
+    expect(out.limit).toMatchObject({
+      status: 429,
+      limit: 'input tokens per minute',
+      retryAfterSec: 17,
+      message: 'Input tokens per minute exceeded',
+    });
+    expect(out.limit!.resetsAt).toBeGreaterThanOrEqual(before + 17_000);
+    expect(out.error).toMatch(/Rate limit \(429\)/);
+  });
+
+  it('reports an OpenAI quota error with no retry time', async () => {
+    const fake = tooMany(
+      {
+        error: {
+          message: 'You exceeded your current quota',
+          type: 'insufficient_quota',
+          code: 'insufficient_quota',
+        },
+      },
+      {},
+    );
+    const provider = new OpenAIProvider(
+      'openai',
+      'k',
+      undefined,
+      'gpt-5-mini',
+      () => DEFAULT_PRICES,
+      {
+        fetch: fake.fetchFn,
+      },
+    );
+    const out = await new BrainRouter([provider]).decide(request(perception()), {
+      provider: 'openai',
+      model: 'gpt-5-mini',
+      effort: 'frugal',
+    });
+    expect(fake.calls()).toBe(1);
+    expect(out.limit).toMatchObject({
+      status: 429,
+      limit: 'quota used up (check billing)',
+      message: 'You exceeded your current quota',
+    });
+    expect(out.limit!.resetsAt).toBeUndefined();
+  });
+
+  it('reads OpenAI and OpenRouter reset headers', () => {
+    const now = 1_000_000_000_000;
+    const err = (headers: Record<string, string>) =>
+      toRateLimitError(
+        { status: 429, headers: new Headers(headers), message: 'slow down' },
+        now,
+      ) as {
+        details: { resetsAt?: number; limit?: string };
+      };
+    const openai = err({ 'x-ratelimit-remaining-tokens': '0', 'x-ratelimit-reset-tokens': '6m0s' });
+    expect(openai.details).toMatchObject({ limit: 'token limit', resetsAt: now + 360_000 });
+    const router = err({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now + 5_000) });
+    expect(router.details.resetsAt).toBe(now + 5_000);
+    expect(toRateLimitError(new Error('boom'))).toBeInstanceOf(Error);
+    expect(toRateLimitError({ status: 500 })).toEqual({ status: 500 });
   });
 });

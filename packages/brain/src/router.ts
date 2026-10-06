@@ -10,10 +10,19 @@ import { MockBrain, mockDecide } from './mock.ts';
 import {
   NoDecisionError,
   RefusalError,
-  UsageLimitError,
+  RateLimitError,
   type BrainProvider,
   type BrainResult,
 } from './types.ts';
+
+export interface RateLimitInfo {
+  /** The provider's own words. */
+  message: string;
+  resetsAt?: number;
+  status?: number;
+  limit?: string;
+  retryAfterSec?: number;
+}
 
 export interface RoutedResult {
   result: BrainResult | null;
@@ -26,8 +35,8 @@ export interface RoutedResult {
   fallback?: boolean;
   error?: string;
   timedOut?: boolean;
-  /** The Claude subscription's usage limit is used up (the decision was not made). */
-  limit?: { message: string; resetsAt?: number };
+  /** A rate or usage limit was hit (the decision was not made; ask again once it lifts). */
+  limit?: RateLimitInfo;
 }
 
 /**
@@ -198,13 +207,17 @@ export class BrainRouter {
         };
       return { result: out, provider: provider.id, model: out.trace?.model ?? config.model };
     } catch (err) {
-      if (err instanceof UsageLimitError)
+      if (err instanceof RateLimitError)
         return {
           result: null,
           provider: provider.id,
           model: config.model,
-          error: `Usage limit: ${err.message}`.slice(0, 500),
-          limit: { message: err.message, resetsAt: err.resetsAt },
+          error:
+            `Rate limit${err.details.status ? ` (${err.details.status})` : ''}: ${err.message}`.slice(
+              0,
+              500,
+            ),
+          limit: { message: err.message, ...err.details },
         };
       // Never stall the world on a failed call: the person hesitates briefly and tries again later.
       const refused = err instanceof RefusalError;
