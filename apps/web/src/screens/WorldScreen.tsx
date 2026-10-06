@@ -4,7 +4,10 @@ import {
   TILE_NAMES,
   decodeMap,
   formatClock,
+  rateLimitFacts,
+  rateLimitSource,
   type MapObjectKind,
+  type RateLimitNotice,
   type WorldMap,
   type WorldViewResponse,
 } from '@aw/shared';
@@ -50,7 +53,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const [tab, setTab] = useState<Tab>('people');
   const selection = useWorld((s) => s.selection);
   const capReached = useWorld((s) => s.runner.capReached);
-  const planLimit = useWorld((s) => s.runner.planLimit);
+  const rateLimit = useWorld((s) => s.runner.rateLimit);
   const [spawning, setSpawning] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [brainsOpen, setBrainsOpen] = useState(false);
@@ -200,19 +203,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
           or switch people to the free Mock brain, then press Play.
         </div>
       )}
-      {planLimit && (
-        <div className="banner banner-warn" role="alert">
-          Your Claude subscription's usage limit is used up, so time is paused. It resumes by itself
-          around{' '}
-          {new Date(planLimit.resumeAt).toLocaleString(undefined, {
-            weekday: 'short',
-            hour: 'numeric',
-            minute: '2-digit',
-          })}
-          , or press Play to try sooner. Switching people to Haiku or Frugal makes the limit last
-          longer.
-        </div>
-      )}
+      {rateLimit && <RateLimitBanner notice={rateLimit} />}
       <ConditionsBar map={shownMap} />
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
@@ -476,6 +467,34 @@ function SelectionDetails({
       <div className="selection-title">{TILE_NAMES[selection.tileType]}</div>
       <div className="muted small">
         Tile ({selection.tile.x}, {selection.tile.y})
+      </div>
+    </div>
+  );
+}
+
+/** Says exactly what stopped the world: whose decision, which provider and model, which limit. */
+function RateLimitBanner({ notice }: { notice: RateLimitNotice }) {
+  const facts = rateLimitFacts(notice);
+  const at = (t: number) =>
+    new Date(t).toLocaleString(undefined, {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: t - notice.at < 3_600_000 ? '2-digit' : undefined,
+    });
+  return (
+    <div className="banner banner-warn rate-limit-banner" role="alert">
+      <strong>Time is paused: an AI rate limit was hit.</strong> {rateLimitSource(notice)}
+      {facts && <> · {facts}</>}
+      <div className="rate-limit-message">“{notice.message}”</div>
+      <div>
+        {notice.resumeAt !== null ? (
+          <>Resumes by itself around {at(notice.resumeAt)}, or press Play to try sooner. </>
+        ) : (
+          <>The provider didn't say when the limit lifts. Press Play to try again. </>
+        )}
+        {notice.agentName}'s decision will be asked again. Fewer people on this model, Frugal
+        effort, or a slower speed make limits less likely.
       </div>
     </div>
   );

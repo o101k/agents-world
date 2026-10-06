@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { BrainConfig, DecisionRequest, EffortLevel, ModelPrice } from '@aw/shared';
+import { noRetryOn429, rateLimited } from './limits.ts';
 import { costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { DECIDE_DESCRIPTION, DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
@@ -37,7 +38,13 @@ export class AnthropicProvider implements BrainProvider {
     /** For tests: point the SDK at a fake server. */
     options: { baseURL?: string; fetch?: typeof fetch } = {},
   ) {
-    this.client = new Anthropic({ apiKey, maxRetries: 2, timeout: 90_000, ...options });
+    this.client = new Anthropic({
+      apiKey,
+      maxRetries: 2,
+      timeout: 90_000,
+      ...options,
+      fetch: noRetryOn429(options.fetch),
+    });
   }
 
   async decide(
@@ -50,27 +57,29 @@ export class AnthropicProvider implements BrainProvider {
     const system = systemPrompt(p);
     const user = userPrompt(p);
     const started = Date.now();
-    const res = await this.client.messages.create(
-      {
-        model,
-        max_tokens: MAX_TOKENS[config.effort],
-        // The system prompt is stable per person, so mark it for caching (only pays off above the
-        // model's minimum cacheable length; harmless otherwise).
-        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-        messages: [{ role: 'user', content: user }],
-        tools: [
-          {
-            name: 'decide',
-            description: DECIDE_DESCRIPTION,
-            input_schema: DECIDE_SCHEMA as unknown as Anthropic.Tool.InputSchema,
-          },
-        ],
-        // "auto" works on every current model (forced tool choice is rejected by some);
-        // the prompt tells the model to call the tool.
-        tool_choice: { type: 'auto' },
-        ...(supportsEffort(model) ? { output_config: { effort: EFFORT[config.effort] } } : {}),
-      },
-      { signal },
+    const res = await rateLimited(
+      this.client.messages.create(
+        {
+          model,
+          max_tokens: MAX_TOKENS[config.effort],
+          // The system prompt is stable per person, so mark it for caching (only pays off above the
+          // model's minimum cacheable length; harmless otherwise).
+          system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: user }],
+          tools: [
+            {
+              name: 'decide',
+              description: DECIDE_DESCRIPTION,
+              input_schema: DECIDE_SCHEMA as unknown as Anthropic.Tool.InputSchema,
+            },
+          ],
+          // "auto" works on every current model (forced tool choice is rejected by some);
+          // the prompt tells the model to call the tool.
+          tool_choice: { type: 'auto' },
+          ...(supportsEffort(model) ? { output_config: { effort: EFFORT[config.effort] } } : {}),
+        },
+        { signal },
+      ),
     );
     const usage = costOf(
       model,
@@ -105,22 +114,24 @@ export class AnthropicProvider implements BrainProvider {
   }
 
   async generate(req: GenerateRequest, signal?: AbortSignal) {
-    const res = await this.client.messages.create(
-      {
-        model: req.model || this.defaultModel,
-        max_tokens: req.maxTokens,
-        system: req.system,
-        messages: [{ role: 'user', content: req.user }],
-        tools: [
-          {
-            name: req.toolName,
-            description: req.toolDescription,
-            input_schema: req.schema as Anthropic.Tool.InputSchema,
-          },
-        ],
-        tool_choice: { type: 'auto' },
-      },
-      { signal },
+    const res = await rateLimited(
+      this.client.messages.create(
+        {
+          model: req.model || this.defaultModel,
+          max_tokens: req.maxTokens,
+          system: req.system,
+          messages: [{ role: 'user', content: req.user }],
+          tools: [
+            {
+              name: req.toolName,
+              description: req.toolDescription,
+              input_schema: req.schema as Anthropic.Tool.InputSchema,
+            },
+          ],
+          tool_choice: { type: 'auto' },
+        },
+        { signal },
+      ),
     );
     const model = req.model || this.defaultModel;
     const usage = costOf(

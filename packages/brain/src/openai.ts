@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { BrainConfig, DecisionRequest, EffortLevel, ModelPrice } from '@aw/shared';
+import { noRetryOn429, rateLimited } from './limits.ts';
 import { costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { DECIDE_DESCRIPTION, DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
@@ -45,6 +46,7 @@ export class OpenAIProvider implements BrainProvider {
       maxRetries: 2,
       timeout: 120_000,
       ...options,
+      fetch: noRetryOn429(options.fetch),
     });
   }
 
@@ -66,27 +68,29 @@ export class OpenAIProvider implements BrainProvider {
     const system = systemPrompt(p);
     const user = userPrompt(p);
     const started = Date.now();
-    const res = await this.client.chat.completions.create(
-      {
-        model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'decide',
-              description: DECIDE_DESCRIPTION,
-              parameters: DECIDE_SCHEMA as unknown as Record<string, unknown>,
+    const res = await rateLimited(
+      this.client.chat.completions.create(
+        {
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'decide',
+                description: DECIDE_DESCRIPTION,
+                parameters: DECIDE_SCHEMA as unknown as Record<string, unknown>,
+              },
             },
-          },
-        ],
-        tool_choice: { type: 'function', function: { name: 'decide' } },
-        ...this.limits(model, MAX_TOKENS[config.effort], config.effort),
-      },
-      { signal },
+          ],
+          tool_choice: { type: 'function', function: { name: 'decide' } },
+          ...this.limits(model, MAX_TOKENS[config.effort], config.effort),
+        },
+        { signal },
+      ),
     );
     const choice = res.choices[0];
     const cached = res.usage?.prompt_tokens_details?.cached_tokens ?? 0;
@@ -125,27 +129,29 @@ export class OpenAIProvider implements BrainProvider {
 
   async generate(req: GenerateRequest, signal?: AbortSignal) {
     const model = req.model || this.defaultModel;
-    const res = await this.client.chat.completions.create(
-      {
-        model,
-        messages: [
-          { role: 'system', content: req.system },
-          { role: 'user', content: req.user },
-        ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: req.toolName,
-              description: req.toolDescription,
-              parameters: req.schema,
+    const res = await rateLimited(
+      this.client.chat.completions.create(
+        {
+          model,
+          messages: [
+            { role: 'system', content: req.system },
+            { role: 'user', content: req.user },
+          ],
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: req.toolName,
+                description: req.toolDescription,
+                parameters: req.schema,
+              },
             },
-          },
-        ],
-        tool_choice: { type: 'function', function: { name: req.toolName } },
-        ...this.limits(model, req.maxTokens),
-      },
-      { signal },
+          ],
+          tool_choice: { type: 'function', function: { name: req.toolName } },
+          ...this.limits(model, req.maxTokens),
+        },
+        { signal },
+      ),
     );
     const msg = res.choices[0]?.message;
     const call = msg?.tool_calls?.find((c) => c.type === 'function');

@@ -1,18 +1,20 @@
 import { performance } from 'node:perf_hooks';
-import { instinctApplies, type BrainRouter } from '@aw/brain';
+import { instinctApplies, type BrainRouter, type RateLimitInfo } from '@aw/brain';
 import type {
   ActiveCondition,
   CalendarView,
   AgentView,
   DecisionRequest,
+  RateLimitNotice,
   RunnerStatus,
   WorldEvent,
   WorldMeta,
 } from '@aw/shared';
-import { TICKS_PER_HOUR } from '@aw/shared';
+import { PROVIDER_NAMES, TICKS_PER_HOUR, rateLimitFacts } from '@aw/shared';
 import {
   agentView,
   calendarView,
+  fullName,
   pendingRequests,
   step,
   type TickInput,
@@ -67,8 +69,8 @@ export class WorldRunner {
     dirty: false,
   };
   private capReached = false;
-  private planLimit: { message: string; resumeAt: number } | null = null;
-  private planTimer: ReturnType<typeof setTimeout> | undefined;
+  private rateLimit: RateLimitNotice | null = null;
+  private limitTimer: ReturnType<typeof setTimeout> | undefined;
   private changedResources = new Set<string>();
   private lastFrameAt = 0;
   private tickTimes: number[] = [];
@@ -119,7 +121,7 @@ export class WorldRunner {
       spentUsd: this.meta.spentUsd,
       capUsd: this.meta.capUsd,
       capReached: this.capReached,
-      planLimit: this.planLimit,
+      rateLimit: this.rateLimit,
     };
   }
 
@@ -155,7 +157,7 @@ export class WorldRunner {
   setRunning(running: boolean): void {
     if (running) {
       this.capReached = false; // re-checked before the next paid decision
-      this.clearPlanLimit();
+      this.clearRateLimit();
     }
     if (this.stopped || this.running === running) return;
     this.running = running;
@@ -192,7 +194,7 @@ export class WorldRunner {
   /** Advance exactly `ticks` ticks while paused (used by tests and the "step" control). */
   async advance(ticks: number): Promise<void> {
     if (this.running || this.stopped) return;
-    for (let i = 0; i < ticks; i++) {
+    for (let i = 0; i < ticks && !this.rateLimit; i++) {
       await this.tickOnce();
       if (i % 200 === 199) this.flush();
     }
@@ -209,7 +211,7 @@ export class WorldRunner {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    this.clearPlanLimit();
+    this.clearRateLimit();
     this.wakeLoop?.();
     await this.loopDone;
     this.saveNow();
@@ -305,49 +307,82 @@ export class WorldRunner {
   }
 
   /**
-   * The Claude subscription's usage limit is used up: pause, say so, and resume by itself once the
-   * limit should have reset (or after 30 minutes when the CLI didn't say when). Pressing Play tries
-   * again sooner.
+   * A provider hit a rate or usage limit while someone was deciding: pause and say exactly what
+   * happened. Time resumes by itself when the provider said when the limit lifts (the Claude
+   * subscription is retried every 30 minutes when it didn't say); otherwise it waits for Play.
+   * The decision that hit the limit is asked again when time resumes.
    */
-  private pauseForPlanLimit(limit: { message: string; resetsAt?: number }): void {
+  private pauseForRateLimit(
+    agentId: string,
+    provider: RateLimitNotice['provider'],
+    model: string,
+    info: RateLimitInfo,
+  ): void {
     const now = Date.now();
-    const resumeAt = Math.max(now + 60_000, (limit.resetsAt ?? now + 29 * 60_000) + 60_000);
-    const when = new Date(resumeAt).toLocaleString(undefined, {
-      weekday: 'short',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    const agent = this.state.agents.find((a) => a.id === agentId);
+    let resumeAt: number | null = null;
+    if (info.resetsAt !== undefined)
+      resumeAt = Math.max(
+        now + 1_000,
+        info.resetsAt + (provider === 'claude_plan' ? 60_000 : 2_000),
+      );
+    else if (provider === 'claude_plan') resumeAt = now + 30 * 60_000;
+    const notice: RateLimitNotice = {
+      agentId,
+      agentName: agent ? fullName(agent) : agentId,
+      provider,
+      model,
+      status: info.status,
+      limit: info.limit,
+      retryAfterSec: info.retryAfterSec,
+      message: info.message,
+      at: now,
+      resumeAt,
+    };
+    const facts = rateLimitFacts(notice);
+    const when =
+      resumeAt === null
+        ? 'press Play to try again'
+        : `it resumes by itself around ${new Date(resumeAt).toLocaleString(undefined, {
+            weekday: 'short',
+            hour: 'numeric',
+            minute: '2-digit',
+            second: resumeAt - now < 3_600_000 ? '2-digit' : undefined,
+          })}, or press Play to try sooner`;
     this.batch.events.push({
       tick: this.state.tick,
       kind: 'limit_reached',
-      actors: [],
-      text: `Your Claude subscription's usage limit is used up. Time is paused and will resume by itself around ${when}; press Play to try sooner.`,
+      actors: [agentId],
+      text: `Time is paused: ${PROVIDER_NAMES[provider]} (${model}) hit a limit while ${notice.agentName} was thinking${facts ? ` [${facts}]` : ''}: "${info.message.slice(0, 200)}" ${when[0]!.toUpperCase()}${when.slice(1)}.`,
       importance: 5,
     });
     this.batch.dirty = true;
     if (this.running) this.setRunning(false);
-    this.clearPlanLimit();
-    this.planLimit = { message: limit.message, resumeAt };
-    this.planTimer = setTimeout(
-      () => {
-        if (this.planLimit && !this.stopped) this.setRunning(true);
-      },
-      Math.min(resumeAt - now, 2 ** 31 - 1),
-    );
+    this.clearRateLimit();
+    this.rateLimit = notice;
+    if (resumeAt !== null)
+      this.limitTimer = setTimeout(
+        () => {
+          if (this.rateLimit && !this.stopped) this.setRunning(true);
+        },
+        Math.min(resumeAt - now, 2 ** 31 - 1),
+      );
     this.emitFrame(true);
   }
 
-  private clearPlanLimit(): void {
-    clearTimeout(this.planTimer);
-    this.planTimer = undefined;
-    this.planLimit = null;
+  private clearRateLimit(): void {
+    clearTimeout(this.limitTimer);
+    this.limitTimer = undefined;
+    this.rateLimit = null;
   }
 
   private async tickOnce(): Promise<void> {
     if (this.outstanding.length > 0) {
       if (this.needsPaidCall(this.outstanding) && this.enforceCap()) return;
-      await this.resolve(this.outstanding);
-      this.outstanding = [];
+      // Decisions that hit a rate limit stay outstanding and are asked again when time resumes;
+      // the tick doesn't advance without them.
+      this.outstanding = await this.resolve(this.outstanding);
+      if (this.outstanding.length > 0) return;
     }
     const inputs = this.pending;
     this.pending = [];
@@ -360,8 +395,11 @@ export class WorldRunner {
     this.batch.dirty = true;
   }
 
-  /** The world waits here until every agent due to decide has decided (or timed out). */
-  private async resolve(requests: DecisionRequest[]): Promise<void> {
+  /**
+   * The world waits here until every agent due to decide has decided (or timed out). Returns the
+   * requests that hit a rate limit (the world is then paused).
+   */
+  private async resolve(requests: DecisionRequest[]): Promise<DecisionRequest[]> {
     this.thinking = requests.length;
     if (requests.length > 1 || this.speed <= 20) this.emitFrame(false);
     const byId = new Map(this.state.agents.map((a) => [a.id, a]));
@@ -372,9 +410,9 @@ export class WorldRunner {
         return { request, routed };
       }),
     );
-    let limit: { message: string; resetsAt?: number } | undefined;
+    const limited: { request: DecisionRequest; routed: (typeof results)[number]['routed'] }[] = [];
     for (const { request, routed } of results) {
-      if (routed.limit && !limit) limit = routed.limit;
+      if (routed.limit) limited.push({ request, routed });
       const usage = routed.result?.usage;
       const cost = usage?.costUsd ?? 0;
       if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
@@ -414,10 +452,18 @@ export class WorldRunner {
           agentId: request.agentId,
           decision: routed.result.decision,
         });
-      else this.enqueue({ kind: 'decision_timeout', agentId: request.agentId });
+      else if (!routed.limit) this.enqueue({ kind: 'decision_timeout', agentId: request.agentId });
     }
     this.thinking = 0;
-    if (limit) this.pauseForPlanLimit(limit);
+    const first = limited[0];
+    if (first)
+      this.pauseForRateLimit(
+        first.request.agentId,
+        first.routed.provider,
+        first.routed.model,
+        first.routed.limit!,
+      );
+    return limited.map((l) => l.request);
   }
 
   /** Commit everything since the last flush in one transaction, then notify listeners. */

@@ -8,7 +8,7 @@ import { DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
 import {
   NoDecisionError,
   RefusalError,
-  UsageLimitError,
+  RateLimitError,
   type BrainProvider,
   type BrainResult,
   type GenerateRequest,
@@ -283,7 +283,11 @@ export class ClaudePlanProvider implements BrainProvider {
     const text = (out?.result ?? `${res.stdout}\n${res.stderr}`).trim();
     if (!out || out.is_error || res.code !== 0) {
       if (out?.api_error_status === 429 || LIMIT_RE.test(text))
-        throw new UsageLimitError(text.slice(0, 300), parseResetTime(text));
+        throw new RateLimitError(text.slice(0, 300), {
+          resetsAt: parseResetTime(text),
+          status: out?.api_error_status ?? undefined,
+          limit: /weekly/i.test(text) ? 'weekly plan limit' : 'plan usage limit',
+        });
       if (/unknown option|unrecognized/i.test(text))
         throw new Error(
           `Claude Code is too old for Agents World; run \`claude update\`. (${text.slice(0, 200)})`,

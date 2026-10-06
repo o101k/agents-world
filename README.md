@@ -111,6 +111,12 @@ API key because it starts a `claude` process. If calls fail with an unknown opti
 3. Press Play. The meter in the top bar shows AI spending against the world's cap (default $1); click
    it to change the cap. When the cap is reached, time pauses.
 
+**Rate limits.** If a provider answers "too many requests" (HTTP 429, or a used-up quota) for
+anyone's decision, time pauses and a banner says exactly what happened: whose decision, which
+provider and model, which limit, the provider's retry-after and its own error message. When the
+provider says when the limit lifts, time resumes by itself then; otherwise press Play to try again.
+Either way that person's decision is asked again, not skipped. The same note goes in the timeline.
+
 **Choosing who thinks with what.** Creating a world has two steps: fill in the form, press **Next:
 choose brains**, and a list of the starting villagers appears. Everyone starts on the first AI
 you've set up (or the free Mock brain if none is). Tick people (or **All**, **Adults**,

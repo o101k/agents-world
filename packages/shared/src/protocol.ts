@@ -5,6 +5,7 @@ import type {
   BrainConfig,
   LifeStage,
   LlmCallView,
+  ProviderId,
   Sex,
 } from './agent.ts';
 import type { WorldEvent } from './events.ts';
@@ -139,11 +140,29 @@ export interface RunnerStatus {
   capUsd: number;
   /** Paused because the spending cap was reached. */
   capReached: boolean;
-  /**
-   * Paused because the Claude subscription's usage limit is used up; time resumes by itself at
-   * resumeAt (ms since epoch), when the limit should have reset.
-   */
-  planLimit: { message: string; resumeAt: number } | null;
+  /** Paused because a villager's AI provider hit a rate or usage limit. */
+  rateLimit: RateLimitNotice | null;
+}
+
+/** What stopped the world when an AI provider said "too many requests" or "limit used up". */
+export interface RateLimitNotice {
+  /** The person whose decision hit the limit (it is asked again when time resumes). */
+  agentId: string;
+  agentName: string;
+  provider: ProviderId;
+  model: string;
+  /** HTTP status, e.g. 429, when there was one. */
+  status?: number;
+  /** Which limit, in plain words (e.g. "requests per minute", "plan usage limit"). */
+  limit?: string;
+  /** The provider's retry-after, in seconds, if it sent one. */
+  retryAfterSec?: number;
+  /** The provider's own error message. */
+  message: string;
+  /** When it happened (ms since epoch). */
+  at: number;
+  /** When time resumes by itself (ms since epoch); null = waits for Play. */
+  resumeAt: number | null;
 }
 
 export interface WorldViewResponse {

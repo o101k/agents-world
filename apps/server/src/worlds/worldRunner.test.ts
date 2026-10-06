@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BrainRouter, UsageLimitError } from '@aw/brain';
+import { BrainRouter, RateLimitError } from '@aw/brain';
+import type { DecisionRequest } from '@aw/shared';
 import { fnv1a, serializeWorldState } from '@aw/sim';
 import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
@@ -184,7 +185,8 @@ describe('Claude subscription limit', () => {
       id: 'claude_plan' as const,
       decide: async () => {
         calls++;
-        if (limited) throw new UsageLimitError("You've hit your limit", Date.now() + 3_600_000);
+        if (limited)
+          throw new RateLimitError("You've hit your limit", { resetsAt: Date.now() + 3_600_000 });
         return {
           decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
           usage: { inputTokens: 1000, outputTokens: 100, costUsd: 0 },
@@ -207,17 +209,105 @@ describe('Claude subscription limit', () => {
 
     limited = true;
     runner.setRunning(true);
-    for (let i = 0; i < 300 && !runner.status().planLimit; i++)
+    for (let i = 0; i < 300 && !runner.status().rateLimit; i++)
       await new Promise((r) => setTimeout(r, 10));
     const status = runner.status();
     expect(status.running).toBe(false);
-    expect(status.planLimit?.resumeAt).toBeGreaterThan(Date.now() + 3_600_000);
+    expect(status.rateLimit?.resumeAt).toBeGreaterThan(Date.now() + 3_600_000);
     const events = wm.events(w.id, { limit: 20, minImportance: 5 });
     expect(events.some((e) => e.kind === 'limit_reached')).toBe(true);
 
     runner.setRunning(true); // "try sooner"
-    expect(runner.status().planLimit).toBeNull();
+    expect(runner.status().rateLimit).toBeNull();
     runner.setRunning(false);
+    await wm.closeAll();
+  });
+});
+
+describe('API rate limits', () => {
+  const rest = {
+    decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+    usage: { inputTokens: 10, outputTokens: 10, costUsd: 0 },
+  };
+
+  async function openAiWorld(decide: (req: DecisionRequest) => Promise<typeof rest>) {
+    const wm = new WorldManager(dir, { brains: new BrainRouter([{ id: 'openai', decide }]) });
+    const w = await wm.create({ name: 'Limits', seed: 'limits', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'openai', model: 'gpt-5-mini', effort: 'standard' },
+      applyToAll: true,
+    });
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    for (let i = 0; i < 300 && !runner.status().rateLimit; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    return { wm, w, runner };
+  }
+
+  it('pauses on a 429, names who and what hit it, resumes at retry-after and re-asks that decision', async () => {
+    let limitedAt: { agentId: string; tick: number } | null = null;
+    const asked: { agentId: string; tick: number }[] = [];
+    const { wm, w, runner } = await openAiWorld(async (req) => {
+      asked.push({ agentId: req.agentId, tick: req.tick });
+      if (!limitedAt) {
+        limitedAt = { agentId: req.agentId, tick: req.tick };
+        throw new RateLimitError('Rate limit reached for requests', {
+          status: 429,
+          limit: 'requests',
+          retryAfterSec: 0,
+          resetsAt: Date.now(),
+        });
+      }
+      return rest;
+    });
+    const status = runner.status();
+    const notice = status.rateLimit!;
+    expect(status.running).toBe(false);
+    const who = runner.state.agents.find((a) => a.id === limitedAt!.agentId)!;
+    expect(notice).toMatchObject({
+      agentId: who.id,
+      agentName: expect.stringContaining(who.name),
+      provider: 'openai',
+      model: 'gpt-5-mini',
+      status: 429,
+      limit: 'requests',
+      retryAfterSec: 0,
+      message: 'Rate limit reached for requests',
+    });
+    expect(notice.resumeAt).not.toBeNull();
+    const pausedTick = runner.state.tick;
+    const event = wm
+      .events(w.id, { limit: 20, minImportance: 5 })
+      .find((e) => e.kind === 'limit_reached')!;
+    expect(event.text).toContain(who.name);
+    expect(event.text).toContain('OpenAI API (gpt-5-mini)');
+    expect(event.text).toContain('HTTP 429');
+
+    // Resumes by itself shortly after retry-after, and asks the same person again for that tick.
+    for (let i = 0; i < 500 && runner.state.tick <= pausedTick + 5; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    runner.setRunning(false);
+    expect(runner.state.tick).toBeGreaterThan(pausedTick);
+    expect(runner.status().rateLimit).toBeNull();
+    const retried = asked.filter(
+      (a) => a.agentId === limitedAt!.agentId && a.tick === limitedAt!.tick,
+    );
+    expect(retried.length).toBe(2);
+    await wm.closeAll();
+  });
+
+  it('waits for Play when the provider gives no retry time', async () => {
+    const { wm, runner } = await openAiWorld(async () => {
+      throw new RateLimitError('You exceeded your current quota', {
+        status: 429,
+        limit: 'quota used up (check billing)',
+      });
+    });
+    expect(runner.status().rateLimit?.resumeAt).toBeNull();
+    expect(runner.status().running).toBe(false);
     await wm.closeAll();
   });
 });
