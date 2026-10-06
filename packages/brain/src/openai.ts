@@ -4,6 +4,7 @@ import { costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { DECIDE_DESCRIPTION, DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
 import {
+  NoDecisionError,
   RefusalError,
   type BrainProvider,
   type BrainResult,
@@ -88,18 +89,6 @@ export class OpenAIProvider implements BrainProvider {
       { signal },
     );
     const choice = res.choices[0];
-    if (choice?.message.refusal) throw new RefusalError(choice.message.refusal);
-    const call = choice?.message.tool_calls?.find((c) => c.type === 'function');
-    let raw: unknown = null;
-    if (call && call.type === 'function') {
-      try {
-        raw = JSON.parse(call.function.arguments);
-      } catch {
-        raw = extractJson(call.function.arguments);
-      }
-    }
-    raw ??= extractJson(choice?.message.content ?? '');
-    if (!raw) throw new Error('The model did not return a decision.');
     const cached = res.usage?.prompt_tokens_details?.cached_tokens ?? 0;
     const usage = costOf(
       model,
@@ -110,6 +99,18 @@ export class OpenAIProvider implements BrainProvider {
       },
       this.prices(),
     );
+    if (choice?.message.refusal) throw new RefusalError(choice.message.refusal, usage);
+    const call = choice?.message.tool_calls?.find((c) => c.type === 'function');
+    let raw: unknown = null;
+    if (call && call.type === 'function') {
+      try {
+        raw = JSON.parse(call.function.arguments);
+      } catch {
+        raw = extractJson(call.function.arguments);
+      }
+    }
+    raw ??= extractJson(choice?.message.content ?? '');
+    if (!raw) throw new NoDecisionError('The model did not return a decision.', usage);
     return {
       decision: parseDecision(raw, p),
       usage,

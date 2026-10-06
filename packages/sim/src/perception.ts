@@ -36,8 +36,22 @@ function doingOf(a: Agent): string {
       return 'drinking';
     case 'rest':
       return 'resting';
-    default:
+    case 'chop':
+      return 'chopping wood';
+    case 'craft':
+      return 'making something';
+    case 'build':
+      return 'building';
+    case 'sleep':
+      return 'sleeping';
+    case undefined:
       return 'standing around';
+    default: {
+      // Compile-time exhaustiveness; an unknown action in an old save falls back safely.
+      const unhandled: never = a.action;
+      void unhandled;
+      return 'standing around';
+    }
   }
 }
 

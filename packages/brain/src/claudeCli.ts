@@ -6,6 +6,7 @@ import type { BrainConfig, DecisionRequest, EffortLevel } from '@aw/shared';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
 import {
+  NoDecisionError,
   RefusalError,
   UsageLimitError,
   type BrainProvider,
@@ -289,7 +290,6 @@ export class ClaudePlanProvider implements BrainProvider {
         );
       throw new Error(text.slice(0, 300) || `claude exited with code ${res.code}`);
     }
-    if (out.stop_reason === 'refusal') throw new RefusalError('The model declined.');
     const usage: Usage = {
       inputTokens:
         (out.usage?.input_tokens ?? 0) +
@@ -300,6 +300,7 @@ export class ClaudePlanProvider implements BrainProvider {
       // Paid for by the subscription, not by the world's spending cap.
       costUsd: 0,
     };
+    if (out.stop_reason === 'refusal') throw new RefusalError('The model declined.', usage);
     const model = Object.keys(out.modelUsage ?? {})[0] ?? opts.model;
     return { output: out.structured_output ?? extractJson(out.result ?? ''), usage, model };
   }
@@ -323,7 +324,7 @@ export class ClaudePlanProvider implements BrainProvider {
       },
       signal,
     );
-    if (!output) throw new Error('The model did not return a decision.');
+    if (!output) throw new NoDecisionError('The model did not return a decision.', usage);
     return {
       decision: parseDecision(output, p),
       usage,

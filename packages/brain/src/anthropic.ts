@@ -4,6 +4,7 @@ import { costOf } from './pricing.ts';
 import { systemPrompt, userPrompt } from './prompt.ts';
 import { DECIDE_DESCRIPTION, DECIDE_SCHEMA, extractJson, parseDecision } from './schema.ts';
 import {
+  NoDecisionError,
   RefusalError,
   type BrainProvider,
   type BrainResult,
@@ -71,15 +72,6 @@ export class AnthropicProvider implements BrainProvider {
       },
       { signal },
     );
-    if (res.stop_reason === 'refusal') throw new RefusalError('The model declined to decide.');
-    let raw: unknown = null;
-    let text = '';
-    for (const block of res.content) {
-      if (block.type === 'tool_use' && block.name === 'decide') raw = block.input;
-      else if (block.type === 'text') text += block.text;
-    }
-    raw ??= extractJson(text);
-    if (!raw) throw new Error('The model did not return a decision.');
     const usage = costOf(
       model,
       {
@@ -90,6 +82,16 @@ export class AnthropicProvider implements BrainProvider {
       },
       this.prices(),
     );
+    if (res.stop_reason === 'refusal')
+      throw new RefusalError('The model declined to decide.', usage);
+    let raw: unknown = null;
+    let text = '';
+    for (const block of res.content) {
+      if (block.type === 'tool_use' && block.name === 'decide') raw = block.input;
+      else if (block.type === 'text') text += block.text;
+    }
+    raw ??= extractJson(text);
+    if (!raw) throw new NoDecisionError('The model did not return a decision.', usage);
     return {
       decision: parseDecision(raw, p),
       usage,
@@ -120,7 +122,13 @@ export class AnthropicProvider implements BrainProvider {
       },
       { signal },
     );
-    if (res.stop_reason === 'refusal') throw new RefusalError('The model declined.');
+    const model = req.model || this.defaultModel;
+    const usage = costOf(
+      model,
+      { input: res.usage.input_tokens, output: res.usage.output_tokens },
+      this.prices(),
+    );
+    if (res.stop_reason === 'refusal') throw new RefusalError('The model declined.', usage);
     let output: unknown = null;
     let text = '';
     for (const block of res.content) {
@@ -128,16 +136,7 @@ export class AnthropicProvider implements BrainProvider {
       else if (block.type === 'text') text += block.text;
     }
     output ??= extractJson(text);
-    const model = req.model || this.defaultModel;
-    return {
-      output,
-      model,
-      usage: costOf(
-        model,
-        { input: res.usage.input_tokens, output: res.usage.output_tokens },
-        this.prices(),
-      ),
-    };
+    return { output, model, usage };
   }
 
   async listModels(): Promise<string[]> {

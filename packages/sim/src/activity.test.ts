@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import { TICKS_PER_DAY, TICKS_PER_HOUR } from '@aw/shared';
+import { step } from './engine.ts';
+import { buildPerception } from './perception.ts';
+import { agentView } from './views.ts';
+import { TREE_WOOD, createWorldState, resourceAmount } from './world.ts';
+
+function fresh() {
+  const s = createWorldState({ seed: 'activity', mapSize: 'small' });
+  for (const a of s.agents) {
+    a.needs = { food: 100, water: 100, energy: 100, warmth: 100 };
+    a.awaiting = null;
+  }
+  return s;
+}
+
+describe('activity of people', () => {
+  it('maps building to working and chopping to gathering', () => {
+    const s = fresh();
+    const a = s.agents[0]!;
+    a.asleep = false;
+    a.action = { type: 'build', objectId: 'x', until: 10 };
+    expect(agentView(a).activity).toBe('working');
+    a.action = { type: 'chop', objectId: 'x', until: 10 };
+    expect(agentView(a).activity).toBe('gathering');
+  });
+
+  it('shows a nearby woodcutter as chopping wood to others', () => {
+    const s = fresh();
+    s.tick = TICKS_PER_DAY * 2 + 12 * TICKS_PER_HOUR;
+    const [viewer, cutter] = s.agents as [(typeof s.agents)[0], (typeof s.agents)[0]];
+    for (const a of [viewer, cutter]) {
+      a.asleep = false;
+      a.indoorsId = null;
+    }
+    cutter.x = viewer.x;
+    cutter.y = viewer.y;
+    cutter.action = { type: 'chop', objectId: 'x', until: s.tick + 30 };
+    const seen = buildPerception(s, viewer).visibleAgents.find((v) => v.id === cutter.id);
+    expect(seen?.activity).toBe('chopping wood');
+  });
+});
+
+describe('regrown trees', () => {
+  it('are reported as changed, dropped from tracking, and read as full', () => {
+    const s = fresh();
+    const tree = s.map.objects.find((o) => o.kind === 'tree')!;
+    s.resources[tree.id] = { amount: 3.99, max: 4, regenPerDay: 1, item: 'wood' };
+    const changed = new Set<string>();
+    for (let i = 0; i < TICKS_PER_HOUR + 1; i++) {
+      for (const id of step(s, []).changedResources) changed.add(id);
+    }
+    expect(changed.has(tree.id)).toBe(true);
+    expect(s.resources[tree.id]).toBeUndefined();
+    expect(resourceAmount(s, tree.id)).toBe(TREE_WOOD);
+  });
+});

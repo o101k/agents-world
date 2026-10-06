@@ -487,6 +487,90 @@ describe('providers (fake HTTP)', () => {
     expect(r.decision.plan).toEqual([{ type: 'sleep' }]);
     expect(r.usage?.estimated).toBe(true);
   });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  const anthropicReply = (stop_reason: string) =>
+    (async () =>
+      json({
+        id: 'msg_2',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-haiku-4-5',
+        stop_reason,
+        content: [{ type: 'text', text: 'I would rather not say.' }],
+        usage: { input_tokens: 4000, output_tokens: 300 },
+      })) as unknown as typeof fetch;
+
+  it('Anthropic: a reply with no decision is still counted and paid for', async () => {
+    const provider = new AnthropicProvider('k', 'claude-haiku-4-5', () => DEFAULT_PRICES, {
+      fetch: anthropicReply('end_turn'),
+    });
+    const r = await new BrainRouter([provider]).decide(request(perception()), {
+      provider: 'anthropic',
+      model: '',
+      effort: 'standard',
+    });
+    expect(r.error).toMatch(/did not return a decision/);
+    expect(r.result?.decision.plan).toEqual([{ type: 'rest', minutes: 15 }]);
+    expect(r.result?.usage?.inputTokens).toBe(4000);
+    expect(r.result?.usage?.outputTokens).toBe(300);
+    expect(r.result?.usage?.costUsd).toBeCloseTo((4000 * 1 + 300 * 5) / 1e6);
+  });
+
+  it('Anthropic: a refusal is still counted and paid for', async () => {
+    const provider = new AnthropicProvider('k', 'claude-haiku-4-5', () => DEFAULT_PRICES, {
+      fetch: anthropicReply('refusal'),
+    });
+    const r = await new BrainRouter([provider]).decide(request(perception()), {
+      provider: 'anthropic',
+      model: '',
+      effort: 'standard',
+    });
+    expect(r.error).toMatch(/^Refused/);
+    expect(r.result?.usage?.inputTokens).toBe(4000);
+    expect(r.result?.usage?.costUsd).toBeGreaterThan(0);
+  });
+
+  it('OpenAI-compatible: no tool call, or a refusal, is still counted and paid for', async () => {
+    const reply = (message: Record<string, unknown>) =>
+      (async () =>
+        json({
+          id: 'c2',
+          object: 'chat.completion',
+          created: 0,
+          model: 'gpt-4o-mini',
+          choices: [
+            { index: 0, finish_reason: 'stop', message: { role: 'assistant', ...message } },
+          ],
+          usage: { prompt_tokens: 2000, completion_tokens: 150, total_tokens: 2150 },
+        })) as unknown as typeof fetch;
+    for (const [message, error] of [
+      [{ content: 'Hmm, hard to say.' }, /did not return a decision/],
+      [{ content: null, refusal: 'No.' }, /^Refused/],
+    ] as const) {
+      const provider = new OpenAIProvider(
+        'openai_compatible',
+        '',
+        'http://localhost:11434/v1',
+        'gpt-4o-mini',
+        () => DEFAULT_PRICES,
+        { fetch: reply(message) },
+      );
+      const r = await new BrainRouter([provider]).decide(request(perception()), {
+        provider: 'openai_compatible',
+        model: '',
+        effort: 'standard',
+      });
+      expect(r.error).toMatch(error);
+      expect(r.result?.usage?.inputTokens).toBe(2000);
+      expect(r.result?.usage?.outputTokens).toBe(150);
+      expect(r.result?.usage?.costUsd).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('a long life: reflection, sickness and world events', () => {

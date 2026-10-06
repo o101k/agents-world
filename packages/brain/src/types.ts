@@ -41,7 +41,25 @@ export interface GenerateRequest {
 }
 
 /** Thrown when the model declines to answer. */
-export class RefusalError extends Error {}
+export class RefusalError extends Error {
+  constructor(
+    message: string,
+    /** What the completed call cost, so the spending cap still counts it. */
+    readonly usage?: Usage,
+  ) {
+    super(message);
+  }
+}
+
+/** Thrown when a completed call carried no usable decision (tokens were still paid for). */
+export class NoDecisionError extends Error {
+  constructor(
+    message: string,
+    readonly usage?: Usage,
+  ) {
+    super(message);
+  }
+}
 
 /** Thrown when a Claude subscription's usage limit (5-hour or weekly) is used up. */
 export class UsageLimitError extends Error {
