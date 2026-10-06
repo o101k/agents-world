@@ -84,8 +84,8 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 3. In Agents World open **⚙ AI settings**. The **Claude subscription** card should say _Ready_
    (press **Check** if you logged in while the helper was running). Pick a default model there:
    Haiku makes your limits last longest; Sonnet and Opus are smarter but use them faster.
-4. In a world, open the **World** tab → **Default brain**, choose **Claude subscription**, a model
-   and an effort, tick "Also switch everyone alive", and save (or set one person in their inspector).
+4. Choose **Claude subscription**, a model and an effort when you pick brains for a new world (see
+   below), or in a running world with **🧠 Brains** (one person, a few, or everyone at once).
 
 Villagers then share your plan's 5-hour and weekly limits with your own Claude use. It costs no
 extra money and the spending cap doesn't apply. When the limit runs out, time pauses and resumes by
@@ -107,10 +107,18 @@ API key because it starts a `claude` process. If calls fail with an unknown opti
      Keys stay in `~/.agents-world/secrets.json` (readable only by you) and are never shown again or
      sent to the browser. You can instead set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
      `OPENAI_COMPATIBLE_API_KEY` before `npm start`.
-2. In a world, open the **World** tab → **Default brain**, pick the provider/model/effort, tick
-   "Also switch everyone alive", and save. Or set one person's brain in their inspector.
+2. Pick brains for the villagers (see below).
 3. Press Play. The meter in the top bar shows AI spending against the world's cap (default $1); click
    it to change the cap. When the cap is reached, time pauses.
+
+**Choosing who thinks with what.** Creating a world has two steps: fill in the form, press **Next:
+choose brains**, and a list of the starting villagers appears. Everyone starts on the first AI
+you've set up (or the free Mock brain if none is). Tick people (or **All**, **Adults**,
+**Children**), pick a provider, model and effort, and press **Apply**; **Change** on a row does the
+same for one person. The default for newborns and spawned people is set at the bottom. Then
+**Create world**. Inside a world the same dialog opens from **🧠 Brains** in the top bar, with each
+person's AI calls, tokens in and out, and cost so far, plus the whole village's totals. (One
+person's brain can also still be set in their inspector.)
 
 **Effort levels**: _Frugal_ (cheapest — routine needs like drinking, eating and going to bed are
 handled by instinct without an AI call), _Standard_, _Deep_ (more memories per prompt, more thinking).

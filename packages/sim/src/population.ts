@@ -38,7 +38,9 @@ export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
     position =
       nearestWalkable(state.map, position, (p) => isWalkable(state.map, p.x, p.y)) ?? position;
   }
-  const agent = createAgent(spec, {
+  // Newborns, spawned people and cast members without a brain of their own use the world's default.
+  const brain = spec.brain ?? state.settings.defaultBrain;
+  const agent = createAgent(brain ? { ...spec, brain: { ...brain } } : spec, {
     id,
     tick: state.tick,
     rng,

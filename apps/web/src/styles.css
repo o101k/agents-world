@@ -771,7 +771,8 @@ textarea {
   margin: 0;
   padding: 4px 6px;
 }
-.brain-editor label {
+.brain-editor label,
+.brain-fields label {
   display: block;
   font-size: 12px;
   color: var(--muted);
@@ -1138,4 +1139,194 @@ input[type='range'] {
 }
 .season-spring {
   color: #b8f0a0;
+}
+
+/* ---------- choosing brains (new-world step and the in-world dialog) */
+.modal.brains-modal {
+  max-width: 1000px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.brains-modal > * {
+  flex-shrink: 0;
+}
+.brains-modal > .brains-scroll {
+  flex: 1 1 auto;
+  min-height: 250px;
+}
+.brains-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.brains-toolbar .brains-count {
+  margin-left: 8px;
+}
+.brains-toolbar .check {
+  display: inline-flex;
+  margin: 0 0 0 auto;
+  font-weight: 400;
+}
+.brains-scroll {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+.brains-empty {
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+}
+.brains-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+.brains-table th,
+.brains-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.brains-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.brains-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+.brains-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.brains-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.brains-table .col-check {
+  width: 32px;
+  padding-right: 0;
+}
+.brains-table .col-action {
+  text-align: right;
+}
+.brains-table input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+.brains-table tr.is-selected td {
+  background: rgba(255, 216, 74, 0.08);
+}
+.brains-table tr.is-dead td {
+  opacity: 0.6;
+}
+.modal .brains-name {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  font-weight: 500;
+  cursor: pointer;
+}
+.brains-footnote {
+  margin: 6px 0 0;
+}
+.brains-bulk,
+.brains-default {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.brains-bulk-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.brains-bulk-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.brains-bulk-body .brain-fields {
+  flex: 1;
+  min-width: 0;
+}
+.brains-apply {
+  flex-shrink: 0;
+  margin-top: 26px;
+}
+.brains-bulk .brain-fields,
+.brains-default-edit .brain-fields {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.4fr) minmax(180px, 1.4fr) minmax(120px, 0.8fr);
+  gap: 0 10px;
+}
+.brains-bulk .brain-fields .brain-note,
+.brains-default-edit .brain-fields .brain-note {
+  grid-column: 1 / -1;
+  order: 5;
+  margin: 0 0 6px;
+}
+.brains-default-edit {
+  margin-top: 10px;
+}
+.brains-default-edit .row {
+  margin-top: 0;
+}
+.brains-modal .warn .linkish {
+  color: var(--text);
+  text-decoration: underline;
+}
+@media (max-width: 760px) {
+  .brains-bulk-body {
+    flex-direction: column;
+  }
+  .brains-apply {
+    margin-top: 0;
+  }
+  .brains-bulk .brain-fields,
+  .brains-default-edit .brain-fields {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+}
+.brains-modal .modal-head {
+  margin-bottom: 4px;
+}
+.brains-modal .modal-head h2 {
+  margin: 0;
+}
+.brains-modal .modal-actions {
+  position: sticky;
+  bottom: -16px;
+  margin: 10px -16px -16px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
 }

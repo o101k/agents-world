@@ -221,3 +221,131 @@ describe('Claude subscription limit', () => {
     await wm.closeAll();
   });
 });
+
+describe('what each brain has used', () => {
+  it('adds up the AI calls, tokens and cost of each villager and of the village', async () => {
+    const paid = {
+      id: 'anthropic' as const,
+      decide: async () => ({
+        decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+        usage: { inputTokens: 1000, outputTokens: 100, costUsd: 0.01 },
+      }),
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([paid]) });
+    const w = await wm.create({ name: 'Usage', seed: 'usage', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    const [a, b, c, d] = runner.state.agents.map((x) => x.id) as [string, string, string, string];
+    const empty = wm.brainsView(w.id);
+    expect(empty.totals).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+    expect(empty.people.every((p) => p.calls === 0 && p.costUsd === 0)).toBe(true);
+
+    await runner.advance(1); // the first round of decisions is made by everyone's current brain
+    const chosen = [a, b, d];
+    await wm.setBrains(w.id, chosen, { provider: 'anthropic', model: 'x', effort: 'standard' });
+    await runner.advance(300); // long enough for check-ins, which these three now ask the AI
+    runner.state.agents.find((x) => x.id === c)!.alive = false;
+
+    // Read straight away: calls still buffered in the runner are included.
+    const view = wm.brainsView(w.id);
+    const withCalls = view.people.filter((p) => p.calls > 0);
+    expect(withCalls.length).toBeGreaterThan(0);
+    for (const r of withCalls) {
+      expect(chosen).toContain(r.id);
+      expect(r.inputTokens).toBe(r.calls * 1000);
+      expect(r.outputTokens).toBe(r.calls * 100);
+      expect(r.costUsd).toBeCloseTo(r.calls * 0.01, 6);
+      expect(r.calls).toBe(wm.calls(w.id, r.id, 1000).length);
+    }
+    const row = (id: string) => view.people.find((p) => p.id === id)!;
+    expect(view.people.filter((p) => !chosen.includes(p.id)).every((p) => p.calls === 0)).toBe(
+      true,
+    );
+    const sum = (key: 'calls' | 'inputTokens' | 'outputTokens' | 'costUsd') =>
+      view.people.reduce((total, p) => total + p[key], 0);
+    expect(view.totals.calls).toBe(sum('calls'));
+    expect(view.totals.inputTokens).toBe(sum('inputTokens'));
+    expect(view.totals.outputTokens).toBe(sum('outputTokens'));
+    expect(view.totals.costUsd).toBeCloseTo(sum('costUsd'), 6);
+    expect(view.totals.costUsd).toBeCloseTo(runner.status().spentUsd, 6);
+
+    // Everyone who has lived here is listed, the living first, with name, age and stage.
+    expect(view.people).toHaveLength(11);
+    expect(view.people.at(-1)).toMatchObject({ id: c, alive: false });
+    expect(view.people.slice(0, -1).every((p) => p.alive)).toBe(true);
+    expect(row(a)).toMatchObject({ name: 'Maren Holt', stage: 'adult' });
+    expect(view.people.some((p) => p.stage === 'child' && p.age < 13)).toBe(true);
+    await wm.closeAll();
+  });
+
+  it('includes calls the runner has made but not written to the file yet', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Buffered', seed: 'buffered', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    // Calls wait in the runner's batch (as they do between flushes of a running world).
+    const batch = (runner as unknown as { batch: { calls: unknown[]; dirty: boolean } }).batch;
+    batch.calls.push({
+      tick: 1,
+      agentId: 'a1',
+      provider: 'anthropic',
+      model: 'x',
+      trigger: 'idle',
+      inputTokens: 123,
+      outputTokens: 4,
+      cachedTokens: 0,
+      costUsd: 0.5,
+      estimated: false,
+      latencyMs: 5,
+      prompt: null,
+      response: null,
+      error: null,
+    });
+    batch.dirty = true;
+    const view = wm.brainsView(w.id);
+    expect(view.people.find((p) => p.id === 'a1')).toMatchObject({
+      calls: 1,
+      inputTokens: 123,
+      outputTokens: 4,
+      costUsd: 0.5,
+    });
+    expect(view.totals).toEqual({ calls: 1, inputTokens: 123, outputTokens: 4, costUsd: 0.5 });
+    await wm.closeAll();
+  });
+
+  it('sums the log of AI calls per person, whoever they are', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Log', seed: 'log', mapSize: 'small' });
+    const file = WorldFile.open(join(dir, 'worlds', `${w.id}.sqlite`));
+    expect(file.usageByAgent().size).toBe(0);
+    const call = (agentId: string, inputTokens: number, costUsd: number) => ({
+      tick: 1,
+      agentId,
+      provider: 'anthropic',
+      model: 'x',
+      trigger: 'idle',
+      inputTokens,
+      outputTokens: 10,
+      cachedTokens: 0,
+      costUsd,
+      estimated: false,
+      latencyMs: 5,
+      prompt: null,
+      response: null,
+      error: null,
+    });
+    file.appendCalls([
+      call('a1', 100, 0.1),
+      call('a1', 200, 0.2),
+      call('a2', 50, 0),
+      call('draft', 7, 0.3),
+    ]);
+    const usage = file.usageByAgent();
+    expect(usage.get('a1')).toEqual({ calls: 2, inputTokens: 300, outputTokens: 20, costUsd: 0.3 });
+    expect(usage.get('a2')).toEqual({ calls: 1, inputTokens: 50, outputTokens: 10, costUsd: 0 });
+    expect(usage.get('draft')?.calls).toBe(1);
+    expect(usage.has('a3')).toBe(false);
+    file.close();
+    await wm.closeAll();
+  });
+});

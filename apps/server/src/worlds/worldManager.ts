@@ -3,14 +3,21 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { BrainRouter, draftPerson } from '@aw/brain';
 import {
+  CastPreviewRequest as CastPreviewRequestSchema,
   CreateWorldRequest,
   DEFAULT_CAP_USD,
   DEFAULT_SPEED,
   WORLD_ID_PATTERN,
   WorldEventRequest as WorldEventRequestSchema,
   encodeMap,
+  stageOf,
   type AgentDetail,
   type BrainConfig,
+  type BrainRow,
+  type BrainUsage,
+  type BrainsResponse,
+  type CastPreviewRequest,
+  type CastPreviewResponse,
   type FamilyNode,
   type LlmCallView,
   type MarketResponse,
@@ -22,20 +29,25 @@ import {
   type WorldViewResponse,
 } from '@aw/shared';
 import {
+  DEFAULT_BRAIN,
   SAMPLE_CAST,
   agentDetail,
   agentView,
   allQuotes,
   calendarView,
   createWorldState,
+  fullName,
   generateCast,
   ownerNames,
+  type Agent,
   type AgentSpec,
   type TickInput,
 } from '@aw/sim';
 import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
+
+const newSeed = () => randomBytes(4).toString('hex');
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -108,9 +120,23 @@ export class WorldManager {
   async create(input: CreateWorldRequest): Promise<WorldMeta> {
     const req = CreateWorldRequest.parse(input);
     const id = `w_${randomBytes(6).toString('hex')}`;
-    const seed = req.seed || randomBytes(4).toString('hex');
-    const cast = await this.buildCast(req.cast, seed);
-    const state = createWorldState({ seed, mapSize: req.mapSize, cast });
+    const seed = req.seed || newSeed();
+    const specs = this.castSpecs(req.cast, seed);
+    if (req.brains && req.brains.length > specs.length)
+      throw new ValidationError(
+        `Got ${req.brains.length} brains for a cast of ${specs.length} people.`,
+      );
+    // Everyone gets the brain picked for them, else the world's default (the free Mock brain).
+    const cast = (await this.fleshOutCast(specs, req.cast)).map((spec, i) => ({
+      ...spec,
+      brain: { ...(req.brains?.[i] ?? req.defaultBrain ?? DEFAULT_BRAIN) },
+    }));
+    const state = createWorldState({
+      seed,
+      mapSize: req.mapSize,
+      cast,
+      defaultBrain: req.defaultBrain,
+    });
     const now = new Date().toISOString();
     const meta: WorldMeta = {
       id,
@@ -133,10 +159,32 @@ export class WorldManager {
     return meta;
   }
 
-  /** Turn the chosen cast option into people specs. */
-  private async buildCast(option: CreateWorldRequest['cast'], seed: string): Promise<AgentSpec[]> {
+  /**
+   * Who the starting villagers of a new world will be, so the observer can pick their brains
+   * before creating it. Same people, in the same order, as `create` makes from the same request;
+   * generated casts aren't fleshed out by an AI here (that only changes traits and background,
+   * never names or order), so previewing is free.
+   */
+  previewCast(input: CastPreviewRequest): CastPreviewResponse {
+    const req = CastPreviewRequestSchema.parse(input);
+    const seed = req.seed || newSeed();
+    return {
+      seed,
+      people: this.castSpecs(req.cast, seed).map((spec, index) => ({
+        index,
+        name: spec.name,
+        familyName: spec.familyName ?? '',
+        sex: spec.sex,
+        age: Math.floor(spec.age),
+        occupation: spec.occupation ?? 'villager',
+      })),
+    };
+  }
+
+  /** The people a cast option stands for (no AI involved). Never hands out shared objects. */
+  private castSpecs(option: CreateWorldRequest['cast'], seed: string): AgentSpec[] {
     const opt = option ?? { mode: 'sample' };
-    if (opt.mode === 'sample') return SAMPLE_CAST;
+    if (opt.mode === 'sample') return SAMPLE_CAST.map((spec) => ({ ...spec }));
     if (opt.mode === 'custom') {
       const names = new Set<string>();
       for (const p of opt.people) {
@@ -156,8 +204,15 @@ export class WorldManager {
         partner: p.partner || undefined,
       }));
     }
-    const cast = generateCast(seed, { adults: opt.adults, children: opt.children });
-    if (!opt.useAi) return cast;
+    return generateCast(seed, { adults: opt.adults, children: opt.children });
+  }
+
+  /** A generated cast, if the owner asked for it, gets traits and backgrounds written by an AI. */
+  private async fleshOutCast(
+    cast: AgentSpec[],
+    option: CreateWorldRequest['cast'],
+  ): Promise<AgentSpec[]> {
+    if (option?.mode !== 'generated' || !option.useAi) return cast;
     // Flesh out each adult with the first AI provider that's set up.
     const order: BrainConfig['provider'][] = [
       'anthropic',
@@ -333,8 +388,64 @@ export class WorldManager {
     await runner.submit({ kind: 'set_brain', agentId, brain });
   }
 
+  /**
+   * Give several people the same brain with ONE logged input (so a paused world advances a single
+   * tick, not one per person). Unknown ids are refused before anything changes. Returns the
+   * brains view with the change in it, even if the world is running and hasn't ticked yet.
+   */
+  async setBrains(
+    worldId: string,
+    agentIds: string[],
+    brain: BrainConfig,
+  ): Promise<BrainsResponse> {
+    const runner = this.requireActive(worldId);
+    const known = new Set(runner.state.agents.map((a) => a.id));
+    const missing = agentIds.find((id) => !known.has(id));
+    if (missing) throw new NotFoundError(`No such person ${missing}`);
+    const ids = new Set(agentIds);
+    await runner.submit({ kind: 'set_brains', agentIds: [...ids], brain });
+    const view = this.brainsView(worldId);
+    for (const row of view.people) if (ids.has(row.id)) row.brain = { ...brain };
+    return view;
+  }
+
   async setDefaultBrain(worldId: string, brain: BrainConfig, applyToAll: boolean): Promise<void> {
     await this.requireActive(worldId).submit({ kind: 'set_default_brain', brain, applyToAll });
+  }
+
+  /**
+   * Everyone who has lived in the world (the living first), their brain and what it has used,
+   * plus the village totals. (Not called `brains`: that's the provider router.)
+   */
+  brainsView(worldId: string): BrainsResponse {
+    const runner = this.requireActive(worldId);
+    runner.persist(); // calls still buffered in the runner aren't in the file yet
+    const usage = this.file(worldId).usageByAgent();
+    const none: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    const row = (a: Agent): BrainRow => ({
+      id: a.id,
+      name: fullName(a),
+      age: Math.floor(a.age),
+      stage: stageOf(a.age),
+      alive: a.alive,
+      brain: { ...a.brain },
+      ...(usage.get(a.id) ?? none),
+    });
+    const people = runner.state.agents.map(row);
+    // Totals cover every call in the log, including any not tied to someone in the world.
+    const totals = { ...none };
+    for (const u of usage.values()) {
+      totals.calls += u.calls;
+      totals.inputTokens += u.inputTokens;
+      totals.outputTokens += u.outputTokens;
+      totals.costUsd += u.costUsd;
+    }
+    totals.costUsd = Math.round(totals.costUsd * 1e6) / 1e6;
+    return {
+      defaultBrain: { ...runner.state.settings.defaultBrain },
+      people: [...people.filter((p) => p.alive), ...people.filter((p) => !p.alive)],
+      totals,
+    };
   }
 
   setCap(worldId: string, capUsd: number): void {

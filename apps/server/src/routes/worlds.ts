@@ -3,11 +3,15 @@ import { ZodError } from 'zod';
 import {
   BrainConfigSchema,
   CapRequest,
+  CastPreviewRequest,
   ControlRequest,
   EventsQuery,
+  SetBrainsRequest,
   SpawnRequest,
   WorldEventRequest,
   ReplayQuery,
+  type BrainsResponse,
+  type CastPreviewResponse,
   type ReplayResponse,
   type StoryResponse,
   type CallsResponse,
@@ -56,6 +60,11 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     return { world };
   });
 
+  // Who a new world's starting cast will be, so brains can be picked before it's created.
+  app.post('/api/cast-preview', async (req): Promise<CastPreviewResponse> =>
+    worlds.previewCast(CastPreviewRequest.parse(req.body ?? {})),
+  );
+
   app.post<IdParams>('/api/worlds/:id/activate', async (req): Promise<WorldResponse> => {
     const world = await worlds.activate(req.params.id);
     notifyChanged();
@@ -95,6 +104,15 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
       calls: worlds.calls(req.params.id, req.params.agentId, 10),
     }),
   );
+
+  app.get<IdParams>('/api/worlds/:id/brains', async (req): Promise<BrainsResponse> =>
+    worlds.brainsView(req.params.id),
+  );
+
+  app.put<IdParams>('/api/worlds/:id/brains', async (req): Promise<BrainsResponse> => {
+    const { agentIds, brain } = SetBrainsRequest.parse(req.body ?? {});
+    return worlds.setBrains(req.params.id, agentIds, brain);
+  });
 
   app.put<IdParams>('/api/worlds/:id/default-brain', async (req) => {
     const body = (req.body ?? {}) as { brain?: unknown; applyToAll?: unknown };
