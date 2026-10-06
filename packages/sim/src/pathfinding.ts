@@ -136,7 +136,7 @@ export function findPathToAny(
   cost: CostFn,
 ): Point[] | null {
   if (goals.length === 0) return null;
-  if (goals.some((g) => g.x === start.x && g.y === start.y)) return [start];
+  if (goals.some((g) => g.x === start.x && g.y === start.y)) return [{ x: start.x, y: start.y }];
   const goalSet = new Set(goals.map((g) => g.y * width + g.x));
   const n = width * height;
   const g = new Float64Array(n).fill(Infinity);

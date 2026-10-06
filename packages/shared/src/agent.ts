@@ -137,6 +137,8 @@ export interface AgentView {
   facing: Facing;
   activity: Activity;
   indoors: boolean;
+  /** The building they're inside, when indoors (drawn inside it). */
+  indoorsId?: string;
   alive: boolean;
   sex: Sex;
   age: number;

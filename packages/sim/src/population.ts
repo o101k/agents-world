@@ -2,6 +2,7 @@ import { Tile, type MapObject, type Point } from '@aw/shared';
 import type { FamilyRole } from '@aw/shared';
 import type { Agent } from './agent.ts';
 import { createAgent, type AgentSpec } from './cast.ts';
+import { occupies } from './occupancy.ts';
 import type { Rng } from './rng.ts';
 import { distanceToObject, isWalkable, nearestWalkable } from './spatial.ts';
 import type { WorldState } from './world.ts';
@@ -37,6 +38,17 @@ export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
   if (!isWalkable(state.map, position.x, position.y)) {
     position =
       nearestWalkable(state.map, position, (p) => isWalkable(state.map, p.x, p.y)) ?? position;
+  }
+  // Outdoors, nobody shares a tile: take the nearest free one (babies are born indoors).
+  const indoors = spec.age < 1 && home?.door;
+  if (!indoors) {
+    const { width } = state.map;
+    const taken = new Set<number>();
+    for (const a of state.agents) if (occupies(a)) taken.add(a.y * width + a.x);
+    if (taken.has(position.y * width + position.x)) {
+      position =
+        nearestWalkable(state.map, position, (p) => !taken.has(p.y * width + p.x), 30) ?? position;
+    }
   }
   // Newborns, spawned people and cast members without a brain of their own use the world's default.
   const brain = spec.brain ?? state.settings.defaultBrain;

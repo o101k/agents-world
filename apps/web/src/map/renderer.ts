@@ -41,12 +41,17 @@ import {
   characterCanvas,
   type SpriteName,
 } from './pixelArt.ts';
+import { BUBBLE_TAIL, interiorSpots, layoutBubbles, type BubbleRequest } from './layout.ts';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 extensions.add(CullerPlugin);
 
 const CHUNK = 32;
 const DRAG_THRESHOLD = 4;
+/** Alpha of a sprite drawn in front of a person (roof, tree canopy) so they stay visible. */
+const OCCLUDER_ALPHA = 0.4;
+/** Alpha of a building without a cutaway sprite while someone is inside. */
+const SEE_THROUGH_ALPHA = 0.45;
 
 export type MapSelection =
   | { kind: 'agent'; id: string }
@@ -65,6 +70,24 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
+/** A map object's sprite plus what's needed to fade it and swap it for its open version. */
+interface ObjEntry {
+  sprite: Sprite;
+  obj: MapObject;
+  /** Drawn rectangle in world pixels. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  z: number;
+  /** Alpha before any fading (burnt or under construction). */
+  baseAlpha: number;
+  normal: Texture;
+  open: Texture | null;
+  inside: boolean;
+  occluding: boolean;
+}
+
 interface AgentSprite {
   /** Current label colour (to avoid restyling every frame). */
   labelFill?: string;
@@ -77,7 +100,13 @@ interface AgentSprite {
   bubble: Container;
   bubbleText: Text;
   bubbleBg: Graphics;
+  bubbleTail: Graphics;
   bubbleFor: string;
+  tailKey?: string;
+  bubbleW: number;
+  bubbleH: number;
+  /** Set while inside a building: draw just in front of it. */
+  indoorZ?: number;
   /** Displayed position in world pixels (bottom-centre of the feet). */
   from: Point;
   to: Point;
@@ -125,6 +154,12 @@ export class WorldRenderer {
   private textures: Record<SpriteName, Texture> | null = null;
   private map: WorldMap | null = null;
   private objectSprites = new Map<string, Sprite>();
+  private objectEntries = new Map<string, ObjEntry>();
+  /** Object entries bucketed by the tiles their drawn rectangle touches. */
+  private objectGrid = new Map<number, ObjEntry[]>();
+  private occluding = new Set<ObjEntry>();
+  /** Living people inside each building (by building id). */
+  private occupancy = new Map<string, number>();
   private agents = new Map<string, AgentSprite>();
   private resources: Record<string, number> = {};
   private tick = 0;
@@ -253,10 +288,14 @@ export class WorldRenderer {
     const interval = this.lastAgentsAt ? Math.min(1000, Math.max(50, now - this.lastAgentsAt)) : 0;
     this.lastAgentsAt = now;
     const seen = new Set<string>();
+    const spots = this.indoorPlacement(views);
     for (const v of views) {
       seen.add(v.id);
       let a = this.agents.get(v.id);
-      const target = { x: (v.x + 0.5) * TILE_PX, y: (v.y + 1) * TILE_PX - 1 };
+      const spot = spots.get(v.id);
+      const target = spot
+        ? { x: spot.x, y: spot.y }
+        : { x: (v.x + 0.5) * TILE_PX, y: (v.y + 1) * TILE_PX - 1 };
       if (!a) {
         a = this.createAgentSprite(v, target);
         this.agents.set(v.id, a);
@@ -273,6 +312,7 @@ export class WorldRenderer {
       }
       if (a.label.text !== v.name) a.label.text = v.name; // e.g. a baby was named
       a.view = v;
+      a.indoorZ = spot?.z;
       this.styleAgent(a);
     }
     for (const [id, a] of this.agents) {
@@ -286,6 +326,92 @@ export class WorldRenderer {
       }
     }
     this.startAnimating();
+  }
+
+  /**
+   * People inside a building stand on distinct spots in its room (sorted by id, so nobody
+   * shuffles between updates). Also records which buildings are occupied and opens them up.
+   */
+  private indoorPlacement(views: AgentView[]): Map<string, Point & { z: number }> {
+    const out = new Map<string, Point & { z: number }>();
+    const groups = new Map<string, AgentView[]>();
+    for (const v of views) {
+      if (!v.alive || !v.indoors) continue;
+      let id = v.indoorsId;
+      if (!id || !this.objectEntries.has(id)) {
+        // Older frames: find the home whose door this person is standing on.
+        id = this.map?.objects.find(
+          (o) => o.kind === 'house' && o.door && o.door.x === v.x && o.door.y === v.y,
+        )?.id;
+      }
+      if (!id || !this.objectEntries.has(id)) continue;
+      const list = groups.get(id);
+      if (list) list.push(v);
+      else groups.set(id, [v]);
+    }
+    this.occupancy = new Map();
+    for (const [id, list] of groups) {
+      const e = this.objectEntries.get(id)!;
+      list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const pts = interiorSpots(e.obj, list.length);
+      list.forEach((v, i) => out.set(v.id, { ...pts[i]!, z: e.z + 1 }));
+      this.occupancy.set(id, list.length);
+    }
+    this.applyOccupancy();
+    return out;
+  }
+
+  /** Occupied houses show their cutaway; other buildings turn see-through. */
+  private applyOccupancy(): void {
+    for (const e of this.objectEntries.values()) {
+      const inside = (this.occupancy.get(e.obj.id) ?? 0) > 0;
+      if (inside !== e.inside) {
+        e.inside = inside;
+        this.refreshEntry(e);
+      }
+    }
+  }
+
+  private refreshEntry(e: ObjEntry): void {
+    const tex = e.inside && e.open ? e.open : e.normal;
+    if (e.sprite.texture !== tex) e.sprite.texture = tex;
+    let alpha = e.baseAlpha;
+    if (e.inside && !e.open) alpha = Math.min(alpha, SEE_THROUGH_ALPHA);
+    if (e.occluding) alpha = Math.min(alpha, OCCLUDER_ALPHA);
+    if (e.sprite.alpha !== alpha) e.sprite.alpha = alpha;
+  }
+
+  /** Fade whatever is drawn in front of a person (roofs, tree canopies) so nobody is hidden. */
+  private updateOccluders(): void {
+    const next = new Set<ObjEntry>();
+    for (const a of this.agents.values()) {
+      if (!a.view.alive) continue;
+      const z = a.sprite.zIndex;
+      const px = a.shown.x;
+      const py = a.shown.y;
+      const x0 = px - 7;
+      const x1 = px + 7;
+      const y0 = py - 16;
+      const y1 = py;
+      for (let ty = Math.floor(y0 / TILE_PX); ty <= Math.floor(y1 / TILE_PX); ty++)
+        for (let tx = Math.floor(x0 / TILE_PX); tx <= Math.floor(x1 / TILE_PX); tx++) {
+          const list = this.objectGrid.get(ty * 100000 + tx);
+          if (!list) continue;
+          for (const e of list)
+            if (e.z > z && e.x < x1 && e.x + e.w > x0 && e.y < y1 && e.y + e.h > y0) next.add(e);
+        }
+    }
+    for (const e of this.occluding)
+      if (!next.has(e)) {
+        e.occluding = false;
+        this.refreshEntry(e);
+      }
+    for (const e of next)
+      if (!e.occluding) {
+        e.occluding = true;
+        this.refreshEntry(e);
+      }
+    this.occluding = next;
   }
 
   setFollow(id: string | null): void {
@@ -362,6 +488,9 @@ export class WorldRenderer {
     this.ground.removeChildren().forEach((c) => c.destroy({ children: true }));
     for (const s of this.objectSprites.values()) s.destroy();
     this.objectSprites.clear();
+    this.objectEntries.clear();
+    this.objectGrid.clear();
+    this.occluding.clear();
 
     const fieldTiles = new Set<number>();
     for (const o of map.objects) {
@@ -433,19 +562,57 @@ export class WorldRenderer {
       const bottom = (o.y + o.h) * TILE_PX;
       s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
       s.zIndex = bottom;
+      let baseAlpha = 1;
       if (o.burntTick !== undefined) {
         // A burnt-out ruin, blackened until rebuilt.
-        s.alpha = 0.55 + 0.45 * (o.progress ?? 0);
+        baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
         s.tint = 0x5a4a40;
       } else if (o.progress !== undefined) {
         // Under construction: fades in as the work progresses.
-        s.alpha = 0.3 + 0.6 * o.progress;
+        baseAlpha = 0.3 + 0.6 * o.progress;
         s.tint = 0xd8c8a8;
       }
+      s.alpha = baseAlpha;
       this.objects.addChild(s);
       this.objectSprites.set(o.id, s);
+      const openName =
+        o.kind === 'house'
+          ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName)
+          : null;
+      const entry: ObjEntry = {
+        sprite: s,
+        obj: o,
+        x: s.position.x,
+        y: s.position.y,
+        w: s.texture.frame.width,
+        h: s.texture.frame.height,
+        z: bottom,
+        baseAlpha,
+        normal: s.texture,
+        open: openName ? tex[openName] : null,
+        inside: false,
+        occluding: false,
+      };
+      this.objectEntries.set(o.id, entry);
+      // Bucket by tile (only things that can stand in front of someone: tall or wide sprites).
+      for (
+        let ty = Math.floor(entry.y / TILE_PX);
+        ty <= Math.floor((entry.y + entry.h - 1) / TILE_PX);
+        ty++
+      )
+        for (
+          let tx = Math.floor(entry.x / TILE_PX);
+          tx <= Math.floor((entry.x + entry.w - 1) / TILE_PX);
+          tx++
+        ) {
+          const key = ty * 100000 + tx;
+          const list = this.objectGrid.get(key);
+          if (list) list.push(entry);
+          else this.objectGrid.set(key, [entry]);
+        }
     }
     this.setResources({ ...this.resources });
+    this.applyOccupancy();
     for (const a of this.agents.values()) {
       this.objects.addChild(a.sprite);
       if (a.grave) this.objects.addChild(a.grave);
@@ -507,6 +674,7 @@ export class WorldRenderer {
     zzz.anchor.set(0, 1);
     const bubble = new Container();
     const bubbleBg = new Graphics();
+    const bubbleTail = new Graphics();
     const bubbleText = new Text({
       text: '',
       style: {
@@ -519,7 +687,7 @@ export class WorldRenderer {
       },
       resolution: Math.max(2, window.devicePixelRatio || 1),
     });
-    bubble.addChild(bubbleBg, bubbleText);
+    bubble.addChild(bubbleBg, bubbleTail, bubbleText);
     bubble.visible = false;
     this.overlay.addChild(bubble, label, zzz);
     const a: AgentSprite = {
@@ -532,7 +700,10 @@ export class WorldRenderer {
       bubble,
       bubbleText,
       bubbleBg,
+      bubbleTail,
       bubbleFor: '',
+      bubbleW: 0,
+      bubbleH: 0,
       from: { ...at },
       to: { ...at },
       shown: { ...at },
@@ -574,7 +745,7 @@ export class WorldRenderer {
       }
       return;
     }
-    a.sprite.visible = !v.indoors;
+    a.sprite.visible = true; // nobody is ever hidden: people indoors are drawn in the open room
     a.baseScale =
       v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
     const sleeping = v.activity === 'sleeping';
@@ -609,6 +780,8 @@ export class WorldRenderer {
   private animate(now: number): boolean {
     let busy = false;
     const showLabels = this.cam.zoom >= 2;
+    const bubbles: BubbleRequest[] = [];
+    const labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[] = [];
     for (const [id, a] of this.agents) {
       const t = a.moveDuration > 0 ? Math.min(1, (now - a.moveStart) / a.moveDuration) : 1;
       a.shown = { x: a.from.x + (a.to.x - a.from.x) * t, y: a.from.y + (a.to.y - a.from.y) * t };
@@ -616,14 +789,15 @@ export class WorldRenderer {
       if (moving) busy = true;
       if (a.view.alive) {
         a.sprite.position.set(a.shown.x, a.shown.y);
-        // +2 so someone standing in a doorway draws in front of their house.
-        a.sprite.zIndex = a.shown.y + 2;
+        // +2 so someone standing in a doorway draws in front of their house; people inside
+        // are drawn just in front of their (open) building.
+        a.sprite.zIndex = a.indoorZ ?? a.shown.y + 2;
         if (a.frames.length)
           a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
         if (a.view.activity === 'walking') busy = true;
       }
       const selected = this.selected?.kind === 'agent' && this.selected.id === id;
-      const visible = a.view.alive && !a.view.indoors;
+      const visible = a.view.alive;
       const screen = this.toScreen(a.shown.x, a.shown.y - 17);
       a.label.visible = visible && (showLabels || selected);
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
@@ -639,8 +813,21 @@ export class WorldRenderer {
       const marker = thinking ? '…' : 'z z';
       if (a.zzz.text !== marker) a.zzz.text = marker;
       a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
-      this.updateBubble(a, visible && (this.cam.zoom >= 1.5 || selected), screen);
+      if (a.label.visible)
+        labels.push({
+          owner: id,
+          rect: {
+            x: screen.x - a.label.width / 2,
+            y: screen.y - a.label.height,
+            w: a.label.width,
+            h: a.label.height,
+          },
+        });
+      const req = this.prepareBubble(a, visible && (this.cam.zoom >= 1.5 || selected), screen);
+      if (req) bubbles.push(req);
     }
+    this.placeBubbles(bubbles, labels);
+    this.updateOccluders();
     if (this.followId) {
       const a = this.agents.get(this.followId);
       if (a) {
@@ -707,32 +894,59 @@ export class WorldRenderer {
     }
   }
 
-  /** Speech bubble above a person while they're talking. */
-  private updateBubble(a: AgentSprite, show: boolean, screen: Point): void {
+  /** Sizes a person's speech bubble (cached per text); null when they aren't talking. */
+  private prepareBubble(a: AgentSprite, show: boolean, screen: Point): BubbleRequest | null {
     const speech = a.view.speech ?? '';
     if (!speech || !show) {
       a.bubble.visible = false;
-      return;
+      return null;
     }
     if (a.bubbleFor !== speech) {
       a.bubbleFor = speech;
       a.bubbleText.text = speech.length > 140 ? `${speech.slice(0, 137)}…` : speech;
-      const w = a.bubbleText.width + 12;
-      const h = a.bubbleText.height + 8;
+      const w = Math.ceil(a.bubbleText.width + 12);
+      const h = Math.ceil(a.bubbleText.height + 8);
+      a.bubbleW = w;
+      a.bubbleH = h;
       a.bubbleText.position.set(6, 4);
       a.bubbleBg
         .clear()
         .roundRect(0, 0, w, h, 6)
         .fill({ color: 0xfffbe8, alpha: 0.95 })
-        .stroke({ width: 1, color: 0x1a1a1a, alpha: 0.6 })
-        .moveTo(w / 2 - 5, h)
-        .lineTo(w / 2, h + 6)
-        .lineTo(w / 2 + 5, h)
+        .stroke({ width: 1, color: 0x1a1a1a, alpha: 0.6 });
+      a.tailKey = undefined;
+    }
+    // The tail points at the head: just above the name label when it's showing.
+    const tipY = a.label.visible ? screen.y - a.label.height - 1 : screen.y + 2;
+    return { id: a.view.id, anchor: { x: screen.x, y: tipY }, w: a.bubbleW, h: a.bubbleH };
+  }
+
+  /** Lays out every visible bubble together so none overlap, then draws each tail to its speaker. */
+  private placeBubbles(
+    requests: BubbleRequest[],
+    labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[],
+  ): void {
+    if (requests.length === 0) return;
+    const spots = layoutBubbles(requests, labels);
+    for (const r of requests) {
+      const a = this.agents.get(r.id);
+      const at = spots.get(r.id);
+      if (!a || !at) continue;
+      a.bubble.visible = true;
+      a.bubble.position.set(at.x, at.y);
+      const tipX = Math.round(r.anchor.x - at.x);
+      const tipY = Math.round(r.anchor.y - at.y);
+      const baseX = Math.min(Math.max(tipX, 10), r.w - 10);
+      const key = `${tipX},${tipY},${baseX}`;
+      if (a.tailKey === key) continue;
+      a.tailKey = key;
+      a.bubbleTail
+        .clear()
+        .moveTo(baseX - 5, r.h - 0.5)
+        .lineTo(tipX, Math.max(tipY, r.h + BUBBLE_TAIL * 0.5))
+        .lineTo(baseX + 5, r.h - 0.5)
         .fill({ color: 0xfffbe8, alpha: 0.95 });
     }
-    a.bubble.visible = true;
-    const b = a.bubble.getLocalBounds();
-    a.bubble.position.set(Math.round(screen.x - b.width / 2), Math.round(screen.y - 16 - b.height));
   }
 
   private toScreen(wx: number, wy: number): Point {
@@ -825,7 +1039,7 @@ export class WorldRenderer {
     const width = 2 / this.cam.zoom;
     if (sel.kind === 'agent') {
       const a = this.agents.get(sel.id);
-      if (!a || (a.view.alive && a.view.indoors)) return;
+      if (!a) return;
       const p = a.view.alive ? a.shown : a.to;
       g.ellipse(p.x, p.y, 7, 3).stroke({ width, color: 0xffd84a });
       return;
@@ -858,7 +1072,6 @@ export class WorldRenderer {
     const w = screenToWorld(this.cam, sx, sy);
     let best: { id: string; d: number } | null = null;
     for (const [id, a] of this.agents) {
-      if (a.view.alive && a.view.indoors) continue;
       const p = a.view.alive ? a.shown : a.to;
       if (Math.abs(w.x - p.x) <= 7 && w.y <= p.y + 2 && w.y >= p.y - 16) {
         const d = Math.abs(w.x - p.x) + Math.abs(w.y - (p.y - 8));

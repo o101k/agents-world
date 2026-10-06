@@ -418,6 +418,62 @@ function house(variant: number): SpriteDef {
   };
 }
 
+/** A house with the roof lifted off: you look down into the room (drawn while someone is inside). */
+function houseOpen(variant: number): SpriteDef {
+  const [mid, dark, light] = ROOFS[variant % ROOFS.length] as [Color, Color, Color];
+  return {
+    w: 48,
+    h: 48,
+    paint: (p) => {
+      // Wooden floor
+      p.rect(0, 8, 48, 40, '#b08a58');
+      for (let y = 10; y < 48; y += 5) p.rect(2, y, 44, 1, '#94703f');
+      p.speckle(2, 9, 44, 38, '#b08a58', [['#a07c4c', 0.1]], variant + 21);
+      // Back wall with the roof colour as trim, a small window and a hearth
+      p.rect(0, 0, 48, 10, '#d8c8a0');
+      p.rect(0, 0, 48, 2, dark);
+      p.rect(0, 2, 48, 1, mid);
+      p.rect(0, 3, 48, 1, light);
+      p.rect(0, 9, 48, 1, '#6b5537');
+      p.rect(4, 4, 9, 5, '#5a4028');
+      p.rect(5, 5, 7, 3, '#9fd0f0');
+      p.rect(8, 5, 1, 3, '#5a4028');
+      p.rect(19, 3, 10, 7, '#6a6660');
+      p.rect(21, 5, 6, 5, '#2a2420');
+      p.rect(22, 7, 4, 3, '#ff9a2a');
+      p.rect(23, 8, 2, 2, '#ffd860');
+      p.rect(0, 10, 48, 2, 'rgba(0,0,0,0.22)'); // shadow under the back wall
+      // Bed
+      p.rect(3, 13, 13, 11, '#6a4424');
+      p.rect(4, 14, 11, 9, '#e8e0d0');
+      p.rect(4, 14, 4, 9, '#f6f2ea');
+      p.rect(8, 17, 7, 6, mid);
+      p.rect(8, 17, 7, 1, light);
+      // Table with a stool
+      p.rect(32, 14, 12, 8, '#7a5230');
+      p.rect(33, 15, 10, 6, '#a47440');
+      p.rect(34, 16, 3, 2, '#e8d8b0');
+      p.rect(33, 22, 2, 3, '#5a3a1c');
+      p.rect(41, 22, 2, 3, '#5a3a1c');
+      p.rect(36, 26, 5, 4, '#8a6238');
+      // Doormat in the doorway
+      p.rect(20, 40, 8, 8, '#8a4a2a');
+      p.rect(21, 41, 6, 7, '#a8603a');
+      // Side walls and low front wall with the doorway gap
+      p.rect(0, 0, 2, 48, '#7a5a3a');
+      p.rect(46, 0, 2, 48, '#7a5a3a');
+      p.rect(2, 41, 18, 7, '#d8c8a0');
+      p.rect(28, 41, 18, 7, '#d8c8a0');
+      p.rect(2, 41, 18, 1, '#f0e4c4');
+      p.rect(28, 41, 18, 1, '#f0e4c4');
+      p.rect(0, 46, 20, 2, '#6b5537');
+      p.rect(28, 46, 20, 2, '#6b5537');
+      p.rect(19, 41, 1, 7, '#6b5537');
+      p.rect(28, 41, 1, 7, '#6b5537');
+    },
+  };
+}
+
 const bakery: SpriteDef = {
   w: 64,
   h: 48,
@@ -563,6 +619,11 @@ export const SPRITES = {
   house2: house(2),
   house3: house(3),
   house4: house(4),
+  house_open0: houseOpen(0),
+  house_open1: houseOpen(1),
+  house_open2: houseOpen(2),
+  house_open3: houseOpen(3),
+  house_open4: houseOpen(4),
   bakery,
   workshop,
   market,
