@@ -52,6 +52,7 @@ export interface Point {
 
 /** Anything placed on the map. Buildings span w×h tiles from (x, y) = top-left. */
 export interface MapObject {
+  /** Unique for the life of a world and never reused: its history is looked up by this id. */
   id: string;
   kind: MapObjectKind;
   x: number;
