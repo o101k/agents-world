@@ -21,6 +21,7 @@ import {
   type FamilyNode,
   type LlmCallView,
   type MarketResponse,
+  type ObjectHistoryResponse,
   type ReplayResponse,
   type SpawnRequest,
   type StoryEntry,
@@ -304,6 +305,43 @@ export class WorldManager {
 
   events(worldId: string, query: Parameters<WorldFile['queryEvents']>[0]) {
     return this.file(worldId).queryEvents(query);
+  }
+
+  /**
+   * What the village's history knows about one map object (a house, bush, tree…), as it was at
+   * `tick` when replaying. Unknown in that state = NotFoundError.
+   */
+  objectHistory(worldId: string, objectId: string, tick?: number): ObjectHistoryResponse {
+    const state =
+      tick === undefined
+        ? this.requireActive(worldId).state
+        : this.replayState(worldId, tick).state;
+    if (!state.map.objects.some((o) => o.id === objectId))
+      throw new NotFoundError(`No such object ${objectId}`);
+    const file = this.file(worldId);
+    const history = file.objectHistory(objectId, tick === undefined ? undefined : state.tick);
+    const foundedTick = file.firstSnapshotTick();
+    const nameOf = (id: string) => {
+      const agent = state.agents.find((a) => a.id === id);
+      return agent ? fullName(agent) : id;
+    };
+    return {
+      objectId,
+      founded: file.foundingObjectIds().has(objectId),
+      foundedTick,
+      recordedSince: Math.max(foundedTick, file.objectHistorySince()),
+      residents: state.agents
+        .filter((a) => a.alive && a.homeId === objectId)
+        .map((a) => ({ id: a.id, name: fullName(a) })),
+      milestones: history.milestones,
+      recent: history.recent,
+      uses: history.uses,
+      regulars: history.regulars.map((r) => ({
+        id: r.agentId,
+        name: nameOf(r.agentId),
+        count: r.count,
+      })),
+    };
   }
 
   /**
