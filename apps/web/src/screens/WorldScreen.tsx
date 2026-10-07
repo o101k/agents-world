@@ -17,6 +17,7 @@ import { EventLog } from '../components/EventLog.tsx';
 import { BrainEditor } from '../components/BrainEditor.tsx';
 import { WorldBrainsDialog } from '../components/WorldBrainsDialog.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
+import { ObjectHistory } from '../components/ObjectHistory.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
 import { ConditionsBar, WorldEventsDialog } from '../components/WorldEventsDialog.tsx';
@@ -448,6 +449,9 @@ function SelectionDetails({
             {Math.round((object.progress ?? 0) * 100)}%). Unusable until finished.
           </p>
         )}
+        {object.burntTick === undefined && object.progress !== undefined && (
+          <p>Being built ({Math.round(object.progress * 100)}%).</p>
+        )}
         {owners?.length ? (
           <p>
             <strong>Owned by:</strong> {owners.join(', ')}
@@ -459,6 +463,13 @@ function SelectionDetails({
           </p>
         )}
         {object.kind === 'market' && <MarketPanel worldId={worldId} />}
+        <ObjectHistory
+          key={object.id}
+          worldId={worldId}
+          objectId={object.id}
+          atTick={past?.tick}
+          onPick={onPick}
+        />
       </div>
     );
   }
