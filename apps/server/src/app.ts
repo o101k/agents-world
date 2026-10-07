@@ -33,20 +33,26 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
   const settings = new SettingsStore(config.dataDir, options.env);
   await settings.checkClaudePlan();
   const brains = new BrainRouter(settings.buildProviders());
-  const worlds: WorldManager = new WorldManager(config.dataDir, {
+  // Set once the manager exists: a world left running resumes inside its constructor and
+  // reports its status before then (nobody is connected yet, so there's no one to tell).
+  let manager: WorldManager | null = null;
+  const worlds = new WorldManager(config.dataDir, {
     log: options.log,
     brains,
     hooks: (worldId) => ({
       onFrame: (frame) => hub.broadcast({ type: 'frame', worldId, ...frame }),
       onEvents: (events) => hub.broadcast({ type: 'events', worldId, events }),
-      onStatus: () =>
+      onStatus: () => {
+        if (!manager) return;
         hub.broadcast({
           type: 'worlds_changed',
-          worlds: worlds.list(),
-          activeWorldId: worlds.activeWorldId,
-        }),
+          worlds: manager.list(),
+          activeWorldId: manager.activeWorldId,
+        });
+      },
     }),
   });
+  manager = worlds;
 
   registerLocalOnlyGuard(server, config.dev ? [config.port, DEV_WEB_PORT] : [config.port]);
 
