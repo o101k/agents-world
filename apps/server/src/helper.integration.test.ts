@@ -151,6 +151,17 @@ describe('the local helper (real HTTP + WebSocket)', () => {
     expect(after.agents).toEqual(before.agents);
   });
 
+  it('starts up with a world that was left running and keeps it running', async () => {
+    const id = await createWorld('LeftRunning');
+    await api('POST', `/api/worlds/${id}/control`, { running: true, speed: 0 });
+    await stopHelper();
+    await startHelper();
+
+    const view = await api<WorldViewResponse>('GET', `/api/worlds/${id}/view`);
+    expect(view.runner.running).toBe(true);
+    await api('POST', `/api/worlds/${id}/control`, { running: false });
+  });
+
   it('refuses requests from other websites', async () => {
     const res = await fetch(`http://${base}/api/worlds`, {
       headers: { origin: 'http://evil.example' },
