@@ -2,7 +2,6 @@ import type { Decision, Perception } from '@aw/shared';
 
 /**
  * Mock brain: Quarrying stone.
- * GROUNDWORK STUB — see docs/plans/growing-the-village.md.
  */
 
 /** Answer a trigger this feature causes (an offer, a meeting...). null = not ours. */
@@ -11,6 +10,20 @@ export function reply(_p: Perception, _roll: number): Decision | null {
 }
 
 /** Now and then, choose to do this feature's work. null = not now. */
-export function plan(_p: Perception, _roll: number): Decision | null {
-  return null;
+export function plan(p: Perception, roll: number): Decision | null {
+  if (roll >= 0.12) return null;
+  const occ = p.self.occupation.toLowerCase();
+  if (!(occ.includes('carpenter') || occ.includes('odd') || occ.includes('wood'))) return null;
+  if ((p.rocksNearby ?? 0) <= 0) return null;
+  const have = p.self.inventory.stone ?? 0;
+  if (have >= 4) return null;
+  const quarry = { type: 'quarry' as const };
+  const market = p.knownPlaces.some((k) => k.kind === 'market');
+  // Two quarrying stretches add about 4 stone; sell what was already held so the stock stays at 4.
+  const sell = market && have > 0 ? [{ type: 'sell' as const, item: 'stone' as const, quantity: have }] : [];
+  return {
+    thought: 'There are rocks nearby. Some stone would come in useful.',
+    goal: 'Cut stone from the rocks',
+    plan: [quarry, quarry, ...sell],
+  };
 }
