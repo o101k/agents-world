@@ -299,6 +299,12 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-07 — Typecheck with the native TypeScript compiler (owner request).** `npm run typecheck`
+  runs `tsgo` (TypeScript 7 native preview, pinned to an exact version) instead of `tsc`, about 5×
+  faster (11.6 s → 2.1 s for all five projects). `typescript` 6 stays for ESLint, Vite and editors.
+  Bun was measured and rejected: only install and helper start got faster; typecheck, tests and sim
+  speed were about the same. If tsgo misbehaves, switch the five `typecheck` scripts back to `tsc`.
+
 - **2026-10-06 — Nobody is ever hidden (owner request).** (a) Outdoors there is one person per
   tile, enforced by the engine (not just drawn apart): lines of walkers move up together, people
   passing swap places, idlers step aside, others are routed round and finally squeezed past, and
