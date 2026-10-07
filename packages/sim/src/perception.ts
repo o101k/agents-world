@@ -5,6 +5,7 @@ import {
   tickToClock,
   type KnownPlace,
   type Perception,
+  type SkillName,
 } from '@aw/shared';
 import { conditionLevel, sensedConditions } from './conditions.ts';
 import { villageKnowledge } from './governance.ts';
@@ -351,6 +352,9 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       homeId: agent.homeId,
       asleep: agent.asleep,
       indoors: agent.indoorsId !== null,
+      skills: Object.fromEntries(
+        Object.entries(agent.skills).map(([k, v]) => [k, Math.round(v)]),
+      ) as Record<SkillName, number>,
     },
     location: describeLocation(state, agent),
     visibleAgents,

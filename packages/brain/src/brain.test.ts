@@ -35,6 +35,16 @@ function perception(over: Partial<Perception> = {}): Perception {
       homeId: 'house-1',
       asleep: false,
       indoors: false,
+      skills: {
+        foraging: 20,
+        fishing: 10,
+        farming: 32,
+        cooking: 5,
+        building: 8,
+        trading: 0,
+        caregiving: 0,
+        language: 40,
+      },
     },
     location: 'near Village well',
     visibleAgents: [

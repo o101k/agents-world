@@ -27,6 +27,20 @@ export function plan(p: Perception, roll: number): Decision | null {
   if (pen && p.canDo.includes('tend_animals')) {
     const animals = pen.animals ?? { hens: 0, sheep: 0 };
     const empty = animals.hens + animals.sheep === 0;
+    // A shepherd buys sheep for an empty pen when they can afford two; others buy hens.
+    const shepherd = /shepherd/i.test(p.self.occupation);
+    if (
+      empty &&
+      shepherd &&
+      p.canDo.includes('buy') &&
+      p.self.money >= 2 * knownBuyPrice(p, 'sheep') &&
+      roll < 0.3
+    ) {
+      return decide('My pen is empty. I should buy some sheep and see to them.', 'Keep sheep', [
+        { type: 'buy', item: 'sheep', quantity: 2 },
+        { type: 'tend_animals', objectId: pen.id },
+      ]);
+    }
     if (
       empty &&
       p.canDo.includes('buy') &&

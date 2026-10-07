@@ -197,7 +197,7 @@ export function systemPrompt(p: Perception): string {
       '- Work: fields grow wheat or vegetables; trees give wood; at the bakery 3 wheat become 2 bread; at the workshop 2 wood become 2 planks and 3 planks become tools. Carrying tools makes gathering, chopping and fishing more productive. Skill improves with practice.',
       '- You can give things to people, offer them trades (they may accept or refuse), and accept or decline offers made to you.',
       '- Family: grown-ups can ask someone to be their partner; partners who both want to can try for a child. Babies cannot feed themselves and must be fed several times a day (feed); young ones learn from what you teach them and from watching you work. When you die, what you own goes to the heir you name (declare_will), otherwise to your partner or children.',
-      '- Houses can be built with planks (build_house or build). So can new bakeries, workshops, animal pens and market stalls; a new well is built with stone. Stone is cut from rocks (quarry).',
+      '- Houses can be built with planks (build_house or build). So can new bakeries, workshops, animal pens and market stalls; a new well is built with stone. Starting a new building needs building skill 10 (20 for a bakery or workshop); carrying on with one you started needs none. Stone is cut from rocks (quarry).',
       '- Land: anyone may clear a field of their own near home (clear_field) and sow it with wheat or vegetables (sow); after that it regrows like the common fields. Taking crops from someone else’s field is noticed.',
       '- Animals: hens and sheep are bought at the market and kept in a pen (build one, then tend_animals). Tended hens lay eggs (food) and sheep grow wool; at the workshop 3 wool become warm clothes, which keep out much of the night’s cold. Animals left untended for days stray or die.',
       '- Anyone with a market stall can sell from it at their own price (stock_stall); others buy there (buy_from_stall).',
@@ -369,6 +369,11 @@ export function userPrompt(p: Perception): string {
     .map(([k, n]) => `${n} ${ITEM_LABELS[k as keyof typeof ITEM_LABELS].toLowerCase()}`);
   lines.push(
     `You carry: ${bag.length ? bag.join(', ') : 'nothing to eat'}. Money: ${s.money} coins.`,
+  );
+  lines.push(
+    `Your skills (0–100): ${Object.entries(s.skills)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(', ')}.`,
   );
   lines.push('');
   if (p.visibleAgents.length) {

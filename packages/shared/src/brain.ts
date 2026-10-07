@@ -370,6 +370,8 @@ export interface Perception {
     homeId: string | null;
     asleep: boolean;
     indoors: boolean;
+    /** Their own skills, 0–100 (whole numbers). */
+    skills: Record<SkillName, number>;
   };
   /** A short description of where the agent is. */
   location: string;
