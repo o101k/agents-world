@@ -146,6 +146,14 @@ export function WorldScreen({ worldId }: { worldId: string }) {
     useWorld.getState().select(sel);
     rendererRef.current?.select(sel, true);
   };
+  /** Select a house, bush… (e.g. from a timeline entry) and show it on the map. */
+  const pickObject = (id: string) => {
+    const object = shownMap?.objects.find((o) => o.id === id);
+    if (!object) return;
+    const sel: MapSelection = { kind: 'object', id, tile: { x: object.x, y: object.y } };
+    useWorld.getState().select(sel);
+    rendererRef.current?.select(sel, true);
+  };
 
   return (
     <div className="world-screen">
@@ -205,7 +213,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </div>
       )}
       {rateLimit && <RateLimitBanner notice={rateLimit} />}
-      <ConditionsBar map={shownMap} />
+      <ConditionsBar map={shownMap} onPickObject={pickObject} />
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
@@ -248,7 +256,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
             </div>
           </div>
           <ReplayBar worldId={worldId} />
-          <EventLog onPickAgent={pickAgent} />
+          <EventLog onPickAgent={pickAgent} onPickObject={pickObject} />
         </main>
 
         <aside className="sidebar">
