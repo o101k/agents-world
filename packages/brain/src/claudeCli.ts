@@ -213,6 +213,15 @@ export function parseResetTime(text: string, now = new Date()): number | undefin
   return t.getTime();
 }
 
+/** One model's share of a call, as Claude Code reports it in `modelUsage`. */
+interface CliModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  costUSD?: number;
+}
+
 interface CliResult {
   is_error?: boolean;
   subtype?: string;
@@ -220,13 +229,65 @@ interface CliResult {
   stop_reason?: string;
   api_error_status?: number | null;
   structured_output?: unknown;
+  /** Why an error result failed, when it has no `result` (e.g. error_max_turns). */
+  errors?: string[];
+  /** Estimated cost at API list prices, for all models the call used. */
+  total_cost_usd?: number;
+  /** Main loop only; `modelUsage` is the full count. */
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
-  modelUsage?: Record<string, unknown>;
+  modelUsage?: Record<string, CliModelUsage>;
+}
+
+/**
+ * What one call used, from Claude Code's per-model totals (the top-level `usage` leaves out helper
+ * calls). Cost is at API prices: the plan covers it, so it never counts toward the spending cap.
+ */
+export function planUsage(out: CliResult): Usage {
+  const perModel = Object.values(out.modelUsage ?? {});
+  const models: CliModelUsage[] =
+    perModel.length > 0
+      ? perModel
+      : out.usage
+        ? [
+            {
+              inputTokens: out.usage.input_tokens,
+              outputTokens: out.usage.output_tokens,
+              cacheReadInputTokens: out.usage.cache_read_input_tokens,
+              cacheCreationInputTokens: out.usage.cache_creation_input_tokens,
+            },
+          ]
+        : [];
+  const sum = (pick: (m: CliModelUsage) => number | undefined) =>
+    models.reduce((total, m) => total + (pick(m) ?? 0), 0);
+  const cacheRead = sum((m) => m.cacheReadInputTokens);
+  const cost = out.total_cost_usd;
+  return {
+    inputTokens: sum((m) => m.inputTokens) + cacheRead + sum((m) => m.cacheCreationInputTokens),
+    outputTokens: sum((m) => m.outputTokens),
+    cachedInputTokens: cacheRead,
+    costUsd:
+      typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : sum((m) => m.costUSD),
+    coveredByPlan: true,
+  };
+}
+
+/** The model that did most of the work (most output tokens), or the one asked for. */
+function reportedModel(out: CliResult, fallback: string): string {
+  let best = fallback;
+  let bestOutput = -1;
+  for (const [name, m] of Object.entries(out.modelUsage ?? {})) {
+    const output = m.outputTokens ?? 0;
+    if (output > bestOutput) {
+      best = name;
+      bestOutput = output;
+    }
+  }
+  return best;
 }
 
 export class ClaudePlanProvider implements BrainProvider {
@@ -280,7 +341,15 @@ export class ClaudePlanProvider implements BrainProvider {
     } catch {
       out = extractJson(res.stdout) as CliResult | null;
     }
-    const text = (out?.result ?? `${res.stdout}\n${res.stderr}`).trim();
+    const text = (
+      typeof out?.result === 'string'
+        ? out.result
+        : out?.errors?.length
+          ? out.errors.join('; ')
+          : out?.subtype?.startsWith('error_')
+            ? `Claude Code stopped (${out.subtype})`
+            : `${res.stdout}\n${res.stderr}`
+    ).trim();
     if (!out || out.is_error || res.code !== 0) {
       if (out?.api_error_status === 429 || LIMIT_RE.test(text))
         throw new RateLimitError(text.slice(0, 300), {
@@ -292,20 +361,17 @@ export class ClaudePlanProvider implements BrainProvider {
         throw new Error(
           `Claude Code is too old for Agents World; run \`claude update\`. (${text.slice(0, 200)})`,
         );
+      // The call ran and gave no answer, but its tokens and cost still count.
+      if (out)
+        throw new NoDecisionError(
+          text.slice(0, 300) || `claude exited with code ${res.code}`,
+          planUsage(out),
+        );
       throw new Error(text.slice(0, 300) || `claude exited with code ${res.code}`);
     }
-    const usage: Usage = {
-      inputTokens:
-        (out.usage?.input_tokens ?? 0) +
-        (out.usage?.cache_read_input_tokens ?? 0) +
-        (out.usage?.cache_creation_input_tokens ?? 0),
-      outputTokens: out.usage?.output_tokens ?? 0,
-      cachedInputTokens: out.usage?.cache_read_input_tokens ?? 0,
-      // Paid for by the subscription, not by the world's spending cap.
-      costUsd: 0,
-    };
+    const usage = planUsage(out);
     if (out.stop_reason === 'refusal') throw new RefusalError('The model declined.', usage);
-    const model = Object.keys(out.modelUsage ?? {})[0] ?? opts.model;
+    const model = reportedModel(out, opts.model);
     return { output: out.structured_output ?? extractJson(out.result ?? ''), usage, model };
   }
 

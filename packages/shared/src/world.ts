@@ -25,6 +25,11 @@ export interface WorldMeta {
   speed: number;
   /** AI spending so far in this world (USD). */
   spentUsd: number;
+  /**
+   * API-price value of the calls made on the owner's Claude subscription (USD). Not billed, so it
+   * isn't part of `spentUsd` and doesn't count against the cap.
+   */
+  planUsd: number;
   /** Spending cap; the world pauses when it's reached (USD). */
   capUsd: number;
 }

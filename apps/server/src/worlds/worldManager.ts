@@ -152,6 +152,7 @@ export class WorldManager {
       running: false,
       speed: DEFAULT_SPEED,
       spentUsd: 0,
+      planUsd: 0,
       capUsd: DEFAULT_CAP_USD,
     };
     const file = WorldFile.create(this.pathFor(id), meta, state);
@@ -423,7 +424,7 @@ export class WorldManager {
     const runner = this.requireActive(worldId);
     runner.persist(); // calls still buffered in the runner aren't in the file yet
     const usage = this.file(worldId).usageByAgent();
-    const none: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    const none: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, planUsd: 0 };
     const row = (a: Agent): BrainRow => ({
       id: a.id,
       name: fullName(a),
@@ -441,8 +442,10 @@ export class WorldManager {
       totals.inputTokens += u.inputTokens;
       totals.outputTokens += u.outputTokens;
       totals.costUsd += u.costUsd;
+      totals.planUsd += u.planUsd;
     }
     totals.costUsd = Math.round(totals.costUsd * 1e6) / 1e6;
+    totals.planUsd = Math.round(totals.planUsd * 1e6) / 1e6;
     return {
       defaultBrain: { ...runner.state.settings.defaultBrain },
       people: [...people.filter((p) => p.alive), ...people.filter((p) => !p.alive)],
@@ -515,7 +518,7 @@ export class WorldManager {
       runner.state.settings.defaultBrain,
       this.brains,
     );
-    if (usage?.costUsd) runner.addSpend(usage.costUsd);
+    if (usage?.costUsd) runner.addSpend(usage.costUsd, usage.coveredByPlan);
     const before = runner.state.nextAgentNum;
     await runner.submit({
       kind: 'spawn_agent',

@@ -119,6 +119,7 @@ export class WorldRunner {
       actualSpeed: this.running ? this.tickTimes.length : 0,
       thinking: this.thinking,
       spentUsd: this.meta.spentUsd,
+      planUsd: this.meta.planUsd,
       capUsd: this.meta.capUsd,
       capReached: this.capReached,
       rateLimit: this.rateLimit,
@@ -141,9 +142,15 @@ export class WorldRunner {
   }
 
   /** Record spending that happened outside decisions (e.g. drafting a spawned person). */
-  addSpend(costUsd: number): void {
-    this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + Math.max(0, costUsd) };
-    this.file.writeMeta({ spentUsd: this.meta.spentUsd });
+  addSpend(costUsd: number, coveredByPlan = false): void {
+    const cost = Math.max(0, costUsd);
+    if (coveredByPlan) {
+      this.meta = { ...this.meta, planUsd: this.meta.planUsd + cost };
+      this.file.writeMeta({ planUsd: this.meta.planUsd });
+    } else {
+      this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
+      this.file.writeMeta({ spentUsd: this.meta.spentUsd });
+    }
   }
 
   setCap(capUsd: number): void {
@@ -415,7 +422,9 @@ export class WorldRunner {
       if (routed.limit) limited.push({ request, routed });
       const usage = routed.result?.usage;
       const cost = usage?.costUsd ?? 0;
-      if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
+      const plan = Boolean(usage?.coveredByPlan);
+      if (cost > 0 && plan) this.meta = { ...this.meta, planUsd: this.meta.planUsd + cost };
+      else if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
       if (routed.provider !== 'mock' || routed.fallback || routed.error) {
         const trace = routed.result?.trace;
         this.batch.calls.push({
@@ -431,6 +440,7 @@ export class WorldRunner {
           cachedTokens: usage?.cachedInputTokens ?? 0,
           costUsd: cost,
           estimated: Boolean(usage?.estimated),
+          plan,
           latencyMs: trace?.latencyMs ?? 0,
           prompt: trace?.prompt ?? null,
           response: trace?.response ?? null,
@@ -478,7 +488,12 @@ export class WorldRunner {
       stored = this.file.appendWorldEvents(events);
       if (calls.length) this.file.appendCalls(calls);
       if (snapshot) this.file.saveSnapshot(this.state);
-      this.file.writeMeta({ tick: this.state.tick, population, spentUsd: this.meta.spentUsd });
+      this.file.writeMeta({
+        tick: this.state.tick,
+        population,
+        spentUsd: this.meta.spentUsd,
+        planUsd: this.meta.planUsd,
+      });
     });
     const popChanged = population !== this.meta.population;
     this.meta = { ...this.meta, tick: this.state.tick, population };

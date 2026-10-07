@@ -211,6 +211,7 @@ export interface AgentDetail extends AgentView {
   forgotten: MemoryView[];
   death?: { tick: number; cause: string };
   bornTick: number;
+  /** Cost of their AI decisions (USD), Claude-plan calls included at their API-price value. */
   spentUsd: number;
   decisions: number;
   /** Buildings they own (or co-own). */
@@ -227,6 +228,8 @@ export interface LlmCallView {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** Made on the owner's Claude subscription: `costUsd` is its API-price value, not billed. */
+  plan: boolean;
   latencyMs: number;
   prompt: string | null;
   response: string | null;

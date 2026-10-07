@@ -299,6 +299,15 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-07 — Claude-plan calls show their real cost (owner request).** Calls on the Claude
+  subscription were recorded at $0. They now carry the price Claude Code reports for each call
+  (`total_cost_usd`, its estimate at API prices), and their tokens come from its per-model
+  `modelUsage` (the top-level `usage` misses helper calls). That cost shows per call, per person,
+  in the Brains dialog totals and next to the spending meter, marked as covered by the plan. It is
+  kept apart (`planUsd`) and still doesn't count against the spending cap, since nothing is billed
+  and the plan's own limits already pause the world. Plan calls that ran but gave no answer are
+  counted too. Plan calls made before this change stay at $0.
+
 - **2026-10-07 — Typecheck with the native TypeScript compiler (owner request).** `npm run typecheck`
   runs `tsgo` (TypeScript 7 native preview, pinned to an exact version) instead of `tsc`, about 5×
   faster (11.6 s → 2.1 s for all five projects). `typescript` 6 stays for ESLint, Vite and editors.

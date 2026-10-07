@@ -64,6 +64,7 @@ const idle: RunnerStatus = {
   actualSpeed: 0,
   thinking: 0,
   spentUsd: 0,
+  planUsd: 0,
   capUsd: 1,
   capReached: false,
   rateLimit: null,

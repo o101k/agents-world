@@ -293,7 +293,10 @@ export function AgentInspector({
       <section>
         <h3>Brain</h3>
         <p className="muted small">
-          {agent.decisions} decisions · {formatUsd(agent.spentUsd)} spent on AI
+          {agent.decisions} decisions ·{' '}
+          {agent.brain.provider === 'claude_plan'
+            ? `${formatUsd(agent.spentUsd)} of AI use (Claude plan, at API prices)`
+            : `${formatUsd(agent.spentUsd)} spent on AI`}
         </p>
         {replaying && (
           <p className="muted small">As they were on {formatClock(atTick)} (replay).</p>
@@ -447,6 +450,7 @@ function AiExchanges({ worldId, agentId }: { worldId: string; agentId: string })
               <summary>
                 {formatClock(c.tick)} · {c.trigger} · {c.model || c.provider} · {c.inputTokens}+
                 {c.outputTokens} tok · {formatUsd(c.costUsd)}
+                {c.plan ? ' (plan)' : ''}
                 {c.error ? ' · ⚠' : ''}
               </summary>
               {c.error && <p className="warn small">{c.error}</p>}

@@ -107,7 +107,8 @@ function PlanCard({
           <li>
             Villagers use your plan’s 5-hour and weekly limits, the same allowance as your own
             Claude chats and Claude Code. It costs no extra money, and the spending cap doesn’t
-            apply.
+            apply. Each call’s API-price value still shows in Brains & spending, so you can see what
+            the village would cost on an API key.
           </li>
           <li>When the limit runs out, time pauses and resumes by itself when the limit resets.</li>
           <li>

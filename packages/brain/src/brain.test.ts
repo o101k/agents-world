@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DecisionRequest, Perception } from '@aw/shared';
 import { AnthropicProvider } from './anthropic.ts';
-import { checkClaudeCli, ClaudePlanProvider, findClaudeCli, parseResetTime } from './claudeCli.ts';
+import {
+  checkClaudeCli,
+  ClaudePlanProvider,
+  findClaudeCli,
+  parseResetTime,
+  planUsage,
+} from './claudeCli.ts';
 import { mockDecide } from './mock.ts';
 import { toRateLimitError } from './limits.ts';
 import { OpenAIProvider } from './openai.ts';
@@ -716,7 +722,8 @@ describe('adoption', () => {
 
 /**
  * A stand-in for the `claude` command: records how it was called, then answers like
- * `claude -p --output-format json` would (FAKE_MODE: ok | limit | logged_out | api_key).
+ * `claude -p --output-format json` would (FAKE_MODE: ok | no_total | max_turns | limit | logged_out |
+ * api_key).
  */
 function fakeClaude(): { dir: string; command: string; calls: () => Record<string, unknown>[] } {
   const dir = mkdtempSync(join(tmpdir(), 'aw-fake-claude-'));
@@ -742,10 +749,25 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ type: 'result', is_error: true, subtype: 'success', result: 'Claude AI usage limit reached|1759780800' }));
     process.exit(1);
   }
+  // Like Claude Code: the top-level usage is the main loop only; modelUsage has every model.
+  const modelUsage = {
+    'claude-haiku-4-5-20251001': { inputTokens: 2900, outputTokens: 180, cacheReadInputTokens: 800, cacheCreationInputTokens: 300, webSearchRequests: 0, costUSD: 0.0044, contextWindow: 200000, maxOutputTokens: 32000 },
+    'claude-sonnet-4-5-20250929': { inputTokens: 150, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.000325, contextWindow: 200000, maxOutputTokens: 32000 },
+  };
+  const usage = { input_tokens: 900, output_tokens: 80, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 };
+  if (mode === 'max_turns') {
+    console.log(JSON.stringify({
+      type: 'result', subtype: 'error_max_turns', is_error: true, duration_ms: 1200, num_turns: 3,
+      session_id: 'fake-session', errors: [], total_cost_usd: 0.0031, usage, modelUsage: { 'claude-haiku-4-5-20251001': { inputTokens: 2000, outputTokens: 60, cacheReadInputTokens: 500, cacheCreationInputTokens: 0, costUSD: 0.0031 } },
+    }));
+    process.exit(1);
+  }
+  const cost = mode === 'no_total' ? {} : { total_cost_usd: 0.004725 };
   console.log(JSON.stringify({
-    type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn',
-    result: '', usage: { input_tokens: 900, output_tokens: 80, cache_read_input_tokens: 100 },
-    modelUsage: { 'claude-haiku-4-5-20251001': {} },
+    type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', duration_ms: 1500,
+    num_turns: 2, session_id: 'fake-session', result: '', usage,
+    ...cost,
+    modelUsage,
     structured_output: { thought: 'Thirsty.', goal: 'Drink', plan: [{ action: 'drink' }] },
   }));
 });
@@ -773,7 +795,14 @@ describe('Claude subscription (Claude Code CLI)', () => {
       effort: 'frugal',
     });
     expect(res.decision.goal).toBe('Drink');
-    expect(res.usage).toMatchObject({ inputTokens: 1000, outputTokens: 80, costUsd: 0 });
+    // Tokens and cost come from modelUsage (both models), not the main-loop usage.
+    expect(res.usage).toEqual({
+      inputTokens: 4150,
+      outputTokens: 200,
+      cachedInputTokens: 800,
+      costUsd: 0.004725,
+      coveredByPlan: true,
+    });
     expect(res.trace?.model).toBe('claude-haiku-4-5-20251001');
     const [call] = fake.calls();
     const args = call!.args as string[];
@@ -797,6 +826,45 @@ describe('Claude subscription (Claude Code CLI)', () => {
     const args = fake.calls()[0]!.args as string[];
     expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
     expect(args[args.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('costs a call without total_cost_usd by summing the per-model costs', async () => {
+    const fake = fakeClaude();
+    const provider = new ClaudePlanProvider(fake.command, 'haiku', {
+      ...baseEnv,
+      FAKE_MODE: 'no_total',
+    });
+    const res = await provider.decide(request(perception()), {
+      provider: 'claude_plan',
+      model: '',
+      effort: 'frugal',
+    });
+    expect(res.usage?.costUsd).toBeCloseTo(0.004725, 6);
+    expect(res.usage?.coveredByPlan).toBe(true);
+  });
+
+  it('keeps the tokens and cost of a call that ran but gave no answer', async () => {
+    const fake = fakeClaude();
+    const provider = new ClaudePlanProvider(fake.command, 'haiku', {
+      ...baseEnv,
+      FAKE_MODE: 'max_turns',
+    });
+    const router = new BrainRouter([provider]);
+    const out = await router.decide(request(perception()), {
+      provider: 'claude_plan',
+      model: '',
+      effort: 'frugal',
+    });
+    expect(out.result?.decision.goal).toBe('Pause'); // the fallback decision
+    expect(out.error).toContain('error_max_turns');
+    expect(out.error).not.toContain('{');
+    expect(out.result?.usage).toEqual({
+      inputTokens: 2500,
+      outputTokens: 60,
+      cachedInputTokens: 500,
+      costUsd: 0.0031,
+      coveredByPlan: true,
+    });
   });
 
   it('reports a used-up plan limit to the router with its reset time', async () => {
@@ -837,6 +905,27 @@ describe('Claude subscription (Claude Code CLI)', () => {
     const tomorrow = new Date(parseResetTime('resets 5:15am', now)!);
     expect([tomorrow.getDate(), tomorrow.getHours(), tomorrow.getMinutes()]).toEqual([4, 5, 15]);
     expect(parseResetTime('Something else went wrong', now)).toBeUndefined();
+  });
+});
+
+describe('Claude plan usage', () => {
+  it('falls back to the main-loop usage and costs nothing without per-model totals', () => {
+    expect(
+      planUsage({
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 5,
+          cache_creation_input_tokens: 2,
+        },
+      }),
+    ).toEqual({
+      inputTokens: 107,
+      outputTokens: 10,
+      cachedInputTokens: 5,
+      costUsd: 0,
+      coveredByPlan: true,
+    });
   });
 });
 
