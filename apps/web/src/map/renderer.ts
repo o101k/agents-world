@@ -567,10 +567,13 @@ export class WorldRenderer {
         // A burnt-out ruin, blackened until rebuilt.
         baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
         s.tint = 0x5a4a40;
-      } else if (o.progress !== undefined) {
+      } else if (o.progress !== undefined && o.kind !== 'field') {
         // Under construction: fades in as the work progresses.
         baseAlpha = 0.3 + 0.6 * o.progress;
         s.tint = 0xd8c8a8;
+      } else if (o.stone) {
+        // Stone buildings read as cool grey.
+        s.tint = 0xc8d4dc;
       }
       s.alpha = baseAlpha;
       this.objects.addChild(s);
@@ -633,12 +636,10 @@ export class WorldRenderer {
       case 'house':
         return `house${h % HOUSE_VARIANTS}` as SpriteName;
       case 'field':
-        return null; // drawn as ground tiles
+        // Finished fields are drawn as ground tiles; one still being cleared is bare dirt.
+        return o.progress !== undefined ? 'plot' : null;
       case 'berry_bush':
         return (this.resources[o.id] ?? 1) >= 1 ? 'berry_bush' : 'berry_bush_empty';
-      case 'pen':
-      case 'stall':
-        return null;
       default:
         return o.kind;
     }

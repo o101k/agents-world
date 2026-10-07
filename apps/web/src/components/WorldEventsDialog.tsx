@@ -59,9 +59,10 @@ export function WorldEventsDialog({
 
   const buildings = (map?.objects ?? []).filter(
     (o) =>
-      ['house', 'bakery', 'workshop'].includes(o.kind) &&
+      ['house', 'bakery', 'workshop', 'pen', 'stall'].includes(o.kind) &&
       (o.progress ?? 1) >= 1 &&
-      o.burntTick === undefined,
+      o.burntTick === undefined &&
+      !o.stone,
   );
   const people = agents.filter((a) => a.alive);
 

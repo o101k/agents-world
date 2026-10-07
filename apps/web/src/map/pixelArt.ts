@@ -586,6 +586,154 @@ const dock: SpriteDef = {
   },
 };
 
+/** A villager's animal pen: a wooden fence round straw, a gate at the bottom, hens and a sheep. */
+const pen: SpriteDef = {
+  w: 48,
+  h: 48,
+  paint: (p) => {
+    p.speckle(
+      2,
+      4,
+      44,
+      42,
+      '#d9c274',
+      [
+        ['#c4a85a', 0.12],
+        ['#ead98e', 0.08],
+      ],
+      21,
+    );
+    const wood = '#8a5a30';
+    const dark = '#5a3a1c';
+    const light = '#a8784a';
+    // Rails: top and sides, then the bottom rail in two pieces with the gate gap between them.
+    p.rect(1, 4, 46, 2, wood);
+    p.rect(1, 6, 46, 1, dark);
+    p.rect(1, 4, 2, 44, wood);
+    p.rect(45, 4, 2, 44, wood);
+    p.rect(3, 4, 1, 42, light);
+    p.rect(44, 4, 1, 42, dark);
+    for (const y of [16, 30]) {
+      p.rect(3, y, 42, 1, wood);
+      p.rect(3, y + 1, 42, 1, dark);
+    }
+    p.rect(1, 44, 18, 2, wood);
+    p.rect(29, 44, 18, 2, wood);
+    p.rect(1, 46, 18, 1, dark);
+    p.rect(29, 46, 18, 1, dark);
+    // Posts at the corners and along the sides; gate posts either side of the gap.
+    for (const [x, y] of [
+      [0, 2],
+      [44, 2],
+      [0, 42],
+      [44, 42],
+      [0, 22],
+      [44, 22],
+      [19, 40],
+      [28, 40],
+    ] as const) {
+      p.rect(x, y, 4, 6, light);
+      p.rect(x + 3, y, 1, 6, dark);
+    }
+    // Two hens.
+    for (const [x, y] of [
+      [10, 30],
+      [33, 35],
+    ] as const) {
+      p.ellipse(x, y, 2.5, 2, '#f4f0e6');
+      p.ellipse(x + 2, y - 2, 1.4, 1.4, '#f4f0e6');
+      p.px(x + 2, y - 4, '#d83a3a');
+      p.px(x + 3, y - 2, '#e0a030');
+      p.px(x - 1, y + 2, '#d9a55a');
+      p.px(x + 1, y + 2, '#d9a55a');
+    }
+    // A sheep: fleecy body, dark head.
+    p.ellipse(27, 18, 5, 3.5, '#f2f2ee');
+    for (const [x, y] of [
+      [24, 16],
+      [27, 15],
+      [30, 17],
+      [25, 19],
+      [28, 20],
+    ] as const)
+      p.px(x, y, '#dcdcd4');
+    p.ellipse(33, 15, 1.8, 1.6, '#3a3a3a');
+    p.px(34, 14, '#ffffff');
+    p.px(23, 21, '#3a3a3a');
+    p.px(26, 21, '#3a3a3a');
+    p.px(29, 21, '#3a3a3a');
+    p.px(31, 21, '#3a3a3a');
+  },
+};
+
+/** A villager's own market stall: a counter, goods and a striped awning. */
+const stall: SpriteDef = {
+  w: 32,
+  h: 20,
+  paint: (p) => {
+    // Striped awning with a scalloped edge.
+    for (let x = 0; x < 32; x++) {
+      const c = Math.floor(x / 4) % 2 === 0 ? '#c8403a' : '#f0e8d8';
+      p.rect(x, 0, 1, 7, c);
+      if (x % 4 !== 3) p.px(x, 7, c);
+      if (x % 4 === 1 || x % 4 === 2) p.px(x, 8, c);
+    }
+    p.rect(0, 0, 32, 1, '#7a2420');
+    // Poles.
+    p.rect(1, 7, 2, 13, '#5a3a1c');
+    p.rect(29, 7, 2, 13, '#5a3a1c');
+    // Counter with goods on top.
+    p.rect(3, 13, 26, 6, '#8a5a30');
+    p.rect(3, 13, 26, 1, '#a8784a');
+    p.rect(3, 18, 26, 1, '#5a3a1c');
+    for (const [x, c] of [
+      [8, '#d83a3a'],
+      [14, '#d9a55a'],
+      [20, '#7cc04a'],
+      [25, '#e0a030'],
+    ] as const) {
+      p.ellipse(x, 12, 1.6, 1.2, c);
+    }
+  },
+};
+
+/** A field still being cleared: bare tilled dirt with a few stumps and stones. */
+const plot: SpriteDef = {
+  w: 64,
+  h: 48,
+  paint: (p) => {
+    p.speckle(
+      0,
+      0,
+      64,
+      48,
+      '#6b4a2c',
+      [
+        ['#5a3c22', 0.12],
+        ['#7e5a36', 0.08],
+      ],
+      91,
+    );
+    for (const y of [6, 14, 22, 30, 38, 46]) p.rect(0, y, 64, 1, '#4e3520');
+    // Stumps (cut rings) and stones.
+    for (const [x, y] of [
+      [12, 40],
+      [50, 12],
+    ] as const) {
+      p.ellipse(x, y, 2.5, 1.6, '#6b4423');
+      p.ellipse(x, y - 0.4, 1.8, 1, '#a07a50');
+    }
+    for (const [x, y, rx, ry] of [
+      [30, 30, 2, 1.5],
+      [42, 22, 1.5, 1],
+      [22, 16, 1.2, 0.9],
+    ] as const) {
+      p.ellipse(x, y, rx, ry, '#8e8e86');
+      p.px(Math.floor(x) - 1, Math.floor(y) - 1, '#b0b0a8');
+    }
+  },
+};
+
 // ---------------------------------------------------------------- registry
 
 export const SPRITES = {
@@ -629,6 +777,9 @@ export const SPRITES = {
   market,
   well,
   dock,
+  pen,
+  stall,
+  plot,
 } satisfies Record<string, SpriteDef>;
 
 export type SpriteName = keyof typeof SPRITES;
