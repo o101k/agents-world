@@ -13,10 +13,6 @@ function fresh(): WorldState {
   return s;
 }
 
-/** Events carry the map objects they are about (WorldEvent.objects). */
-type Tagged = WorldEvent & { objects?: string[] };
-const objectsOf = (e: WorldEvent) => (e as Tagged).objects;
-
 /**
  * Run `ticks` ticks, giving `agentId` a plan on the first one (and `first` extra inputs), and
  * telling everyone else who asks to rest. Returns every event emitted.
@@ -76,7 +72,7 @@ describe('object history tags', () => {
     const fires = events.filter((e) => e.kind === 'fire');
     expect(fires.some((e) => e.text.includes('is on fire!'))).toBe(true);
     expect(fires.some((e) => e.text.includes('burnt down.'))).toBe(true);
-    for (const e of fires) expect(objectsOf(e)).toEqual([home.id]);
+    for (const e of fires) expect(e.objects).toEqual([home.id]);
   });
 
   it('tags every event of building a new house with that house', () => {
@@ -99,7 +95,7 @@ describe('object history tags', () => {
     expect(built.some((e) => e.text.includes('started building'))).toBe(true);
     expect(built.some((e) => e.text.includes('worked on'))).toBe(true);
     expect(built.some((e) => e.text.includes('finished building'))).toBe(true);
-    for (const e of built) expect(objectsOf(e)).toEqual([site.id]);
+    for (const e of built) expect(e.objects).toEqual([site.id]);
   });
 
   it('tags picking a bush with the bush', () => {
@@ -110,7 +106,7 @@ describe('object history tags', () => {
     const events = play(s, 60, a.id, [{ type: 'gather', objectId: bush.id }]);
     const gathered = events.filter((e) => e.kind === 'gathered' && e.actors[0] === a.id);
     expect(gathered.length).toBeGreaterThan(0);
-    for (const e of gathered) expect(objectsOf(e)).toEqual([bush.id]);
+    for (const e of gathered) expect(e.objects).toEqual([bush.id]);
   });
 
   it('tags chopping a tree with the tree', () => {
@@ -122,7 +118,7 @@ describe('object history tags', () => {
     const events = play(s, 60, a.id, [{ type: 'chop_wood', objectId: tree.id }]);
     const chopped = events.filter((e) => e.kind === 'gathered' && e.text.includes('chopped'));
     expect(chopped.length).toBeGreaterThan(0);
-    for (const e of chopped) expect(objectsOf(e)).toEqual([tree.id]);
+    for (const e of chopped) expect(e.objects).toEqual([tree.id]);
   });
 
   it('tags buying and selling at the market with the market', () => {
@@ -133,7 +129,7 @@ describe('object history tags', () => {
     const events = play(s, 60, a.id, [{ type: 'buy', item: 'bread', quantity: 2 }]);
     const traded = events.filter((e) => e.kind === 'traded');
     expect(traded.length).toBeGreaterThan(0);
-    for (const e of traded) expect(objectsOf(e)).toEqual([market.id]);
+    for (const e of traded) expect(e.objects).toEqual([market.id]);
   });
 
   it('leaves the objects key off events that have nothing to tag', () => {
@@ -143,6 +139,6 @@ describe('object history tags', () => {
     const events = play(s, 20, a.id, [{ type: 'eat', item: 'bread' }]);
     expect(events.some((e) => e.kind === 'ate')).toBe(true);
     expect(events.filter((e) => e.kind === 'ate').every((e) => !('objects' in e))).toBe(true);
-    for (const e of events) if ('objects' in e) expect(objectsOf(e)!.length).toBeGreaterThan(0);
+    for (const e of events) if ('objects' in e) expect(e.objects!.length).toBeGreaterThan(0);
   });
 });

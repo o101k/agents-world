@@ -160,10 +160,10 @@ function toWorldEvent(r: EventRow): WorldEvent {
   };
 }
 
-/** Whether `text` names `name` as a whole ("House 1" is not "House 12"). */
-function mentionsName(text: string, name: string): boolean {
+/** Matches `name` as a whole in a text ("House 1" doesn't match "House 12"). */
+function namePattern(name: string): RegExp {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`${escaped}(?!\\d)`).test(text);
+  return new RegExp(`${escaped}(?!\\d)`);
 }
 
 /** An object's stored history (see `WorldFile.objectHistory`). */
@@ -231,7 +231,9 @@ export class WorldFile {
 
   /** Links existing building and fire events to the buildings they name (by name, once). */
   private backfillObjectEvents(): void {
-    const named = this.loadLatestSnapshot().map.objects.filter((o) => o.name);
+    const named = this.loadLatestSnapshot()
+      .map.objects.filter((o) => o.name)
+      .map((o) => ({ id: o.id, pattern: namePattern(o.name!) }));
     if (!named.length) return;
     const events = this.db
       .prepare("SELECT id, payload FROM events WHERE kind IN ('built', 'fire')")
@@ -243,7 +245,7 @@ export class WorldFile {
       for (const e of events) {
         const text = (JSON.parse(e.payload) as { text?: string }).text ?? '';
         for (const o of named) {
-          if (mentionsName(text, o.name as string)) insert.run(o.id, e.id);
+          if (o.pattern.test(text)) insert.run(o.id, e.id);
         }
       }
     })();
