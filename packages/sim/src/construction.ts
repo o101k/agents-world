@@ -4,6 +4,7 @@ import {
   type BuildingKind,
   type Intent,
   type MapObject,
+  TICKS_PER_HOUR,
   type Point,
 } from '@aw/shared';
 import { fullName, remember, type Agent } from './agent.ts';
@@ -143,7 +144,12 @@ export function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
     if (site.kind === 'well' || (workDone > 0 && (site.stoneWork ?? 0) * 2 >= workDone))
       site.stone = true;
     if (site.kind === 'pen' && !state.pens[site.id])
-      state.pens[site.id] = { hens: 0, sheep: 0, wool: 0, lastTendedTick: state.tick };
+      state.pens[site.id] = {
+        hens: 0,
+        sheep: 0,
+        wool: 0,
+        lastTendedTick: state.tick - 6 * TICKS_PER_HOUR,
+      };
     if (site.kind === 'stall' && !state.stalls[site.id]) state.stalls[site.id] = { stock: {} };
     if (site.burntTick !== undefined) {
       delete site.burntTick;

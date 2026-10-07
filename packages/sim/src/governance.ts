@@ -26,6 +26,9 @@ const JOIN_EVERY = 10;
 const MAX_PROPOSALS = 5;
 const LEVY_TICK = 6 * 60;
 
+/** Drop a proposal's own closing punctuation before a sentence-ending period is added. */
+const endSentence = (text: string) => text.replace(/[.!?]+$/, '');
+
 const awareAt = (a: Agent) => a.alive && !a.asleep && !a.indoorsId;
 const canTrigger = (a: Agent) => a.alive && !a.awaiting && !a.asleep;
 
@@ -218,7 +221,9 @@ function closeMeeting(ctx: Ctx, m: Meeting): void {
       remember(
         a,
         state.tick,
-        passed ? `The village agreed: ${p.text}.` : `The village voted down: ${p.text}.`,
+        passed
+          ? `The village agreed: ${endSentence(p.text)}.`
+          : `The village voted down: ${endSentence(p.text)}.`,
         passed ? 6 : 4,
       );
     }
@@ -279,7 +284,7 @@ function proposeRule(ctx: Ctx, agent: Agent, intent: Extract<Intent, { type: 'pr
     remember(
       other,
       tick,
-      `${nameAsKnown(other, agent)} proposed at the village meeting: “${intent.text}”.`,
+      `${nameAsKnown(other, agent)} proposed at the village meeting: “${endSentence(intent.text)}”.`,
       4,
       'experience',
       [agent.id],

@@ -194,7 +194,7 @@ function buyFromStall(
   emit(
     ctx,
     'stall',
-    [agent.id],
+    [agent.id, seller.id],
     `${fullName(agent)} bought ${qty} ${label} at ${fullName(seller)}'s stall for ${total} coins.`,
     2,
   );

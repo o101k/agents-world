@@ -990,7 +990,13 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
         const r = state.resources[o.id];
         if (!r || r.amount < 1) {
           agent.knowledge[o.id] = { lastSeenTick: state.tick, lastSeenAmount: 0 };
-          return fail(ctx, agent, `The ${objName(state, o.id)} had nothing left to gather.`);
+          return fail(
+            ctx,
+            agent,
+            o.name
+              ? `${o.name} had nothing left to gather.`
+              : `The ${objName(state, o.id)} had nothing left to gather.`,
+          );
         }
       }
       if (o.x > agent.x) agent.facing = 'right';

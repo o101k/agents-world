@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Intent } from '@aw/shared';
+import { TICKS_PER_HOUR, type Intent } from '@aw/shared';
 import { interactionTiles } from './spatial.ts';
 import { step, type TickInput } from './engine.ts';
 import { createWorldState, type WorldState } from './world.ts';
@@ -158,7 +158,12 @@ describe('construction', () => {
     buildUntilDone(s, 'a1', [{ type: 'build', building: 'pen' }]);
     const pen = newest(s, 'pen');
     expect(pen.progress).toBeUndefined();
-    expect(s.pens[pen.id]).toEqual({ hens: 0, sheep: 0, wool: 0, lastTendedTick: s.tick });
+    expect(s.pens[pen.id]).toEqual({
+      hens: 0,
+      sheep: 0,
+      wool: 0,
+      lastTendedTick: s.tick - 6 * TICKS_PER_HOUR,
+    });
   });
 
   it('a market stall creates its state', () => {
