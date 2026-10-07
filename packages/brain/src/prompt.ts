@@ -412,8 +412,10 @@ export function userPrompt(p: Perception): string {
   } else {
     lines.push('You do not know any places here yet.');
   }
-  if (p.treesNearby > 0) lines.push(`There are ${p.treesNearby} trees within sight.`);
-  if ((p.rocksNearby ?? 0) > 0) lines.push(`There are ${p.rocksNearby} rocks within sight.`);
+  const inSight = (n: number, one: string) =>
+    n === 1 ? `There is 1 ${one} within sight.` : `There are ${n} ${one}s within sight.`;
+  if (p.treesNearby > 0) lines.push(inSight(p.treesNearby, 'tree'));
+  if ((p.rocksNearby ?? 0) > 0) lines.push(inSight(p.rocksNearby!, 'rock'));
   if (p.marketPrices) {
     const d = p.clock.day - Math.floor(p.marketPrices.tick / 1440) - 1;
     const when = d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
