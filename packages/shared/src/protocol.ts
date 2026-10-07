@@ -180,6 +180,42 @@ export interface WorldViewResponse {
   calendar: CalendarView;
 }
 
+/** The village beyond the town market: stalls, pens, owned fields, jobs, meetings and rules. */
+export interface VillageResponse {
+  leader: { id: string; name: string } | null;
+  /** Coins in the village purse. */
+  treasury: number;
+  /** Daily levy each grown-up pays into the purse (0 = none). */
+  taxPerDay: number;
+  rules: { id: string; text: string; passedTick: number; proposerName: string }[];
+  meetings: {
+    id: string;
+    topic: string;
+    callerName: string;
+    placeName: string;
+    startTick: number;
+    endTick: number;
+    proposals: { id: string; text: string; byName: string; yes: number; no: number }[];
+  }[];
+  stalls: {
+    id: string;
+    name: string;
+    owners: string[];
+    stock: { item: string; quantity: number; price: number }[];
+  }[];
+  pens: { id: string; name: string; owners: string[]; hens: number; sheep: number; wool: number }[];
+  /** Fields someone cleared (owned), with what grows there. */
+  fields: { id: string; name: string; owners: string[]; crop: string | null; amount: number }[];
+  jobs: {
+    id: string;
+    employerName: string;
+    workerName: string;
+    wage: number;
+    startTick: number;
+    endTick: number;
+  }[];
+}
+
 export interface MarketResponse {
   stock: Record<string, number>;
   quotes: Record<string, { buy: number; sell: number }>;

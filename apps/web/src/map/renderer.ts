@@ -636,6 +636,9 @@ export class WorldRenderer {
         return null; // drawn as ground tiles
       case 'berry_bush':
         return (this.resources[o.id] ?? 1) >= 1 ? 'berry_bush' : 'berry_bush_empty';
+      case 'pen':
+      case 'stall':
+        return null;
       default:
         return o.kind;
     }

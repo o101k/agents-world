@@ -5,6 +5,7 @@ import {
   type Activity,
   type AgentDetail,
   type AgentView,
+  type VillageResponse,
 } from '@aw/shared';
 import { fullName, type Agent } from './agent.ts';
 import { mapCache } from './spatial.ts';
@@ -35,6 +36,7 @@ export function activity(agent: Agent): Activity {
       return 'gathering';
     case 'craft':
     case 'build':
+    case 'task':
       return 'working';
     case 'eat':
       return 'eating';
@@ -184,4 +186,86 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
 function person(state: WorldState, id: string | null) {
   const a = id ? findAgent(state, id) : undefined;
   return a ? { id: a.id, name: fullName(a), alive: a.alive } : null;
+}
+
+/** The village beyond the town market, for the observer (who sees everything). */
+export function villageView(state: WorldState): VillageResponse {
+  const cache = mapCache(state.map);
+  const who = (id: string | null | undefined) => {
+    const a = findAgent(state, id);
+    return a ? fullName(a) + (a.alive ? '' : ' (dead)') : 'someone';
+  };
+  const placeName = (id: string) => {
+    const o = cache.byId.get(id);
+    return o ? (o.name ?? OBJECT_LABELS[o.kind]) : id;
+  };
+  const owners = (id: string) => (state.owners[id] ?? []).map((a) => who(a));
+  const leader = findAgent(state, state.leaderId);
+  const taxRule = [...state.rules].reverse().find((r) => r.tax !== undefined);
+  return {
+    leader: leader?.alive ? { id: leader.id, name: fullName(leader) } : null,
+    treasury: state.treasury,
+    taxPerDay: taxRule?.tax ?? 0,
+    rules: state.rules.map((r) => ({
+      id: r.id,
+      text: r.text,
+      passedTick: r.passedTick,
+      proposerName: who(r.proposer),
+    })),
+    meetings: state.meetings.map((m) => ({
+      id: m.id,
+      topic: m.topic,
+      callerName: who(m.caller),
+      placeName: placeName(m.placeId),
+      startTick: m.startTick,
+      endTick: m.endTick,
+      proposals: m.proposals.map((p) => ({
+        id: p.id,
+        text: p.text,
+        byName: who(p.by),
+        yes: Object.values(p.votes).filter(Boolean).length,
+        no: Object.values(p.votes).filter((v) => !v).length,
+      })),
+    })),
+    stalls: state.map.objects
+      .filter((o) => o.kind === 'stall')
+      .map((o) => ({
+        id: o.id,
+        name: placeName(o.id),
+        owners: owners(o.id),
+        stock: Object.entries(state.stalls[o.id]?.stock ?? {})
+          .filter(([, l]) => (l?.quantity ?? 0) > 0)
+          .map(([item, l]) => ({ item, quantity: l!.quantity, price: l!.price })),
+      })),
+    pens: state.map.objects
+      .filter((o) => o.kind === 'pen')
+      .map((o) => {
+        const pen = state.pens[o.id];
+        return {
+          id: o.id,
+          name: placeName(o.id),
+          owners: owners(o.id),
+          hens: pen?.hens ?? 0,
+          sheep: pen?.sheep ?? 0,
+          wool: Math.floor(pen?.wool ?? 0),
+        };
+      }),
+    fields: state.map.objects
+      .filter((o) => o.kind === 'field' && state.owners[o.id]?.length)
+      .map((o) => ({
+        id: o.id,
+        name: placeName(o.id),
+        owners: owners(o.id),
+        crop: state.resources[o.id]?.item ?? null,
+        amount: Math.floor(state.resources[o.id]?.amount ?? 0),
+      })),
+    jobs: state.contracts.map((c) => ({
+      id: c.id,
+      employerName: who(c.employer),
+      workerName: who(c.worker),
+      wage: c.wage,
+      startTick: c.startTick,
+      endTick: c.endTick,
+    })),
+  };
 }

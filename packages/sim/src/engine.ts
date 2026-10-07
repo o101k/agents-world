@@ -7,7 +7,6 @@ import {
   OBJECT_LABELS,
   TICKS_PER_DAY,
   TICKS_PER_HOUR,
-  Tile,
   tickToClock,
   type BrainConfig,
   type Decision,
@@ -20,7 +19,20 @@ import {
   type Point,
   type WorldEvent,
 } from '@aw/shared';
-import { fullName, remember, type Agent } from './agent.ts';
+import { fullName, remember, type Agent, type TaskAction } from './agent.ts';
+import {
+  animalsTick,
+  clothingWarmth,
+  finishTendAnimals,
+  penAnimals,
+  startTendAnimals,
+} from './animals.ts';
+import { finishBuild, startBuild } from './construction.ts';
+import { finishFarmingTask, onFieldHarvest, startClearField, startSow } from './farming.ts';
+import { governanceAction, governanceTick, readNoticeBoard } from './governance.ts';
+import { jobAction, jobsTick } from './jobs.ts';
+import { finishQuarry, startQuarry } from './quarry.ts';
+import { stallAction, stallListing } from './stalls.ts';
 import type { AgentSpec } from './cast.ts';
 import {
   canDrinkAt,
@@ -64,7 +76,6 @@ import type { Rng } from './rng.ts';
 import {
   distanceToObject,
   interactionTiles,
-  invalidateMapCaches,
   isAt,
   isWalkable,
   mapCache,
@@ -117,8 +128,8 @@ const MIN_NAP = 60;
 const CHECK_IN_TICKS: Record<string, number> = { frugal: 8 * H, standard: 4 * H, deep: 3 * H };
 const checkInFor = (a: Agent) => CHECK_IN_TICKS[a.brain.effort] ?? 4 * H;
 /** Talk range (Chebyshev tiles), how far voices carry to bystanders, and conversation length. */
-const TALK_RANGE = 2;
-const OVERHEAR_RANGE = 5;
+export const TALK_RANGE = 2;
+export const OVERHEAR_RANGE = 5;
 const MAX_TURNS = 6;
 const URGENT = 20;
 const RECOVERED = 50;
@@ -181,6 +192,10 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       expireRequests(state);
     }
     if (state.tick % TICKS_PER_DAY === 0) driftMarket(state.market);
+    // The growing village: pens, work agreements, meetings and the purse.
+    animalsTick(ctx);
+    jobsTick(ctx);
+    governanceTick(ctx);
     const ageStep = 1 / (TICKS_PER_DAY * state.settings.daysPerYear);
     calendarTick(ctx, ageStep);
     for (let i = 0; i < state.agents.length; i++) {
@@ -234,7 +249,7 @@ export function emit(
   }
 }
 
-function objName(state: WorldState, id: string): string {
+export function objName(state: WorldState, id: string): string {
   const o = mapCache(state.map).byId.get(id);
   return o ? (o.name ?? OBJECT_LABELS[o.kind].toLowerCase()) : id;
 }
@@ -373,6 +388,8 @@ function updateBody(ctx: Ctx, agent: Agent): void {
   const storm = indoors ? 0 : conditionLevel(state, 'storm');
   const season = seasonEffects(state);
   const heat = indoors || night ? 0 : 0.3 * conditionLevel(state, 'drought') + season.heat;
+  // Warm clothes keep out some of the cold.
+  const cold = indoors ? 1 : clothingWarmth(agent);
   n.food = clamp(
     n.food - ((infant ? 3 : asleep ? RATES.foodAsleep : RATES.foodAwake) * pregnant) / H,
   );
@@ -392,13 +409,14 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     n.warmth = clamp(n.warmth + (RATES.warmIndoors * season.dayWarmth) / H);
   else if (night)
     n.warmth = clamp(
-      n.warmth - ((asleep ? RATES.coldNightAsleep : RATES.coldNightAwake) * season.nightCold) / H,
+      n.warmth -
+        ((asleep ? RATES.coldNightAsleep : RATES.coldNightAwake) * season.nightCold * cold) / H,
     );
-  else n.warmth = clamp(n.warmth - (RATES.coolTwilight * season.nightCold) / H);
+  else n.warmth = clamp(n.warmth - (RATES.coolTwilight * season.nightCold * cold) / H);
   // Wind and cold rain chill anyone caught outside.
   if (storm > 0) {
     const noSun = !night && !isTwilight(state.tick) ? RATES.warmIndoors * season.dayWarmth : 0;
-    n.warmth = clamp(n.warmth - (noSun + 12 * storm) / H);
+    n.warmth = clamp(n.warmth - (noSun + 12 * storm * cold) / H);
   }
 
   // Health: suffers when needs hit bottom, recovers when they're comfortable.
@@ -546,6 +564,12 @@ const SUCCESS_EVENTS = new Set([
   'gave',
   'said',
   'offer',
+  'farmed',
+  'quarried',
+  'animals',
+  'stall',
+  'job',
+  'meeting',
 ]);
 
 export function fail(ctx: Ctx, agent: Agent, reason: string): void {
@@ -612,6 +636,9 @@ function progressAction(ctx: Ctx, agent: Agent): void {
     case 'build':
       if (state.tick >= action.until) finishBuild(ctx, agent, action.objectId);
       return;
+    case 'task':
+      if (state.tick >= action.until) finishTask(ctx, agent, action);
+      return;
     case 'eat':
       if (state.tick >= action.until) {
         const have = agent.inventory[action.item] ?? 0;
@@ -645,6 +672,19 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       return;
     case 'sleep':
       return;
+  }
+}
+
+/** A clearing, sowing, quarrying or tending job has run its time. */
+function finishTask(ctx: Ctx, agent: Agent, action: TaskAction): void {
+  switch (action.task) {
+    case 'clear_field':
+    case 'sow':
+      return finishFarmingTask(ctx, agent, action);
+    case 'quarry':
+      return finishQuarry(ctx, agent, action);
+    case 'tend_animals':
+      return finishTendAnimals(ctx, agent, action);
   }
 }
 
@@ -871,7 +911,7 @@ function separatePeople(ctx: Ctx): void {
   }
 }
 
-function facingTo(from: Point, to: Point): Facing {
+export function facingTo(from: Point, to: Point): Facing {
   if (to.x > from.x) return 'right';
   if (to.x < from.x) return 'left';
   if (to.y < from.y) return 'up';
@@ -1068,9 +1108,31 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
     case 'declare_will':
       return lifeAction(ctx, agent, intent);
     case 'build_house':
-      return startBuild(ctx, agent, arrived);
+    case 'build':
+      return startBuild(ctx, agent, intent, arrived);
     case 'tend':
       return tendAction(ctx, agent, intent);
+    case 'clear_field':
+      return startClearField(ctx, agent, intent, arrived);
+    case 'sow':
+      return startSow(ctx, agent, intent, arrived);
+    case 'quarry':
+      return startQuarry(ctx, agent, intent, arrived);
+    case 'tend_animals':
+      return startTendAnimals(ctx, agent, intent, arrived);
+    case 'stock_stall':
+    case 'take_from_stall':
+    case 'buy_from_stall':
+      return stallAction(ctx, agent, intent, arrived);
+    case 'hire':
+    case 'respond_job':
+    case 'end_job':
+      return jobAction(ctx, agent, intent);
+    case 'call_meeting':
+    case 'propose_rule':
+    case 'vote':
+    case 'pay_from_treasury':
+      return governanceAction(ctx, agent, intent);
     case 'explore': {
       const target = pickExploreTarget(ctx, agent);
       if (!target) return fail(ctx, agent, "I couldn't find anywhere new to explore.");
@@ -1195,6 +1257,7 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
     const skill = o.kind === 'field' ? 'farming' : 'foraging';
     train(agent, skill, 0.2);
     observeWork(state, agent, skill);
+    if (o.kind === 'field' && got > 0) onFieldHarvest(ctx, agent, o, got);
   }
   const label = ITEM_LABELS[item].toLowerCase();
   if (got > 0) {
@@ -1241,8 +1304,13 @@ export function look(state: WorldState, agent: Agent): void {
     agent.knowledge[o.id] = {
       lastSeenTick: state.tick,
       lastSeenAmount: r ? Math.floor(r.amount) : undefined,
+      ...(o.kind === 'stall' ? { lastSeenForSale: stallListing(state, o.id) } : {}),
+      ...(o.kind === 'pen' ? { lastSeenAnimals: penAnimals(state, o.id) } : {}),
     };
-    if (o.kind === 'market' && distanceToObject(o, agent) <= 3) seePrices(state, agent);
+    if (o.kind === 'market' && distanceToObject(o, agent) <= 3) {
+      seePrices(state, agent);
+      readNoticeBoard(state, agent);
+    }
   }
 }
 
@@ -1265,7 +1333,7 @@ export function nearestKnown(state: WorldState, agent: Agent, kinds: string[]): 
 
 // ------------------------------------------------------------------ work & trade
 
-function cheb(a: Point, b: Point): number {
+export function cheb(a: Point, b: Point): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
 
@@ -1371,7 +1439,7 @@ function moveBundle(from: Agent, to: Agent, b: Bundle): void {
 }
 
 /** Carrying tools improves yields; each use has a small chance of breaking them. */
-function useTools(ctx: Ctx, agent: Agent): boolean {
+export function useTools(ctx: Ctx, agent: Agent): boolean {
   if ((agent.inventory.tools ?? 0) <= 0) return false;
   if (ctx.rng.chance(0.03)) {
     agent.inventory.tools! -= 1;
@@ -1500,7 +1568,8 @@ function finishCraft(ctx: Ctx, agent: Agent, name: keyof typeof RECIPES): void {
   }
   const made: string[] = [];
   for (const [item, n] of Object.entries(recipe.outputs)) {
-    const bonus = name !== 'tools' && agent.skills[recipe.skill] >= 50 ? 1 : 0;
+    const bonus =
+      name !== 'tools' && name !== 'clothes' && agent.skills[recipe.skill] >= 50 ? 1 : 0;
     agent.inventory[item as ItemName] = (agent.inventory[item as ItemName] ?? 0) + n! + bonus;
     made.push(describeBundle({ item: item as ItemName, quantity: n! + bonus }));
   }
@@ -1588,7 +1657,7 @@ function marketTrade(
 }
 
 /** Awake people within earshot who aren't part of the exchange. */
-function witnesses(state: WorldState, a: Agent, b: Agent): Agent[] {
+export function witnesses(state: WorldState, a: Agent, b: Agent): Agent[] {
   return state.agents.filter(
     (o) =>
       o !== a && o !== b && o.alive && !o.asleep && !o.indoorsId && cheb(o, a) <= OVERHEAR_RANGE,
@@ -1915,155 +1984,4 @@ function expireOffers(ctx: Ctx): void {
     );
     return false;
   });
-}
-
-// ------------------------------------------------------------------ building houses
-
-const HOUSE_PLANKS_PER_SESSION = 3;
-
-/** A free 3×3 plot near the village (land, off paths, clear of buildings), with a reachable doorstep. */
-function findBuildSite(state: WorldState, near: Point): { x: number; y: number } | null {
-  const { map } = state;
-  const cache = mapCache(map);
-  const occupied = new Uint8Array(map.width * map.height);
-  for (const o of map.objects) {
-    if (o.kind === 'tree' || o.kind === 'berry_bush' || o.kind === 'rock') continue;
-    for (let y = o.y - 1; y < o.y + o.h + 1; y++) {
-      for (let x = o.x - 1; x < o.x + o.w + 1; x++)
-        if (x >= 0 && y >= 0 && x < map.width && y < map.height) occupied[y * map.width + x] = 1;
-    }
-  }
-  const ok = (x: number, y: number) => {
-    if (x < 2 || y < 2 || x + 3 > map.width - 2 || y + 4 > map.height - 2) return false;
-    for (let yy = y - 1; yy < y + 4; yy++) {
-      for (let xx = x - 1; xx < x + 4; xx++) {
-        const i = yy * map.width + xx;
-        if (occupied[i] || map.tiles[i] !== Tile.Grass) return false;
-      }
-    }
-    // doorstep below the door must be walkable (trees there would block it)
-    return isWalkable(map, x + 1, y + 3) && cache.walk[(y + 3) * map.width + x + 1] === 1;
-  };
-  for (let r = 4; r < Math.max(map.width, map.height); r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const x = near.x + dx;
-        const y = near.y + dy;
-        if (ok(x, y)) {
-          // Trees and bushes on the plot are cleared when building starts.
-          return { x, y };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function startBuild(ctx: Ctx, agent: Agent, arrived: boolean): void {
-  const { state } = ctx;
-  const { map } = state;
-  // Carry on with (or rebuild) a building of one's own before starting a new house.
-  let site = map.objects.find(
-    (o) =>
-      (o.kind === 'house' || o.burntTick !== undefined) &&
-      (o.progress ?? 1) < 1 &&
-      state.owners[o.id]?.includes(agent.id),
-  );
-  if (!site) {
-    if (agent.skills.building < 10)
-      return fail(ctx, agent, "I don't know enough about building to start a house.");
-    if ((agent.inventory.planks ?? 0) < HOUSE_PLANKS_PER_SESSION) {
-      return fail(
-        ctx,
-        agent,
-        `I need at least ${HOUSE_PLANKS_PER_SESSION} planks to start building.`,
-      );
-    }
-    const market = map.objects.find((o) => o.kind === 'market') ?? { x: agent.x, y: agent.y };
-    const spot = findBuildSite(state, { x: market.x, y: market.y });
-    if (!spot) return fail(ctx, agent, "There's no free land left to build on.");
-    // Clear the plot of trees/bushes.
-    map.objects = map.objects.filter(
-      (o) =>
-        !(
-          (o.kind === 'tree' || o.kind === 'berry_bush' || o.kind === 'rock') &&
-          o.x >= spot.x - 1 &&
-          o.x < spot.x + 4 &&
-          o.y >= spot.y - 1 &&
-          o.y < spot.y + 4
-        ),
-    );
-    const n = map.objects.filter((o) => o.kind === 'house').length + 1;
-    let id = `house-${n}`;
-    for (let k = n; map.objects.some((o) => o.id === id); k++) id = `house-${k + 1}`;
-    site = {
-      id,
-      kind: 'house',
-      x: spot.x,
-      y: spot.y,
-      w: 3,
-      h: 3,
-      name: `House ${id.split('-')[1]}`,
-      door: { x: spot.x + 1, y: spot.y + 2 },
-      progress: 0,
-    };
-    map.objects.push(site);
-    state.owners[id] = [agent.id];
-    agent.knowledge[id] = { lastSeenTick: state.tick };
-    invalidateMapCaches(map);
-    state.mapVersion += 1;
-    emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4);
-    remember(agent, state.tick, `I started building a house (${site.name}).`, 7);
-  }
-  const door = site.door ?? { x: site.x + Math.floor(site.w / 2), y: site.y + site.h - 1 };
-  const tiles = [{ x: door.x, y: door.y + 1 }];
-  if (!arrived && !isAt(agent, tiles)) {
-    walkTo(ctx, agent, tiles, { type: 'build_house' }, site.name ?? 'the building site');
-    return;
-  }
-  if ((agent.inventory.planks ?? 0) < HOUSE_PLANKS_PER_SESSION) {
-    return fail(
-      ctx,
-      agent,
-      `I need ${HOUSE_PLANKS_PER_SESSION} planks for the next stretch of building.`,
-    );
-  }
-  agent.inventory.planks! -= HOUSE_PLANKS_PER_SESSION;
-  if (!agent.inventory.planks) delete agent.inventory.planks;
-  agent.facing = 'up';
-  agent.action = { type: 'build', objectId: site.id, until: state.tick + 60 };
-}
-
-function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
-  const { state } = ctx;
-  agent.action = null;
-  const site = state.map.objects.find((o) => o.id === objectId);
-  if (!site || site.progress === undefined) return;
-  site.progress = Math.min(1, site.progress + 0.1 * (0.5 + agent.skills.building / 100));
-  train(agent, 'building', 0.6);
-  observeWork(state, agent, 'building');
-  state.mapVersion += 1;
-  if (site.progress >= 1) {
-    delete site.progress;
-    if (site.burntTick !== undefined) {
-      delete site.burntTick;
-      emit(ctx, 'built', [agent.id], `${fullName(agent)} finished rebuilding ${site.name}!`, 5);
-      remember(agent, state.tick, `I rebuilt ${site.name} after the fire.`, 8);
-      return;
-    }
-    const partner = agent.partnerId ? findAgent(state, agent.partnerId) : undefined;
-    if (partner && !state.owners[site.id]!.includes(partner.id))
-      state.owners[site.id]!.push(partner.id);
-    emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5);
-    remember(agent, state.tick, `I finished building ${site.name}. It's mine.`, 8);
-    if (!agent.homeId && site.kind === 'house') agent.homeId = site.id;
-  } else {
-    remember(
-      agent,
-      state.tick,
-      `I worked on ${site.name} (${Math.round(site.progress * 100)}% done).`,
-      2,
-    );
-  }
 }

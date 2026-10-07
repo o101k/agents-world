@@ -15,6 +15,12 @@ export const MARKET_TARGET: Record<ItemName, number> = {
   wood: 20,
   planks: 10,
   tools: 4,
+  stone: 20,
+  eggs: 15,
+  wool: 10,
+  clothes: 4,
+  hen: 6,
+  sheep: 3,
 };
 
 export function initialMarket(): MarketState {

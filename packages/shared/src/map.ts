@@ -30,7 +30,9 @@ export type MapObjectKind =
   | 'market'
   | 'well'
   | 'field'
-  | 'dock';
+  | 'dock'
+  | 'pen'
+  | 'stall';
 
 export const OBJECT_LABELS: Record<MapObjectKind, string> = {
   tree: 'Tree',
@@ -43,6 +45,8 @@ export const OBJECT_LABELS: Record<MapObjectKind, string> = {
   well: 'Well',
   field: 'Field',
   dock: 'Fishing dock',
+  pen: 'Animal pen',
+  stall: 'Market stall',
 };
 
 export interface Point {
@@ -65,6 +69,11 @@ export interface MapObject {
   progress?: number;
   /** Tick it burnt down, while it is being rebuilt (unusable until progress reaches 1 again). */
   burntTick?: number;
+  /** Stretches of building work done on it so far, and how many of them used stone. */
+  workDone?: number;
+  stoneWork?: number;
+  /** Built of stone: fire can't take hold. */
+  stone?: boolean;
 }
 
 export interface WorldMap {

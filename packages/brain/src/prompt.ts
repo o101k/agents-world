@@ -80,14 +80,14 @@ function partOfDay(hour: number): string {
 const ACTION_HELP: Record<string, string> = {
   go_to: 'go_to {target: place id or person id}',
   gather: 'gather {target: berry bush, field or fishing dock id}',
-  eat: 'eat {item: berries | vegetables | fish | bread}',
+  eat: 'eat {item: berries | vegetables | fish | bread | eggs}',
   drink: 'drink {target: well or dock id, or omit to find the nearest water}',
   sleep: 'sleep',
   rest: 'rest {minutes}',
   explore: 'explore (wander somewhere new)',
   talk_to: 'talk_to {target: person id, message: what you say out loud}',
   chop_wood: 'chop_wood {target: optional tree id; omit to use the nearest tree}',
-  craft: 'craft {recipe: bread | planks | tools} (goes to the bakery/workshop)',
+  craft: 'craft {recipe: bread | planks | tools | clothes} (goes to the bakery/workshop)',
   buy: 'buy {item, quantity} (goes to the town market)',
   sell: 'sell {item, quantity} (goes to the town market)',
   give: 'give {target: person id, item + quantity and/or coins}',
@@ -113,6 +113,29 @@ const ACTION_HELP: Record<string, string> = {
   build_house:
     'build_house (start or continue building a house, or rebuild your burnt one; each stretch uses 3 planks)',
   tend: 'tend {target: a sick person id} (nurse them: they recover faster; you may catch it)',
+  build:
+    'build {building: house | bakery | workshop | well | pen | stall} (start or continue building one; each hour-long stretch uses planks, a well uses stone; 2 extra stone in a stretch makes it stonework, and stone buildings cannot burn)',
+  clear_field:
+    'clear_field (clear land near your home for a field of your own; takes several hour-long stretches; trees cleared give wood)',
+  sow: 'sow {item: wheat | vegetables, target: optional field id} (sow your cleared field; uses 2 of that crop as seed)',
+  quarry: 'quarry {target: optional rock id; omit to use the nearest rock} (cut stone)',
+  tend_animals:
+    'tend_animals {target: optional pen id} (feed and look after the animals in your pen; collects eggs and wool; hens or sheep you carry go into the pen; uses 1 wheat, vegetables or berries as fodder if you have it)',
+  stock_stall:
+    'stock_stall {item, quantity, price} (put goods on your own market stall at your price; buyers pay you even when you are away)',
+  take_from_stall: 'take_from_stall {item, quantity} (take goods back off your stall)',
+  buy_from_stall:
+    'buy_from_stall {target: stall id, item, quantity} (buy at someone’s stall, at their price)',
+  hire: 'hire {target: person id, wage: coins a day, days} (offer them work; they must agree)',
+  respond_job: 'respond_job {target: the person offering work, accept: true or false}',
+  end_job: 'end_job {target: your employer or worker} (end the work agreement)',
+  call_meeting:
+    'call_meeting {message: what it is about} (call the village to a meeting at the market in an hour)',
+  propose_rule:
+    'propose_rule {message: the rule; optional tax: daily levy per grown-up for the village purse; optional leader: person id to elect leader} (only at a meeting)',
+  vote: 'vote {proposal_id, accept: true or false} (only at a meeting)',
+  pay_from_treasury:
+    'pay_from_treasury {target: person id, coins} (village leader only: pay from the village purse)',
 };
 
 /** Who the person is at their stage of life, in their own terms. */
@@ -174,7 +197,12 @@ export function systemPrompt(p: Perception): string {
       '- Work: fields grow wheat or vegetables; trees give wood; at the bakery 3 wheat become 2 bread; at the workshop 2 wood become 2 planks and 3 planks become tools. Carrying tools makes gathering, chopping and fishing more productive. Skill improves with practice.',
       '- You can give things to people, offer them trades (they may accept or refuse), and accept or decline offers made to you.',
       '- Family: grown-ups can ask someone to be their partner; partners who both want to can try for a child. Babies cannot feed themselves and must be fed several times a day (feed); young ones learn from what you teach them and from watching you work. When you die, what you own goes to the heir you name (declare_will), otherwise to your partner or children.',
-      '- Houses can be built with planks (build_house).',
+      '- Houses can be built with planks (build_house or build). So can new bakeries, workshops, animal pens and market stalls; a new well is built with stone. Stone is cut from rocks (quarry).',
+      '- Land: anyone may clear a field of their own near home (clear_field) and sow it with wheat or vegetables (sow); after that it regrows like the common fields. Taking crops from someone else’s field is noticed.',
+      '- Animals: hens and sheep are bought at the market and kept in a pen (build one, then tend_animals). Tended hens lay eggs (food) and sheep grow wool; at the workshop 3 wool become warm clothes, which keep out much of the night’s cold. Animals left untended for days stray or die.',
+      '- Anyone with a market stall can sell from it at their own price (stock_stall); others buy there (buy_from_stall).',
+      '- You can hire people for a daily wage (hire); wages are paid each evening while the agreement lasts.',
+      '- Village matters are settled at meetings (call_meeting): grown-ups there can propose rules, a daily levy for the village purse, or a leader, and vote. Passed rules are posted on the notice board at the market. Nothing enforces a rule but what people think of those who break it.',
       '- Sickness passes between people who stay close. The sick get better faster resting, sleeping and eating well, and someone can nurse them (tend). Storms chill anyone caught outside; droughts stunt crops and, when bad, dry up the river. Fires can burn buildings down; they can be rebuilt.',
       '- Nothing physically stops you from taking what is not yours or using force, but anyone who sees it will remember, and people talk. Someone badly hurt can die.',
     );
@@ -245,6 +273,18 @@ function triggerText(p: Perception): string {
       return t.scope === 'year'
         ? 'Another year of your life has passed. Before sleep, you look back on it.'
         : 'Night has come. Before sleep, you think back over the day.';
+    case 'job_offer':
+      return `${t.fromName} (${t.fromId}) offers you work: ${t.wage} coins a day for ${t.days} days. Answer with respond_job.`;
+    case 'job_answered':
+      return `${t.byName} ${t.accepted ? 'agreed to work for you' : 'turned down your job offer'}.`;
+    case 'job_ended':
+      return `Your work agreement with ${t.byName} has ended: ${t.reason}`;
+    case 'meeting_called':
+      return `${t.byName} has called a village meeting at ${t.place} about “${t.topic}”, starting in about ${t.startsInMinutes} minutes.`;
+    case 'meeting_open':
+      return `The village meeting about “${t.topic}” has begun and you are there. You can propose rules (propose_rule) and vote on proposals (vote).`;
+    case 'rule_proposed':
+      return `At the meeting, ${t.byName} proposes: “${t.text}” (proposal ${t.proposalId}). Vote with vote, or not at all.`;
     case 'check_in':
       return 'A few hours have passed. Take stock of your situation.';
   }
@@ -357,13 +397,23 @@ export function userPrompt(p: Perception): string {
       const owner = k.owner ? `, owned by ${k.owner}` : '';
       const burnt =
         (k.burnt ? ' (burnt down — needs rebuilding)' : '') +
+        (k.progress !== undefined ? ` (unfinished, ${Math.round(k.progress * 100)}% done)` : '') +
         (k.unreachable ? " (you couldn't find a way there)" : '');
-      lines.push(`- ${k.name}${produce}${burnt} [${k.id}], ${k.distance} steps${amount}${owner}`);
+      const sale = k.forSale
+        ? k.forSale.length
+          ? `; for sale: ${k.forSale.map((f) => `${f.quantity} ${ITEM_LABELS[f.item].toLowerCase()} at ${f.price}`).join(', ')}`
+          : '; nothing for sale'
+        : '';
+      const animals = k.animals ? `; ${k.animals.hens} hens, ${k.animals.sheep} sheep` : '';
+      lines.push(
+        `- ${k.name}${produce}${burnt} [${k.id}], ${k.distance} steps${amount}${owner}${sale}${animals}`,
+      );
     }
   } else {
     lines.push('You do not know any places here yet.');
   }
   if (p.treesNearby > 0) lines.push(`There are ${p.treesNearby} trees within sight.`);
+  if ((p.rocksNearby ?? 0) > 0) lines.push(`There are ${p.rocksNearby} rocks within sight.`);
   if (p.marketPrices) {
     const d = p.clock.day - Math.floor(p.marketPrices.tick / 1440) - 1;
     const when = d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
@@ -413,7 +463,44 @@ export function userPrompt(p: Perception): string {
           ? `${r.fromName} [${r.fromId}] has asked you to be their partner and is waiting for your answer.`
           : r.kind === 'adoption'
             ? `${r.fromName} [${r.fromId}] has offered to adopt you and is waiting for your answer.`
-            : `${r.fromName} [${r.fromId}] has asked whether you would like to try for a child and is waiting for your answer.`,
+            : r.kind === 'job'
+              ? `${r.fromName} [${r.fromId}] has offered you work${r.terms ? ` (${r.terms.wage} coins a day for ${r.terms.days} days)` : ''} and is waiting for your answer.`
+              : `${r.fromName} [${r.fromId}] has asked whether you would like to try for a child and is waiting for your answer.`,
+      );
+    }
+  }
+  if (p.jobs?.length) {
+    lines.push('');
+    lines.push('Work agreements:');
+    for (const j of p.jobs)
+      lines.push(
+        j.role === 'employer'
+          ? `- ${j.otherName} [${j.otherId}] works for you for ${j.wage} coins a day, until day ${j.untilDay}.`
+          : `- You work for ${j.otherName} [${j.otherId}] for ${j.wage} coins a day, until day ${j.untilDay}.`,
+      );
+  }
+  const v = p.village;
+  if (v) {
+    lines.push('');
+    lines.push('The village:');
+    if (v.leader) lines.push(`- Leader: ${v.leader.name} [${v.leader.id}]`);
+    for (const r of v.rules) lines.push(`- Rule: ${r}`);
+    if (v.treasury !== null)
+      lines.push(
+        `- The village purse held ${v.treasury} coins when you last read the notice board${v.taxPerDay ? `; every grown-up pays ${v.taxPerDay} coins a day into it` : ''}.`,
+      );
+    for (const m of v.meetings)
+      lines.push(
+        m.open
+          ? `- A meeting about “${m.topic}” is under way at ${m.place} [${m.placeId}].`
+          : `- A meeting about “${m.topic}” at ${m.place} [${m.placeId}] starts in about ${m.startsInMinutes} minutes.`,
+      );
+    for (const pr of v.proposals) {
+      const extra =
+        (pr.tax !== undefined ? ` (levy: ${pr.tax} coins a day)` : '') +
+        (pr.leaderName ? ` (leader: ${pr.leaderName})` : '');
+      lines.push(
+        `- Proposal [${pr.id}] by ${pr.byName}: “${pr.text}”${extra}${pr.voted ? ' — you have voted' : ''}`,
       );
     }
   }
