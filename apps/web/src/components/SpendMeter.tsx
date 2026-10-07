@@ -43,10 +43,15 @@ export function SpendMeter({ worldId }: { worldId: string }) {
       </form>
     );
   }
+  const planned = runner.planUsd > 0;
   return (
     <button
       className={`spend-meter linkish ${runner.capReached ? 'is-capped' : ''}`}
-      title="AI spending in this world vs its cap. Click to change the cap."
+      title={
+        planned
+          ? `AI spending in this world vs its cap, including ${formatUsd(runner.planUsd)} of Claude plan use priced at API rates (your plan covers it, so it isn’t billed). Click to change the cap.`
+          : 'AI spending in this world vs its cap. Click to change the cap.'
+      }
       onClick={() => {
         setValue(String(runner.capUsd));
         setEditing(true);

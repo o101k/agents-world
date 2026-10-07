@@ -23,8 +23,10 @@ export interface WorldMeta {
   running: boolean;
   /** Target speed in ticks per second (0 = as fast as possible). */
   speed: number;
-  /** AI spending so far in this world (USD). */
+  /** AI spending so far in this world (USD), Claude-plan calls at their API-price value. */
   spentUsd: number;
+  /** The part of `spentUsd` made on the owner's Claude subscription (not billed, but capped). */
+  planUsd: number;
   /** Spending cap; the world pauses when it's reached (USD). */
   capUsd: number;
 }

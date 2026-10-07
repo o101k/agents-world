@@ -19,7 +19,11 @@ export interface BrainsModalRow {
 }
 
 const YOUNG: LifeStage[] = ['infant', 'toddler', 'child', 'teen'];
-const NO_USAGE: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+const NO_USAGE: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, planUsd: 0 };
+
+/** Tooltip for a cost that includes Claude plan use priced at API rates. */
+const planTitle = (planUsd: number) =>
+  `Includes ${formatUsd(planUsd)} of Claude plan use at API prices (not billed)`;
 
 const plural = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 
@@ -262,7 +266,12 @@ export function BrainsModal({
                           <td className="num">{formatCount(usage.calls)}</td>
                           <td className="num">{formatCount(usage.inputTokens)}</td>
                           <td className="num">{formatCount(usage.outputTokens)}</td>
-                          <td className="num">{formatUsd(usage.costUsd)}</td>
+                          <td
+                            className="num"
+                            title={usage.planUsd > 0 ? planTitle(usage.planUsd) : undefined}
+                          >
+                            {formatUsd(usage.costUsd)}
+                          </td>
                         </>
                       )}
                       <td className="col-action">
@@ -288,7 +297,12 @@ export function BrainsModal({
                     <td className="num">{formatCount(totals.calls)}</td>
                     <td className="num">{formatCount(totals.inputTokens)}</td>
                     <td className="num">{formatCount(totals.outputTokens)}</td>
-                    <td className="num">{formatUsd(totals.costUsd)}</td>
+                    <td
+                      className="num"
+                      title={totals.planUsd > 0 ? planTitle(totals.planUsd) : undefined}
+                    >
+                      {formatUsd(totals.costUsd)}
+                    </td>
                     <td />
                   </tr>
                 </tfoot>
@@ -296,6 +310,12 @@ export function BrainsModal({
             </table>
           )}
         </div>
+        {showUsage && totals && totals.planUsd > 0 && (
+          <p className="muted small brains-footnote" data-testid="brains-plan-note">
+            Costs include {formatUsd(totals.planUsd)} of Claude plan use, priced at API rates by
+            Claude Code. Your plan covers it, but it still counts toward the spending cap.
+          </p>
+        )}
         {showUsage && !showDead && dead > 0 && (
           <p className="muted small brains-footnote">
             {plural(dead)} who died {dead === 1 ? 'is' : 'are'} hidden; what they spent is still in

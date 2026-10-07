@@ -783,6 +783,7 @@ textarea {
   align-items: center;
   gap: 8px;
   color: var(--text);
+  white-space: nowrap;
 }
 .spend-meter.is-capped {
   color: #ffb4ae;

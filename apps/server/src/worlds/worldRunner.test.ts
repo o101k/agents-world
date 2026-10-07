@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -178,7 +179,7 @@ describe('spending cap', () => {
 });
 
 describe('Claude subscription limit', () => {
-  it('ignores the spending cap, pauses when the plan limit is used up, and Play clears it', async () => {
+  it('pauses when the plan limit is used up, and Play clears it', async () => {
     let limited = false;
     let calls = 0;
     const plan = {
@@ -202,10 +203,8 @@ describe('Claude subscription limit', () => {
       brain: { provider: 'claude_plan', model: 'haiku', effort: 'standard' },
       applyToAll: true,
     });
-    runner.setCap(0); // the cap counts API money only
     await runUntil(runner, runner.state.tick + 30);
     expect(calls).toBeGreaterThan(0);
-    expect(runner.status().capReached).toBe(false);
 
     limited = true;
     runner.setRunning(true);
@@ -221,6 +220,57 @@ describe('Claude subscription limit', () => {
     expect(runner.status().rateLimit).toBeNull();
     runner.setRunning(false);
     await wm.closeAll();
+  });
+});
+
+describe('Claude plan costs', () => {
+  it('records plan calls at API-price value and counts them toward the cap', async () => {
+    const plan = {
+      id: 'claude_plan' as const,
+      decide: async () => ({
+        decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+        usage: { inputTokens: 1000, outputTokens: 100, costUsd: 0.002, coveredByPlan: true },
+      }),
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([plan]) });
+    const w = await wm.create({ name: 'PlanCost', seed: 'plancost', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'claude_plan', model: 'haiku', effort: 'standard' },
+      applyToAll: true,
+    });
+    runner.setCap(0.01);
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    for (let i = 0; i < 300 && !runner.status().capReached; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const status = runner.status();
+    expect(status.capReached).toBe(true);
+    expect(status.running).toBe(false);
+    expect(status.spentUsd).toBeGreaterThanOrEqual(0.01);
+    expect(status.planUsd).toBeCloseTo(status.spentUsd, 6);
+    const events = wm.events(w.id, { limit: 20, minImportance: 5 });
+    expect(events.some((e) => e.kind === 'cap_reached')).toBe(true);
+
+    const calls = runner.state.agents.flatMap((a) => wm.calls(w.id, a.id));
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c.plan).toBe(true);
+      expect(c.costUsd).toBeCloseTo(0.002, 6);
+    }
+    const view = wm.brainsView(w.id);
+    expect(view.totals.costUsd).toBeCloseTo(status.spentUsd, 6);
+    expect(view.totals.planUsd).toBeCloseTo(status.spentUsd, 6);
+    expect(runner.state.agents.some((a) => a.spentUsd > 0)).toBe(true);
+
+    await wm.closeAll();
+    const reopened = new WorldManager(dir, { brains: new BrainRouter([plan]) });
+    await reopened.activate(w.id);
+    expect(reopened.active!.status().spentUsd).toBeCloseTo(status.spentUsd, 6);
+    expect(reopened.active!.status().planUsd).toBeCloseTo(status.planUsd, 6);
+    await reopened.closeAll();
   });
 });
 
@@ -327,7 +377,13 @@ describe('what each brain has used', () => {
     const runner = wm.active!;
     const [a, b, c, d] = runner.state.agents.map((x) => x.id) as [string, string, string, string];
     const empty = wm.brainsView(w.id);
-    expect(empty.totals).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+    expect(empty.totals).toEqual({
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      planUsd: 0,
+    });
     expect(empty.people.every((p) => p.calls === 0 && p.costUsd === 0)).toBe(true);
 
     await runner.advance(1); // the first round of decisions is made by everyone's current brain
@@ -386,6 +442,7 @@ describe('what each brain has used', () => {
       cachedTokens: 0,
       costUsd: 0.5,
       estimated: false,
+      plan: false,
       latencyMs: 5,
       prompt: null,
       response: null,
@@ -399,7 +456,13 @@ describe('what each brain has used', () => {
       outputTokens: 4,
       costUsd: 0.5,
     });
-    expect(view.totals).toEqual({ calls: 1, inputTokens: 123, outputTokens: 4, costUsd: 0.5 });
+    expect(view.totals).toEqual({
+      calls: 1,
+      inputTokens: 123,
+      outputTokens: 4,
+      costUsd: 0.5,
+      planUsd: 0,
+    });
     await wm.closeAll();
   });
 
@@ -408,10 +471,10 @@ describe('what each brain has used', () => {
     const w = await wm.create({ name: 'Log', seed: 'log', mapSize: 'small' });
     const file = WorldFile.open(join(dir, 'worlds', `${w.id}.sqlite`));
     expect(file.usageByAgent().size).toBe(0);
-    const call = (agentId: string, inputTokens: number, costUsd: number) => ({
+    const call = (agentId: string, inputTokens: number, costUsd: number, plan = false) => ({
       tick: 1,
       agentId,
-      provider: 'anthropic',
+      provider: plan ? 'claude_plan' : 'anthropic',
       model: 'x',
       trigger: 'idle',
       inputTokens,
@@ -419,6 +482,7 @@ describe('what each brain has used', () => {
       cachedTokens: 0,
       costUsd,
       estimated: false,
+      plan,
       latencyMs: 5,
       prompt: null,
       response: null,
@@ -429,13 +493,52 @@ describe('what each brain has used', () => {
       call('a1', 200, 0.2),
       call('a2', 50, 0),
       call('draft', 7, 0.3),
+      call('a1', 40, 0.25, true),
     ]);
     const usage = file.usageByAgent();
-    expect(usage.get('a1')).toEqual({ calls: 2, inputTokens: 300, outputTokens: 20, costUsd: 0.3 });
-    expect(usage.get('a2')).toEqual({ calls: 1, inputTokens: 50, outputTokens: 10, costUsd: 0 });
+    expect(usage.get('a1')).toEqual({
+      calls: 3,
+      inputTokens: 340,
+      outputTokens: 30,
+      costUsd: 0.55,
+      planUsd: 0.25,
+    });
+    expect(usage.get('a2')).toEqual({
+      calls: 1,
+      inputTokens: 50,
+      outputTokens: 10,
+      costUsd: 0,
+      planUsd: 0,
+    });
     expect(usage.get('draft')?.calls).toBe(1);
     expect(usage.has('a3')).toBe(false);
     file.close();
     await wm.closeAll();
+  });
+
+  it('marks Claude plan calls in a save made before the plan column existed', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Old', seed: 'old', mapSize: 'small' });
+    await wm.closeAll();
+    const path = join(dir, 'worlds', `${w.id}.sqlite`);
+    // Rewind the file to the previous schema version by hand.
+    const db = new Database(path);
+    const insert = db.prepare(
+      `INSERT INTO llm_calls (tick, agent_id, provider, model, trigger, input_tokens, output_tokens,
+        cached_tokens, cost_usd, estimated, latency_ms) VALUES (1, 'a1', ?, 'x', 'idle', 1, 1, 0, 0.1, 0, 1)`,
+    );
+    insert.run('claude_plan');
+    insert.run('anthropic');
+    db.exec('ALTER TABLE llm_calls DROP COLUMN plan');
+    db.pragma('user_version = 2');
+    db.close();
+
+    const file = WorldFile.open(path);
+    const calls = file.listCalls('a1', 10);
+    expect(calls.map((c) => [c.provider, c.plan])).toEqual([
+      ['anthropic', false],
+      ['claude_plan', true],
+    ]);
+    file.close();
   });
 });

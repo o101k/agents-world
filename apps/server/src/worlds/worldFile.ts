@@ -72,6 +72,11 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX llm_calls_agent ON llm_calls(agent_id, id);
   `,
+  `
+  -- Calls made on a Claude subscription: their cost is the API-price value, covered by the plan.
+  ALTER TABLE llm_calls ADD COLUMN plan INTEGER NOT NULL DEFAULT 0;
+  UPDATE llm_calls SET plan = 1 WHERE provider = 'claude_plan';
+  `,
 ];
 
 const META_KEYS = [
@@ -90,6 +95,7 @@ const META_DEFAULTS = {
   running: false,
   speed: DEFAULT_SPEED,
   spentUsd: 0,
+  planUsd: 0,
   capUsd: DEFAULT_CAP_USD,
 };
 /** Full prompts/responses are kept for the most recent calls per person; older rows keep only numbers. */
@@ -106,6 +112,8 @@ export interface CallRecord {
   cachedTokens: number;
   costUsd: number;
   estimated: boolean;
+  /** Made on a Claude subscription: its cost is the API-price value, not billed. */
+  plan: boolean;
   latencyMs: number;
   prompt: string | null;
   response: string | null;
@@ -349,9 +357,9 @@ export class WorldFile {
   appendCalls(calls: CallRecord[]): void {
     const insert = this.db.prepare(
       `INSERT INTO llm_calls (tick, agent_id, provider, model, trigger, input_tokens, output_tokens, cached_tokens,
-        cost_usd, estimated, latency_ms, prompt, response, error)
+        cost_usd, estimated, plan, latency_ms, prompt, response, error)
        VALUES (@tick, @agentId, @provider, @model, @trigger, @inputTokens, @outputTokens, @cachedTokens,
-        @costUsd, @estimated, @latencyMs, @prompt, @response, @error)`,
+        @costUsd, @estimated, @plan, @latencyMs, @prompt, @response, @error)`,
     );
     const prune = this.db.prepare(
       `UPDATE llm_calls SET prompt = NULL, response = NULL
@@ -360,7 +368,7 @@ export class WorldFile {
     );
     const agents = new Set<string>();
     for (const c of calls) {
-      insert.run({ ...c, estimated: c.estimated ? 1 : 0 });
+      insert.run({ ...c, estimated: c.estimated ? 1 : 0, plan: c.plan ? 1 : 0 });
       agents.add(c.agentId);
     }
     for (const a of agents) prune.run(a, a);
@@ -369,7 +377,7 @@ export class WorldFile {
   listCalls(agentId: string, limit: number): LlmCallView[] {
     const rows = this.db
       .prepare(
-        `SELECT id, tick, provider, model, trigger, input_tokens, output_tokens, cost_usd, latency_ms, prompt, response, error
+        `SELECT id, tick, provider, model, trigger, input_tokens, output_tokens, cost_usd, plan, latency_ms, prompt, response, error
          FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT ?`,
       )
       .all(agentId, limit) as Record<string, unknown>[];
@@ -382,6 +390,7 @@ export class WorldFile {
       inputTokens: r.input_tokens as number,
       outputTokens: r.output_tokens as number,
       costUsd: r.cost_usd as number,
+      plan: Boolean(r.plan),
       latencyMs: r.latency_ms as number,
       prompt: (r.prompt as string | null) ?? null,
       response: (r.response as string | null) ?? null,
@@ -398,7 +407,8 @@ export class WorldFile {
     const rows = this.db
       .prepare(
         `SELECT agent_id, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens,
-          SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd
+          SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd,
+          SUM(CASE WHEN plan = 1 THEN cost_usd ELSE 0 END) AS plan_usd
          FROM llm_calls GROUP BY agent_id`,
       )
       .all() as {
@@ -407,6 +417,7 @@ export class WorldFile {
       input_tokens: number;
       output_tokens: number;
       cost_usd: number;
+      plan_usd: number;
     }[];
     return new Map(
       rows.map((r) => [
@@ -416,6 +427,7 @@ export class WorldFile {
           inputTokens: r.input_tokens,
           outputTokens: r.output_tokens,
           costUsd: Math.round(r.cost_usd * 1e6) / 1e6,
+          planUsd: Math.round(r.plan_usd * 1e6) / 1e6,
         },
       ]),
     );

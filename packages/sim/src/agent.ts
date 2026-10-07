@@ -138,7 +138,10 @@ export interface Agent {
   speech: { text: string; until: number } | null;
   /** Conversation turn counters by partner id, to wind long chats down. */
   convo: Record<string, { turns: number; lastTick: number }>;
-  /** AI spending on this agent's decisions (USD) and number of decisions. */
+  /**
+   * Cost of this agent's AI decisions (USD; Claude-plan calls at their API-price value) and number
+   * of decisions.
+   */
   spentUsd: number;
   decisions: number;
   /** Consecutive failed actions; after a few, the agent pauses before deciding again (saves AI calls). */

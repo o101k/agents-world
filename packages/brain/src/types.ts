@@ -8,6 +8,11 @@ export interface Usage {
   costUsd: number;
   /** True when the model had no known price and a pessimistic default was used. */
   estimated?: boolean;
+  /**
+   * Made on the owner's Claude subscription: `costUsd` is what the same tokens would cost at API
+   * prices (Claude Code's own estimate). Nothing is billed, but the spending cap still counts it.
+   */
+  coveredByPlan?: boolean;
 }
 
 export interface BrainResult {
