@@ -92,7 +92,7 @@ export interface BrainUsage {
   outputTokens: number;
   /** Cost of all the calls (USD), Claude-plan calls included at their API-price value. */
   costUsd: number;
-  /** The part of `costUsd` covered by the owner's Claude subscription (not billed, not capped). */
+  /** The part of `costUsd` covered by the owner's Claude subscription (not billed). */
   planUsd: number;
 }
 
@@ -139,9 +139,9 @@ export interface RunnerStatus {
   actualSpeed: number;
   /** Number of agents the world is currently waiting on to decide. */
   thinking: number;
-  /** Money spent on AI in this world (USD); this is what the spending cap counts. */
+  /** AI cost in this world (USD), Claude-plan calls at their API-price value; the cap counts it. */
   spentUsd: number;
-  /** API-price value of Claude-plan calls (USD): covered by the subscription, so not capped. */
+  /** The part of `spentUsd` covered by the owner's Claude subscription (not billed). */
   planUsd: number;
   capUsd: number;
   /** Paused because the spending cap was reached. */

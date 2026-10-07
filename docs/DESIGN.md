@@ -273,9 +273,9 @@ it means. The mock brain stocks more food in autumn and winter.
 models and prices in `settings.json`. The browser only sees hints like `sk-…abcd`. Each decision's
 cost travels with the logged input; the world total is `meta.spentUsd`. Before any paid decision
 the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event. Claude
-subscription calls don't count as paid: their API-price value goes to `meta.planUsd` instead of
-`meta.spentUsd`, is logged in `llm_calls` with `plan = 1`, and still counts in each person's own
-total (`agent.spentUsd`, the Brains dialog), where the UI marks it as covered by the plan.
+subscription calls count too, at their API-price value (the owner's choice: the cap doubles as a
+usage throttle). That value is also added to `meta.planUsd` (the plan's share of `spentUsd`) and
+logged in `llm_calls` with `plan = 1`, so the UI can mark it as covered by the plan.
 
 **Rate limits** (any provider): `limits.ts` turns an SDK's HTTP 429 into a `RateLimitError` with
 the provider's message, which limit ran out (from the `anthropic-ratelimit-*` / `x-ratelimit-*`

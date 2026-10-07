@@ -144,13 +144,12 @@ export class WorldRunner {
   /** Record spending that happened outside decisions (e.g. drafting a spawned person). */
   addSpend(costUsd: number, coveredByPlan = false): void {
     const cost = Math.max(0, costUsd);
-    if (coveredByPlan) {
-      this.meta = { ...this.meta, planUsd: this.meta.planUsd + cost };
-      this.file.writeMeta({ planUsd: this.meta.planUsd });
-    } else {
-      this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
-      this.file.writeMeta({ spentUsd: this.meta.spentUsd });
-    }
+    this.meta = {
+      ...this.meta,
+      spentUsd: this.meta.spentUsd + cost,
+      planUsd: this.meta.planUsd + (coveredByPlan ? cost : 0),
+    };
+    this.file.writeMeta({ spentUsd: this.meta.spentUsd, planUsd: this.meta.planUsd });
   }
 
   setCap(capUsd: number): void {
@@ -278,7 +277,7 @@ export class WorldRunner {
     }
   }
 
-  /** Would answering these requests spend money (a real AI, not instinct or the mock)? */
+  /** Would answering these requests cost anything (a real AI, not instinct or the mock)? */
   private needsPaidCall(requests: DecisionRequest[]): boolean {
     const byId = new Map(this.state.agents.map((a) => [a.id, a]));
     return requests.some((r) => {
@@ -286,7 +285,6 @@ export class WorldRunner {
       return (
         brain &&
         brain.provider !== 'mock' &&
-        brain.provider !== 'claude_plan' && // paid for by the owner's subscription, not the cap
         this.brains.has(brain.provider) &&
         !instinctApplies(r.perception)
       );
@@ -423,8 +421,12 @@ export class WorldRunner {
       const usage = routed.result?.usage;
       const cost = usage?.costUsd ?? 0;
       const plan = Boolean(usage?.coveredByPlan);
-      if (cost > 0 && plan) this.meta = { ...this.meta, planUsd: this.meta.planUsd + cost };
-      else if (cost > 0) this.meta = { ...this.meta, spentUsd: this.meta.spentUsd + cost };
+      if (cost > 0)
+        this.meta = {
+          ...this.meta,
+          spentUsd: this.meta.spentUsd + cost,
+          planUsd: this.meta.planUsd + (plan ? cost : 0),
+        };
       if (routed.provider !== 'mock' || routed.fallback || routed.error) {
         const trace = routed.result?.trace;
         this.batch.calls.push({

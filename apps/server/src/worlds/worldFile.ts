@@ -112,7 +112,7 @@ export interface CallRecord {
   cachedTokens: number;
   costUsd: number;
   estimated: boolean;
-  /** Covered by a Claude subscription: its cost is not billed, so it doesn't count toward the cap. */
+  /** Made on a Claude subscription: its cost is the API-price value, not billed. */
   plan: boolean;
   latencyMs: number;
   prompt: string | null;

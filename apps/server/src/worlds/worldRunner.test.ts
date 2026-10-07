@@ -179,7 +179,7 @@ describe('spending cap', () => {
 });
 
 describe('Claude subscription limit', () => {
-  it('ignores the spending cap, pauses when the plan limit is used up, and Play clears it', async () => {
+  it('pauses when the plan limit is used up, and Play clears it', async () => {
     let limited = false;
     let calls = 0;
     const plan = {
@@ -203,10 +203,8 @@ describe('Claude subscription limit', () => {
       brain: { provider: 'claude_plan', model: 'haiku', effort: 'standard' },
       applyToAll: true,
     });
-    runner.setCap(0); // the cap counts API money only
     await runUntil(runner, runner.state.tick + 30);
     expect(calls).toBeGreaterThan(0);
-    expect(runner.status().capReached).toBe(false);
 
     limited = true;
     runner.setRunning(true);
@@ -226,7 +224,7 @@ describe('Claude subscription limit', () => {
 });
 
 describe('Claude plan costs', () => {
-  it('records plan calls at API-price value without counting them toward the cap', async () => {
+  it('records plan calls at API-price value and counts them toward the cap', async () => {
     const plan = {
       id: 'claude_plan' as const,
       decide: async () => ({
@@ -243,12 +241,18 @@ describe('Claude plan costs', () => {
       brain: { provider: 'claude_plan', model: 'haiku', effort: 'standard' },
       applyToAll: true,
     });
-    runner.setCap(0);
-    await runUntil(runner, runner.state.tick + 30);
+    runner.setCap(0.01);
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    for (let i = 0; i < 300 && !runner.status().capReached; i++)
+      await new Promise((r) => setTimeout(r, 10));
     const status = runner.status();
-    expect(status.capReached).toBe(false);
-    expect(status.spentUsd).toBe(0);
-    expect(status.planUsd).toBeGreaterThan(0);
+    expect(status.capReached).toBe(true);
+    expect(status.running).toBe(false);
+    expect(status.spentUsd).toBeGreaterThanOrEqual(0.01);
+    expect(status.planUsd).toBeCloseTo(status.spentUsd, 6);
+    const events = wm.events(w.id, { limit: 20, minImportance: 5 });
+    expect(events.some((e) => e.kind === 'cap_reached')).toBe(true);
 
     const calls = runner.state.agents.flatMap((a) => wm.calls(w.id, a.id));
     expect(calls.length).toBeGreaterThan(0);
@@ -257,16 +261,15 @@ describe('Claude plan costs', () => {
       expect(c.costUsd).toBeCloseTo(0.002, 6);
     }
     const view = wm.brainsView(w.id);
-    expect(view.totals.costUsd).toBeCloseTo(view.totals.planUsd, 6);
-    expect(view.totals.planUsd).toBeCloseTo(status.planUsd, 6);
-    expect(view.people.some((p) => p.calls > 0 && p.costUsd > 0)).toBe(true);
+    expect(view.totals.costUsd).toBeCloseTo(status.spentUsd, 6);
+    expect(view.totals.planUsd).toBeCloseTo(status.spentUsd, 6);
     expect(runner.state.agents.some((a) => a.spentUsd > 0)).toBe(true);
 
     await wm.closeAll();
     const reopened = new WorldManager(dir, { brains: new BrainRouter([plan]) });
     await reopened.activate(w.id);
+    expect(reopened.active!.status().spentUsd).toBeCloseTo(status.spentUsd, 6);
     expect(reopened.active!.status().planUsd).toBeCloseTo(status.planUsd, 6);
-    expect(reopened.active!.status().spentUsd).toBe(0);
     await reopened.closeAll();
   });
 });

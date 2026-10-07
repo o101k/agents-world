@@ -313,7 +313,7 @@ export function BrainsModal({
         {showUsage && totals && totals.planUsd > 0 && (
           <p className="muted small brains-footnote" data-testid="brains-plan-note">
             Costs include {formatUsd(totals.planUsd)} of Claude plan use, priced at API rates by
-            Claude Code. Your plan covers it, so it doesn’t count toward the spending cap.
+            Claude Code. Your plan covers it, but it still counts toward the spending cap.
           </p>
         )}
         {showUsage && !showDead && dead > 0 && (

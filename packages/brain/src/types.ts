@@ -10,7 +10,7 @@ export interface Usage {
   estimated?: boolean;
   /**
    * Made on the owner's Claude subscription: `costUsd` is what the same tokens would cost at API
-   * prices (Claude Code's own estimate), but nothing is billed, so the spending cap ignores it.
+   * prices (Claude Code's own estimate). Nothing is billed, but the spending cap still counts it.
    */
   coveredByPlan?: boolean;
 }

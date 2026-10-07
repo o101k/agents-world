@@ -245,7 +245,7 @@ interface CliResult {
 
 /**
  * What one call used, from Claude Code's per-model totals (the top-level `usage` leaves out helper
- * calls). Cost is at API prices: the plan covers it, so it never counts toward the spending cap.
+ * calls). Cost is at API prices: the plan covers it, but the world's spending cap still counts it.
  */
 export function planUsage(out: CliResult): Usage {
   const perModel = Object.values(out.modelUsage ?? {});

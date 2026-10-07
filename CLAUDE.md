@@ -303,10 +303,11 @@ Newest first. Record every change to an agreed decision here.
   subscription were recorded at $0. They now carry the price Claude Code reports for each call
   (`total_cost_usd`, its estimate at API prices), and their tokens come from its per-model
   `modelUsage` (the top-level `usage` misses helper calls). That cost shows per call, per person,
-  in the Brains dialog totals and next to the spending meter, marked as covered by the plan. It is
-  kept apart (`planUsd`) and still doesn't count against the spending cap, since nothing is billed
-  and the plan's own limits already pause the world. Plan calls that ran but gave no answer are
-  counted too. Plan calls made before this change stay at $0.
+  in the Brains dialog totals and on the spending meter, marked as covered by the plan
+  (`planUsd` is the plan's share). The owner chose to **count it toward the spending cap** (this
+  replaces "plan calls cost $0 against the cap" from 2026-10-03), so the cap now also limits how
+  much plan usage a world takes; raise it to let a plan village run longer. Plan calls that ran
+  but gave no answer are counted too. Plan calls made before this change stay at $0.
 
 - **2026-10-07 — Typecheck with the native TypeScript compiler (owner request).** `npm run typecheck`
   runs `tsgo` (TypeScript 7 native preview, pinned to an exact version) instead of `tsc`, about 5×
