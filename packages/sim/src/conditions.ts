@@ -198,7 +198,7 @@ function igniteBuilding(ctx: Ctx, objectId: string, intensity: number): void {
   };
   state.conditions.push(c);
   const name = objLabel(state, o.id);
-  emit(ctx, 'fire', [], `${name} is on fire!`, 5);
+  emit(ctx, 'fire', [], `${name} is on fire!`, 5, [o.id]);
   // Everyone inside gets out, burnt and frightened.
   for (const a of state.agents) {
     if (!a.alive || a.indoorsId !== o.id) continue;
@@ -239,7 +239,7 @@ function burnDown(ctx: Ctx, fire: Condition): void {
   o.progress = 0.3;
   state.mapVersion += 1;
   const name = objLabel(state, o.id);
-  emit(ctx, 'fire', [], `${name} burnt down.`, 5);
+  emit(ctx, 'fire', [], `${name} burnt down.`, 5, [o.id]);
   for (const a of state.agents) {
     if (!a.alive || a.asleep || a.indoorsId || distanceToObject(o, a) > 8) continue;
     a.knowledge[o.id] = { lastSeenTick: state.tick };

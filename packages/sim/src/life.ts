@@ -540,6 +540,7 @@ function giveBirth(ctx: Ctx, mother: Agent): void {
     [child.id, mother.id, ...(father ? [father.id] : [])],
     `${fullName(mother)}${father ? ` and ${fullName(father)}` : ''} had ${label}!`,
     5,
+    mother.homeId ? [mother.homeId] : [],
   );
   // Childbirth is hard.
   mother.needs.energy = Math.max(0, mother.needs.energy - 40);
@@ -773,13 +774,18 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
         if (!r.name) r.name = fullName(b);
       }
       // Moving in together: whoever has no home joins the other's.
-      moveIn(state, agent, other);
+      const moved = moveIn(state, agent, other);
+      const home = moved ? state.map.objects.find((o) => o.id === moved.homeId) : undefined;
+      const movedNote = moved
+        ? ` ${fullName(moved.mover)} moved into ${home?.name ?? 'their home'}.`
+        : '';
       emit(
         ctx,
         'partnered',
         [other.id, agent.id],
-        `${fullName(other)} and ${fullName(agent)} are now partners.`,
+        `${fullName(other)} and ${fullName(agent)} are now partners.${movedNote}`,
         5,
+        moved ? [moved.homeId] : [],
       );
       remember(agent, tick, `${who} and I are partners now.`, 9, 'experience', [other.id]);
       remember(
@@ -1156,6 +1162,7 @@ function adopt(ctx: Ctx, adopter: Agent, child: Agent): void {
     [child.id, ...parents.map((p) => p.id)],
     `${names} adopted ${fullName(child)}.`,
     5,
+    adopter.homeId ? [adopter.homeId] : [],
   );
   for (const p of parents) {
     remember(
@@ -1213,8 +1220,8 @@ export function noticeOrphans(ctx: Ctx, dead: Agent): void {
 }
 
 /** Partners share a home: a homeless partner (or the one in a crowded house) moves in. */
-function moveIn(state: WorldState, a: Agent, b: Agent): void {
-  if (a.homeId === b.homeId && a.homeId) return;
+function moveIn(state: WorldState, a: Agent, b: Agent): { mover: Agent; homeId: string } | null {
+  if (a.homeId === b.homeId && a.homeId) return null;
   const crowd = (id: string | null) =>
     id ? state.agents.filter((x) => x.alive && x.homeId === id).length : 99;
   const [mover, host] = !a.homeId
@@ -1224,11 +1231,12 @@ function moveIn(state: WorldState, a: Agent, b: Agent): void {
       : crowd(a.homeId) >= crowd(b.homeId)
         ? [a, b]
         : [b, a];
-  if (!host.homeId) return;
+  if (!host.homeId) return null;
   mover.homeId = host.homeId;
   const owners = (state.owners[host.homeId] ??= []);
   if (!owners.includes(mover.id)) owners.push(mover.id);
   mover.knowledge[host.homeId] = { lastSeenTick: state.tick };
+  return { mover, homeId: host.homeId };
 }
 
 /** Requests nobody answered within two hours lapse. */
@@ -1317,6 +1325,7 @@ export function settleEstate(ctx: Ctx, dead: Agent): void {
     [dead.id, ...heirs.map((h) => h.id)],
     `${names} inherited what ${fullName(dead)} left${buildings}.`,
     4,
+    owned,
   );
   for (const h of heirs) {
     remember(h, state.tick, `I inherited what ${nameAsKnown(h, dead)} left me.`, 7, 'experience', [
