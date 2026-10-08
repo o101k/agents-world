@@ -393,6 +393,11 @@ typecheck, lint and Vitest on Ubuntu and macOS, a small `npm run stress` smoke r
 than half survive), then Playwright on Ubuntu with the report uploaded on failure. CI installs Node 24
 with `actions/setup-node` (version from `.nvmrc`). No AI provider
 is ever called in tests: everything uses the Mock brain or a fake HTTP server.
+The AI-driven suite (`tests/agentic`, Tester Army's `e2e` runner, Node 24.8+) is the one exception:
+its tests drive the real helper and browser with Claude Haiku 5.5 when `ANTHROPIC_API_KEY` is set,
+and are skipped without it. Its no-AI test always runs. In CI, a separate `agentic` job runs it
+after `check`; the replay cache is git-ignored, so CI starts without one and only reads it, and
+`tests/agentic/.e2e/` is uploaded on failure.
 
 ## Rendering (`apps/web/src/map/`)
 

@@ -225,6 +225,7 @@ npm run dev        # hot reload: helper on :4747, UI on http://localhost:5173
 npm run check      # typecheck + lint + unit and integration tests
 npm test           # unit and integration tests only (Vitest)
 npm run test:e2e   # end-to-end browser tests (Playwright)
+npm run test:agentic # AI-driven browser tests (Tester Army e2e; needs ANTHROPIC_API_KEY for the AI steps)
 npm run format     # Prettier (optional; CI doesn't check formatting)
 ```
 
@@ -251,6 +252,56 @@ For the end-to-end tests, install a browser once with `npx playwright install ch
   end-to-end tests on Linux (the Playwright report is attached to the run if they fail).
   The workflow installs Node 24 from `.nvmrc`.
 
+### AI-driven tests (Tester Army e2e)
+
+`tests/agentic` is a small suite built on Tester Army's open-source [`e2e`](https://tester.army/e2e)
+runner (docs: https://e2e.tester.army/docs). A test mixes three kinds of step:
+
+- **Locators and `expect`**, like Playwright. No AI, so they're free.
+- **`agent.act('plain-English goal')`**: an AI drives the browser. The clicks are recorded in a
+  replay cache (`tests/agentic/.e2e/cache/`), so later runs replay them without calling the model
+  until the UI changes.
+- **`agent.assert` and `agent.extract`**: the AI judges or reads the screen. These always make a
+  live call.
+
+The tests are `tests/agentic/*.e2e.ts`. `worlds.e2e.ts` makes a world with locators and needs no AI.
+`villagers.e2e.ts` creates a world from a sentence, checks the map with a vision check, and opens
+Maren Holt's inspector.
+
+Setup and runs (from the repo root):
+
+```bash
+npm run install-browser -w @aw/agentic-tests   # once: the Chromium that e2e's Playwright pins
+export ANTHROPIC_API_KEY=sk-ant-...            # for the AI-driven tests
+npm run test:agentic                           # builds the UI, then runs the suite
+npm run test:agentic -- --headed               # watch the browser
+npm run test:agentic -- --no-cache             # ignore recorded replays
+npm run test:agentic -- villagers.e2e.ts       # one file
+npm run test:agentic -- --grep Maren           # tests whose title matches
+```
+
+e2e starts its own helper on a free port with a throwaway data folder, so your real worlds are
+never touched. It needs Node.js 24.8 or newer, which `.nvmrc` already gives you.
+
+The AI runs on **Claude Haiku 5.5** (`claude-haiku-5-5`, the cheapest Claude model here), with the
+key read from `ANTHROPIC_API_KEY` in your environment. e2e doesn't load `.env` files and doesn't
+use the keys saved in Agents World's settings. Set `E2E_MODEL=<model id>` to try another Claude
+model. e2e can't use a Claude Pro or Max subscription, so the key is needed. To use another
+provider, change the model in `tests/agentic/model.ts`. Without the key the AI tests are skipped
+and the no-AI test still runs. A full run with the key costs a few cents at most.
+e2e's anonymous telemetry is switched off in the package scripts.
+
+Results are git-ignored: `tests/agentic/.e2e/report.json`, screenshots and traces in
+`tests/agentic/.e2e/artifacts/`, and the helper's log in `tests/agentic/.e2e/logs/helper.log`.
+Other e2e commands go through the same package, for example
+`npm run e2e -w @aw/agentic-tests -- cache ls`.
+
+In CI, the `agentic` job always runs the no-AI test. The AI tests run only when the repository has
+an `ANTHROPIC_API_KEY` Actions secret (Settings → Secrets and variables → Actions). GitHub doesn't
+give secrets to pull requests from forks, so those runs skip the AI tests. In CI, e2e retries a
+failed test once and only reads the replay cache. The report is attached to the run when something
+fails.
+
 ### Project layout
 
 ```
@@ -260,6 +311,7 @@ packages/brain    the AI layer: providers, prompts, mock brain, pricing
 apps/server       the local helper: saves worlds, runs the simulation, serves the UI
 apps/web          the browser UI: React panels + PixiJS map
 tests/e2e         Playwright tests
+tests/agentic     AI-driven browser tests (Tester Army e2e)
 turbo.json        task pipeline (Turborepo): what runs, in what order, what is cached
 docs/DESIGN.md    design doc
 ```

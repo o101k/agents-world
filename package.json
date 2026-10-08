@@ -10,7 +10,8 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "tests/agentic"
   ],
   "scripts": {
     "start": "turbo run build --filter=@aw/web && npm run start -w @aw/server",
@@ -18,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "turbo run build --filter=@aw/web && playwright test",
+    "test:agentic": "turbo run build --filter=@aw/web && npm run test -w @aw/agentic-tests --",
     "typecheck": "turbo run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

@@ -7,6 +7,7 @@ dist/
 *.sqlite-shm
 test-results/
 playwright-report/
+.e2e/
 .env
 .DS_Store
 

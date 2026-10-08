@@ -41,6 +41,7 @@ npm run check        # typecheck + lint + unit/integration tests — run before 
 
 npm test             # Vitest unit and integration tests
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
+npm run test:agentic # Tester Army e2e, AI-driven (AI steps need ANTHROPIC_API_KEY; skipped without it)
 npm run stress       # headless big-village stress test (args: adults children days mapSize)
 ```
 
@@ -299,6 +300,23 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-10-08 — AI-driven tests with Tester Army e2e (owner request).** New workspace package
+  `tests/agentic` (`@aw/agentic-tests`) runs Tester Army's open-source `e2e` runner (pinned exactly:
+  `e2e` 0.18.0, `@e2e-dev/web` 0.13.0; pre-1.0). Tests are `tests/agentic/*.e2e.ts`: locators with
+  `expect` (no AI), `agent.act` (an AI drives the browser; recorded clicks replay from
+  `tests/agentic/.e2e/cache/` without a model call until the UI changes), and `agent.assert` /
+  `agent.extract` (always a live AI call). `worlds.e2e.ts` is no-AI; `villagers.e2e.ts` is AI.
+  The model is Claude Haiku 5.5 (`claude-haiku-5-5`, $0.10/$0.50 per million tokens) via the Vercel
+  AI SDK, read from `ANTHROPIC_API_KEY` (`E2E_MODEL` overrides it). e2e doesn't use the keys saved in
+  Agents World's settings and can't use a Claude Pro/Max plan. Without the key the AI tests are
+  skipped and the no-AI test runs. e2e's telemetry is off (`E2E_TELEMETRY_DISABLED=1` in the package
+  scripts). e2e needs Node 24.8+, which `.nvmrc` gives. Run it with `npm run test:agentic`; results
+  go to `tests/agentic/.e2e/` (git-ignored). CI: a new `agentic` job after `check` always runs the
+  no-AI test, and the AI tests run only when the repository has an `ANTHROPIC_API_KEY` secret (not
+  for forks). In CI e2e retries once and only reads the replay cache. The replay cache stays
+  git-ignored for now: committing it would let CI replay clicks without model calls (asserts still
+  call the model). The AI tests haven't run with a real key yet; the owner runs them on his Mac.
 
 - **2026-10-08 — Back to npm and Node, keep Turborepo (owner request).** Tester Army's `e2e`
   test runner (https://tester.army/e2e) only runs on Node.js 24.8+: its TypeScript loader needs
