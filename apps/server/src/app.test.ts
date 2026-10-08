@@ -286,7 +286,13 @@ describe('HTTP API', () => {
       outputTokens: 0,
       costUsd: 0,
     });
-    expect(first.totals).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+    expect(first.totals).toEqual({
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      planUsd: 0,
+    });
 
     // Change three at once: the answer already shows the change.
     const put = await app.server.inject({

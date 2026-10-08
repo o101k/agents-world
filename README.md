@@ -91,7 +91,10 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
    below), or in a running world with **🧠 Brains** (one person, a few, or everyone at once).
 
 Villagers then share your plan's 5-hour and weekly limits with your own Claude use. It costs no
-extra money and the spending cap doesn't apply. When the limit runs out, time pauses and resumes by
+extra money, but each call is priced at what it would cost on an API key (Claude Code's own
+estimate) and that counts toward the world's spending cap, so raise the cap to let a plan village
+run longer. **🧠 Brains** and the inspector mark that cost as covered by your plan. When the limit
+runs out, time pauses and resumes by
 itself when the limit resets (or press Play to try sooner). Agents World never sees your Claude
 login: it runs the official `claude` command, which Anthropic allows for your own projects, and
 never uses `ANTHROPIC_API_KEY` for these calls. Each decision takes a few seconds longer than with an

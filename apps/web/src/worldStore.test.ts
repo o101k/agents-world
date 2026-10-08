@@ -8,6 +8,7 @@ const runner: RunnerStatus = {
   actualSpeed: 5,
   thinking: 0,
   spentUsd: 0,
+  planUsd: 0,
   capUsd: 1,
   capReached: false,
   rateLimit: null,

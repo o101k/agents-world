@@ -289,7 +289,10 @@ them up front so the modules could be built in parallel.
   environment so it always uses the subscription login. `--bare` is never used (it ignores
   subscription logins). The helper never reads or stores the login: Anthropic forbids apps from
   using subscription tokens directly but allows running the CLI or Agent SDK in your own projects.
-  Usage is recorded as tokens with cost $0. `checkClaudeCli` runs `claude --version` and
+  Usage comes from the result's `modelUsage` (per-model tokens; the top-level `usage` covers the
+  main loop only) and its cost from `total_cost_usd` (Claude Code's own estimate at API prices),
+  marked `coveredByPlan`. A result with `is_error` that still used tokens throws `NoDecisionError`
+  carrying that usage, so it is counted. `checkClaudeCli` runs `claude --version` and
   `claude auth status` (no AI call) at startup and on **Check**; the provider exists only when it
   is signed in with a Claude account. A used-up plan limit throws `RateLimitError` (with the reset
   time when the message has one); concurrency is 3 processes.
@@ -302,7 +305,9 @@ them up front so the modules could be built in parallel.
 models and prices in `settings.json`. The browser only sees hints like `sk-…abcd`. Each decision's
 cost travels with the logged input; the world total is `meta.spentUsd`. Before any paid decision
 the runner checks it against `meta.capUsd` and pauses with a `cap_reached` event. Claude
-subscription calls don't count as paid.
+subscription calls count too, at their API-price value (the owner's choice: the cap doubles as a
+usage throttle). That value is also added to `meta.planUsd` (the plan's share of `spentUsd`) and
+logged in `llm_calls` with `plan = 1`, so the UI can mark it as covered by the plan.
 
 **Rate limits** (any provider): `limits.ts` turns an SDK's HTTP 429 into a `RateLimitError` with
 the provider's message, which limit ran out (from the `anthropic-ratelimit-*` / `x-ratelimit-*`

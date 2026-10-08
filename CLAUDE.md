@@ -322,6 +322,16 @@ Newest first. Record every change to an agreed decision here.
   for and can pay for to the end, so none are left half-built. In 8-day mock runs of 16 people
   each village now builds a stall or pen, hires, and sometimes holds a meeting; deaths unchanged.
 
+- **2026-10-07 — Claude-plan calls show their real cost (owner request).** Calls on the Claude
+  subscription were recorded at $0. They now carry the price Claude Code reports for each call
+  (`total_cost_usd`, its estimate at API prices), and their tokens come from its per-model
+  `modelUsage` (the top-level `usage` misses helper calls). That cost shows per call, per person,
+  in the Brains dialog totals and on the spending meter, marked as covered by the plan
+  (`planUsd` is the plan's share). The owner chose to **count it toward the spending cap** (this
+  replaces "plan calls cost $0 against the cap" from 2026-10-03), so the cap now also limits how
+  much plan usage a world takes; raise it to let a plan village run longer. Plan calls that ran
+  but gave no answer are counted too. Plan calls made before this change stay at $0.
+
 - **2026-10-07 — Typecheck with the native TypeScript compiler (owner request).** `npm run typecheck`
   runs `tsgo` (TypeScript 7 native preview, pinned to an exact version) instead of `tsc`, about 5×
   faster (11.6 s → 2.1 s for all five projects). `typescript` 6 stays for ESLint, Vite and editors.
