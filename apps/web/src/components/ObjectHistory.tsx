@@ -63,7 +63,7 @@ export function ObjectHistory({
         </p>
       )}
       <h3>History</h3>
-      <ol className="event-list object-history">
+      <ol className="object-history">
         {data.founded && (
           <HistoryRow
             tick={data.foundedTick}
@@ -82,7 +82,7 @@ export function ObjectHistory({
       {data.recent.length > 0 && (
         <>
           <h3>Latest use</h3>
-          <ol className="event-list object-history">
+          <ol className="object-history">
             {data.recent.map((e) => (
               <HistoryRow key={e.id ?? `${e.tick}-${e.text}`} event={e} onPick={onPick} />
             ))}
