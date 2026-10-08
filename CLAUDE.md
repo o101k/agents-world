@@ -301,6 +301,10 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-08 — Opus as the Claude Code advisor (owner request).** `.claude/settings.json` (project
+  settings, committed) sets `"advisorModel": "opus"`, so Claude Code sessions in this repo consult
+  Opus through the advisor tool.
+
 - **2026-10-08 — AI-driven tests with Tester Army e2e (owner request).** New workspace package
   `tests/agentic` (`@aw/agentic-tests`) runs Tester Army's open-source `e2e` runner (pinned exactly:
   `e2e` 0.18.0, `@e2e-dev/web` 0.13.0; pre-1.0). Tests are `tests/agentic/*.e2e.ts`: locators with
