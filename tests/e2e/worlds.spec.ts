@@ -162,6 +162,16 @@ test('world events, timeline search and a life story', async ({ page }) => {
   // Search the history.
   await page.getByLabel('Search the timeline').fill('fire');
   await expect(page.locator('.event-list .event').first()).toContainText('on fire');
+
+  // The burning house's history: open it from its timeline entry.
+  await page
+    .locator('.event-list .event', { hasText: 'on fire' })
+    .first()
+    .locator('.event-text')
+    .click();
+  const selected = page.locator('.selection');
+  await expect(selected).toContainText('Part of the village since it was founded.');
+  await expect(selected.locator('.object-history').first()).toContainText('is on fire!');
   await page.getByLabel('Search the timeline').fill('zzqqxx');
   await expect(page.locator('.event-list')).toContainText('Nothing in the history matches');
   await page.getByLabel('Search the timeline').fill('');

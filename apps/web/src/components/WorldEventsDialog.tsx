@@ -193,7 +193,14 @@ export function WorldEventsDialog({
 }
 
 /** What's going on in the world right now, with time left. */
-export function ConditionsBar({ map }: { map: WorldMap | null }) {
+export function ConditionsBar({
+  map,
+  onPickObject,
+}: {
+  map: WorldMap | null;
+  /** Clicking a fire shows the burning building. */
+  onPickObject: (id: string) => void;
+}) {
   const past = useWorld((s) => s.replay?.view);
   const liveConditions = useWorld((s) => s.conditions);
   const liveTick = useWorld((s) => s.tick);
@@ -215,10 +222,24 @@ export function ConditionsBar({ map }: { map: WorldMap | null }) {
           c.kind === 'fire'
             ? `${target?.name ?? 'A building'} is burning`
             : `${c.intensity >= 0.8 ? 'Severe ' : c.intensity <= 0.3 ? 'Mild ' : ''}${info.label.toLowerCase()}`;
-        return (
-          <span key={c.id} className={`condition condition-${c.kind}`} title={info.blurb}>
+        const body = (
+          <>
             <span aria-hidden>{info.icon}</span> {label[0]!.toUpperCase() + label.slice(1)} ·{' '}
             <span className="muted">{left(c)}</span>
+          </>
+        );
+        return target ? (
+          <button
+            key={c.id}
+            className={`condition condition-${c.kind} linkish`}
+            title={`${info.blurb} Click to see ${target.name ?? 'the building'}.`}
+            onClick={() => onPickObject(target.id)}
+          >
+            {body}
+          </button>
+        ) : (
+          <span key={c.id} className={`condition condition-${c.kind}`} title={info.blurb}>
+            {body}
           </span>
         );
       })}

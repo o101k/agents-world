@@ -77,6 +77,16 @@ const MIGRATIONS: string[] = [
   ALTER TABLE llm_calls ADD COLUMN plan INTEGER NOT NULL DEFAULT 0;
   UPDATE llm_calls SET plan = 1 WHERE provider = 'claude_plan';
   `,
+  `
+  -- Which map objects each event happened to or at: an object's history.
+  CREATE TABLE IF NOT EXISTS event_objects (
+    object_id TEXT NOT NULL,
+    event_id  INTEGER NOT NULL,
+    PRIMARY KEY (object_id, event_id)
+  ) WITHOUT ROWID;
+  -- A world that already has a history knows its objects' day-to-day use from now on.
+  INSERT INTO meta (key, value) SELECT 'objectHistorySince', value FROM meta WHERE key = 'tick' ON CONFLICT(key) DO NOTHING;
+  `,
 ];
 
 const META_KEYS = [
@@ -123,6 +133,47 @@ export interface CallRecord {
 /** Keep snapshots from the last two in-game days, plus one per day (midnight) and the first. */
 const SNAPSHOT_KEEP_TICKS = 2 * TICKS_PER_DAY;
 
+/** A stored event row (`events` table). */
+interface EventRow {
+  id: number;
+  tick: number;
+  kind: string;
+  actors: string;
+  payload: string;
+}
+
+function toWorldEvent(r: EventRow): WorldEvent {
+  const p = JSON.parse(r.payload) as {
+    text?: string;
+    importance?: number;
+    name?: string;
+    objects?: string[];
+  };
+  return {
+    id: r.id,
+    tick: r.tick,
+    kind: r.kind as WorldEvent['kind'],
+    actors: JSON.parse(r.actors) as string[],
+    text: p.text ?? (r.kind === 'world_created' ? `The world "${p.name}" was created.` : r.kind),
+    importance: p.importance ?? 3,
+    ...(p.objects?.length ? { objects: p.objects } : {}),
+  };
+}
+
+/** Matches `name` as a whole in a text ("House 1" doesn't match "House 12"). */
+function namePattern(name: string): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`${escaped}(?!\\d)`);
+}
+
+/** An object's stored history (see `WorldFile.objectHistory`). */
+export interface ObjectHistoryRows {
+  milestones: WorldEvent[];
+  recent: WorldEvent[];
+  uses: number;
+  regulars: { agentId: string; count: number }[];
+}
+
 export class WorldFile {
   private constructor(
     readonly path: string,
@@ -167,6 +218,37 @@ export class WorldFile {
         this.db.pragma(`user_version = ${v + 1}`);
       })();
     }
+    // A world saved before object history (migration 4) gets its old building and fire events
+    // matched to their buildings. Never let this stop the world from opening.
+    if (current >= 1 && current < 4) {
+      try {
+        this.backfillObjectEvents();
+      } catch (err) {
+        console.error(`Could not recover object history for ${this.path}:`, err);
+      }
+    }
+  }
+
+  /** Links existing building and fire events to the buildings they name (by name, once). */
+  private backfillObjectEvents(): void {
+    const named = this.loadLatestSnapshot()
+      .map.objects.filter((o) => o.name)
+      .map((o) => ({ id: o.id, pattern: namePattern(o.name!) }));
+    if (!named.length) return;
+    const events = this.db
+      .prepare("SELECT id, payload FROM events WHERE kind IN ('built', 'fire')")
+      .all() as { id: number; payload: string }[];
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO event_objects (object_id, event_id) VALUES (?, ?)',
+    );
+    this.db.transaction(() => {
+      for (const e of events) {
+        const text = (JSON.parse(e.payload) as { text?: string }).text ?? '';
+        for (const o of named) {
+          if (o.pattern.test(text)) insert.run(o.id, e.id);
+        }
+      }
+    })();
   }
 
   readMeta(): WorldMeta {
@@ -286,14 +368,23 @@ export class WorldFile {
     const stmt = this.db.prepare(
       'INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)',
     );
+    const objectStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO event_objects (object_id, event_id) VALUES (?, ?)',
+    );
     return events.map((e) => {
       const info = stmt.run(
         e.tick,
         e.kind,
         JSON.stringify(e.actors),
-        JSON.stringify({ text: e.text, importance: e.importance }),
+        JSON.stringify({
+          text: e.text,
+          importance: e.importance,
+          ...(e.objects?.length ? { objects: e.objects } : {}),
+        }),
       );
-      return { ...e, id: Number(info.lastInsertRowid) };
+      const id = Number(info.lastInsertRowid);
+      for (const objectId of e.objects ?? []) objectStmt.run(objectId, id);
+      return { ...e, id };
     });
   }
 
@@ -340,18 +431,69 @@ export class WorldFile {
       actors: string;
       payload: string;
     }[];
-    return rows.map((r) => {
-      const p = JSON.parse(r.payload) as { text?: string; importance?: number; name?: string };
-      return {
-        id: r.id,
-        tick: r.tick,
-        kind: r.kind as WorldEvent['kind'],
-        actors: JSON.parse(r.actors) as string[],
-        text:
-          p.text ?? (r.kind === 'world_created' ? `The world "${p.name}" was created.` : r.kind),
-        importance: p.importance ?? 3,
-      };
-    });
+    return rows.map(toWorldEvent);
+  }
+
+  /**
+   * An object's history up to `atOrBeforeTick` (all of it if omitted): lasting milestones
+   * (importance 3+, oldest first, up to 200), the latest 20 routine uses, how many uses in all,
+   * and who used it most.
+   */
+  objectHistory(objectId: string, atOrBeforeTick?: number): ObjectHistoryRows {
+    const params = { objectId, atOrBeforeTick: atOrBeforeTick ?? null };
+    const importance = "COALESCE(json_extract(e.payload, '$.importance'), 3)";
+    const from = `FROM event_objects o JOIN events e ON e.id = o.event_id
+      WHERE o.object_id = @objectId AND (@atOrBeforeTick IS NULL OR e.tick <= @atOrBeforeTick)`;
+    const milestones = this.db
+      .prepare(
+        `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} >= 3
+         ORDER BY e.id DESC LIMIT 200`,
+      )
+      .all(params) as EventRow[];
+    const recent = this.db
+      .prepare(
+        `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} < 3
+         ORDER BY e.id DESC LIMIT 20`,
+      )
+      .all(params) as EventRow[];
+    const uses = this.db
+      .prepare(`SELECT COUNT(*) AS n ${from} AND ${importance} < 3`)
+      .get(params) as { n: number };
+    const regulars = this.db
+      .prepare(
+        `SELECT json_extract(e.actors, '$[0]') AS agentId, COUNT(*) AS count ${from}
+         AND ${importance} < 3 AND json_extract(e.actors, '$[0]') IS NOT NULL
+         GROUP BY agentId ORDER BY count DESC, MIN(e.id) LIMIT 5`,
+      )
+      .all(params) as { agentId: string; count: number }[];
+    return {
+      milestones: milestones.reverse().map(toWorldEvent),
+      recent: recent.map(toWorldEvent),
+      uses: uses.n,
+      regulars,
+    };
+  }
+
+  private foundingIds: Set<string> | null = null;
+
+  /** Ids of the map objects that were there when the world was created (its first snapshot). */
+  foundingObjectIds(): Set<string> {
+    if (!this.foundingIds) {
+      const row = this.db.prepare('SELECT state FROM snapshots ORDER BY tick ASC LIMIT 1').get() as
+        { state: Buffer } | undefined;
+      const state = row
+        ? deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')))
+        : null;
+      this.foundingIds = new Set(state?.map.objects.map((o) => o.id) ?? []);
+    }
+    return this.foundingIds;
+  }
+
+  /** The tick from which object history is complete for day-to-day use (0 if always). */
+  objectHistorySince(): number {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'objectHistorySince'").get() as
+      { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as number) : 0;
   }
 
   appendCalls(calls: CallRecord[]): void {
