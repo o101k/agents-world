@@ -55,6 +55,11 @@ export interface WorldEvent {
   tick: number;
   kind: EventKind;
   actors: string[];
+  /**
+   * Ids of the map objects it happened to or at (a house built or burnt, a bush picked, the
+   * market traded at). An object's history is every event that names it here.
+   */
+  objects?: string[];
   text: string;
   importance: number;
 }

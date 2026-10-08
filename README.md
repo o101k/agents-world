@@ -66,6 +66,12 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
 - **People**: the People tab lists everyone; click a person (on the map or in the list) to inspect
   their thoughts, plan, needs, belongings, recent experiences, personality and skills. **Follow**
   keeps the camera on them.
+- **Places and things**: click a house, tree, bush, field, the well, the bakery… to see its
+  **history**: whether it was there when the village was founded or who built it and when, then
+  every lasting change (fires, rebuilding, inheritance, births and deaths of the people who live
+  there, someone moving in), how often it has been used and by whom most, and its latest uses.
+  Times jump the map to that moment; names open the person. Worlds made before this was added
+  have their building and fire history recovered; day-to-day use counts from the upgrade on.
 - **Timeline** (bottom): everything that happens, newest first. Filter to important events or to
   the selected person, or **search** the whole history (e.g. `fire`, `Maren`, `born`); click an
   entry to jump to that person.

@@ -112,5 +112,10 @@ describe('growing the village: save and resume stay deterministic', () => {
     expect(kinds).toContain('quarried');
     expect(kinds).toContain('meeting');
     expect(kinds).toContain('job');
+
+    // New objects get a history: their events carry the object's id.
+    const tagged = new Set(eventsA.flatMap((e) => e.objects ?? []));
+    for (const o of a.map.objects.filter((x) => ['stall', 'pen'].includes(x.kind)))
+      expect(tagged).toContain(o.id);
   });
 });

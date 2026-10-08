@@ -295,6 +295,45 @@ export interface StoryResponse {
   entries: StoryEntry[];
 }
 
+export const ObjectHistoryQuery = z.object({
+  /** The object as it was at this past tick (replay). Omitted = now. */
+  tick: z.coerce.number().int().min(0).optional(),
+});
+
+/** Someone named in an object's history. */
+export interface ObjectPerson {
+  id: string;
+  name: string;
+}
+
+/**
+ * What the village's history knows about one map object (a house, bush, tree, field, the
+ * market…): how it came to be and what has happened to it since. When replaying, everything is
+ * as it was at that moment.
+ */
+export interface ObjectHistoryResponse {
+  objectId: string;
+  /** It was part of the village when the world was created (otherwise it was made later). */
+  founded: boolean;
+  /** When the world was created. */
+  foundedTick: number;
+  /**
+   * Its history is complete from this tick on. Later than `foundedTick` for worlds made before
+   * object history was kept: only building and fires were recovered from before then.
+   */
+  recordedSince: number;
+  /** People who live there (alive). */
+  residents: ObjectPerson[];
+  /** Lasting changes (importance 3+), oldest first: built, burnt, rebuilt, inherited, births… */
+  milestones: WorldEvent[];
+  /** Day-to-day use (importance 1–2), newest first: the latest 20. */
+  recent: WorldEvent[];
+  /** Day-to-day uses in all. */
+  uses: number;
+  /** Who used it most: up to 5, most first. */
+  regulars: (ObjectPerson & { count: number })[];
+}
+
 export const EventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
   q: z.string().trim().max(100).optional(),

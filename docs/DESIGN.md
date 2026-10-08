@@ -57,7 +57,19 @@ the simulation understands.
   the new rules, so very old stretches of an upgraded world may differ from what happened.
 
 World file (SQLite, WAL, migrations via `PRAGMA user_version`): `meta`, `snapshots` (gzipped JSON,
-pruned to one per day after two days), `tick_inputs`, `events`, `llm_calls`.
+pruned to one per day after two days), `tick_inputs`, `events`, `event_objects`, `llm_calls`.
+
+**Object history.** An event names the people it involves (`actors`) and the map objects it
+happened to or at (`objects`: a house built or burnt, a bush picked, the market traded at, the
+home a baby was born into). The sim's `emit` takes them as its last argument, so anything new
+only has to pass its object's id to get a history. The world file indexes them in
+`event_objects (object_id, event_id)`. `GET /api/worlds/:id/objects/:objectId/history` returns
+whether the object was in the world's first snapshot (founded with the village) or made later,
+its lasting changes (importance ≥ 3, oldest first), its latest 20 day-to-day uses, a use count,
+the five people who used it most and who lives there; with `?tick=` all of it as it was then.
+Object ids are never reused. Worlds upgraded to this (migration 4) get their `built` and `fire`
+events matched to buildings by name, and meta `objectHistorySince` marks when day-to-day use
+started being recorded.
 
 ## World state (v9)
 
@@ -356,6 +368,7 @@ in/out, cost) and the dialog polls it every 3 s; bulk changes are one `set_brain
 | POST   | `/api/worlds/:id/spawn`                     | `{ description, name?, sex?, age? }` → `{ agentId }`               |
 | POST   | `/api/worlds/:id/world-event`               | `{ kind, intensity?, hours?, targetId? }`                          |
 | GET    | `/api/worlds/:id/agents/:agentId/story`     | `{ entries }`: their events + diary/chapters, oldest first         |
+| GET    | `/api/worlds/:id/objects/:objectId/history` | `?tick` → a map object's history (`ObjectHistoryResponse`)         |
 | GET    | `/api/worlds/:id/replay`                    | `?tick&mapVersion` → the world then (map only if it differs)       |
 | GET    | `/api/worlds/:id/replay/agents/:agentId`    | `?tick` → a person as they were then                               |
 | DELETE | `/api/worlds/:id`                           | delete permanently                                                 |

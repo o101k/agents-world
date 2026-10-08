@@ -149,6 +149,7 @@ export function finishTendAnimals(ctx: Ctx, agent: Agent, action: TaskAction): v
       ? `${who} tended the animals at ${name}: ${produce}.`
       : `${who} tended the animals at ${name}.`,
     1,
+    [o.id],
   );
 }
 
@@ -177,15 +178,15 @@ export function animalsTick(ctx: Ctx): void {
         const owner = findAgent(state, ownerId);
         if (owner?.alive) remember(owner, state.tick, `One of my ${kind} strayed from ${name}.`, 5);
       }
-      emit(ctx, 'animals', owners, `A ${kind} strayed from ${name}.`, 2);
+      emit(ctx, 'animals', owners, `A ${kind} strayed from ${name}.`, 2, [id]);
     } else if (idle <= DAY) {
       if (pen.hens >= 2 && pen.hens + pen.sheep < PEN_CAPACITY && ctx.rng.chance(0.25)) {
         pen.hens += 1;
-        emit(ctx, 'animals', owners, `A new hen hatched at ${name}.`, 1);
+        emit(ctx, 'animals', owners, `A new hen hatched at ${name}.`, 1, [id]);
       }
       if (pen.sheep >= 2 && pen.hens + pen.sheep < PEN_CAPACITY && ctx.rng.chance(0.15)) {
         pen.sheep += 1;
-        emit(ctx, 'animals', owners, `A lamb was born at ${name}.`, 1);
+        emit(ctx, 'animals', owners, `A lamb was born at ${name}.`, 1, [id]);
       }
     }
   }

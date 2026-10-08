@@ -321,6 +321,18 @@ Newest first. Record every change to an agreed decision here.
   ones like meetings were swallowed by small talk) and only starts a building it has the skill
   for and can pay for to the end, so none are left half-built. In 8-day mock runs of 16 people
   each village now builds a stall or pen, hires, and sometimes holds a meeting; deaths unchanged.
+  New fields, buildings, pens, stalls and quarried rocks get object histories like everything else.
+
+- **2026-10-07 — Every map object has a history (owner request).** Clicking a house, bush, tree,
+  field, the well, a workshop… shows whether it was there when the village was founded or who
+  built it, then its lasting changes (built, burnt, rebuilt, inherited, someone moving in, births
+  and deaths of the people living there), how often it was used and by whom most, and its latest
+  uses. Events now carry the ids of the objects they're about (`WorldEvent.objects`, the last
+  argument of the sim's `emit`), indexed per world file; new kinds of object get a history by
+  passing their id. Building work now logs each stretch ("worked on House 3 (40% done)", importance
+  2), and a partner moving in is named in the `partnered` event. Worlds made before this keep
+  their building and fire history (matched by name); their day-to-day use is recorded from the
+  upgrade on. Object ids must never be reused within a world.
 
 - **2026-10-07 — Claude-plan calls show their real cost (owner request).** Calls on the Claude
   subscription were recorded at $0. They now carry the price Claude Code reports for each call

@@ -4,7 +4,14 @@ import { api } from '../api.ts';
 import { useWorld } from '../worldStore.ts';
 
 /** Live timeline of what's happening. Newest first. */
-export function EventLog({ onPickAgent }: { onPickAgent: (id: string) => void }) {
+export function EventLog({
+  onPickAgent,
+  onPickObject,
+}: {
+  onPickAgent: (id: string) => void;
+  /** Entries about a place with nobody in them (a fire) open the place. */
+  onPickObject: (id: string) => void;
+}) {
   const events = useWorld((s) => s.events);
   const selection = useWorld((s) => s.selection);
   const [importantOnly, setImportantOnly] = useState(false);
@@ -118,6 +125,10 @@ export function EventLog({ onPickAgent }: { onPickAgent: (id: string) => void })
             </button>
             {e.actors[0] ? (
               <button className="event-text linkish" onClick={() => onPickAgent(e.actors[0]!)}>
+                {e.text}
+              </button>
+            ) : e.objects?.[0] ? (
+              <button className="event-text linkish" onClick={() => onPickObject(e.objects![0]!)}>
                 {e.text}
               </button>
             ) : (

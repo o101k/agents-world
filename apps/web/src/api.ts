@@ -25,6 +25,7 @@ import type {
   StoryResponse,
   ReplayResponse,
   WorldEventRequest,
+  ObjectHistoryResponse,
 } from '@aw/shared';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -99,6 +100,11 @@ export const api = {
     request<AgentResponse>('GET', `/api/worlds/${id}/replay/agents/${agentId}?tick=${tick}`),
   story: (id: string, agentId: string) =>
     request<StoryResponse>('GET', `/api/worlds/${id}/agents/${agentId}/story`),
+  objectHistory: (id: string, objectId: string, tick?: number) =>
+    request<ObjectHistoryResponse>(
+      'GET',
+      `/api/worlds/${id}/objects/${encodeURIComponent(objectId)}/history${tick === undefined ? '' : `?tick=${tick}`}`,
+    ),
   providerModels: (provider: string) =>
     request<{ models: string[] }>('GET', `/api/providers/${provider}/models`),
 };

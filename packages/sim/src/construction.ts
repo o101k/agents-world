@@ -100,7 +100,9 @@ export function startBuild(ctx: Ctx, agent: Agent, intent: BuildIntent, arrived:
     agent.knowledge[id] = { lastSeenTick: state.tick };
     invalidateMapCaches(map);
     state.mapVersion += 1;
-    emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4);
+    emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4, [
+      site.id,
+    ]);
     remember(agent, state.tick, `I started building ${site.name}.`, 7);
   }
   const tiles = site.door ? [{ x: site.door.x, y: site.door.y + 1 }] : interactionTiles(map, site);
@@ -153,22 +155,25 @@ export function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
     if (site.kind === 'stall' && !state.stalls[site.id]) state.stalls[site.id] = { stock: {} };
     if (site.burntTick !== undefined) {
       delete site.burntTick;
-      emit(ctx, 'built', [agent.id], `${fullName(agent)} finished rebuilding ${site.name}!`, 5);
+      emit(ctx, 'built', [agent.id], `${fullName(agent)} finished rebuilding ${site.name}!`, 5, [
+        site.id,
+      ]);
       remember(agent, state.tick, `I rebuilt ${site.name} after the fire.`, 8);
       return;
     }
     const partner = agent.partnerId ? findAgent(state, agent.partnerId) : undefined;
     if (partner && !state.owners[site.id]!.includes(partner.id))
       state.owners[site.id]!.push(partner.id);
-    emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5);
+    emit(ctx, 'built', [agent.id], `${fullName(agent)} finished building ${site.name}!`, 5, [
+      site.id,
+    ]);
     remember(agent, state.tick, `I finished building ${site.name}. It's mine.`, 8);
     if (!agent.homeId && site.kind === 'house') agent.homeId = site.id;
   } else {
-    remember(
-      agent,
-      state.tick,
-      `I worked on ${site.name} (${Math.round(site.progress * 100)}% done).`,
-      2,
-    );
+    const pct = Math.round(site.progress * 100);
+    emit(ctx, 'built', [agent.id], `${fullName(agent)} worked on ${site.name} (${pct}% done).`, 2, [
+      site.id,
+    ]);
+    remember(agent, state.tick, `I worked on ${site.name} (${pct}% done).`, 2);
   }
 }

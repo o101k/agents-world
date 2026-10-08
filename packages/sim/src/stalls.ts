@@ -100,6 +100,7 @@ function stockStall(
     [agent.id],
     `${fullName(agent)} put ${qty} ${label} on their stall at ${price} coins each.`,
     2,
+    [stall.id],
   );
   remember(agent, state.tick, `I put ${qty} ${label} on my stall at ${price} coins each.`, 2);
   refreshSeen(state, agent, stall.id);
@@ -129,7 +130,14 @@ function takeFromStall(
   if (entry.quantity <= 0) delete stock[item];
   agent.inventory[item] = (agent.inventory[item] ?? 0) + qty;
 
-  emit(ctx, 'stall', [agent.id], `${fullName(agent)} took ${qty} ${label} back from their stall.`, 1);
+  emit(
+    ctx,
+    'stall',
+    [agent.id],
+    `${fullName(agent)} took ${qty} ${label} back from their stall.`,
+    1,
+    [stall.id],
+  );
   remember(agent, state.tick, `I took ${qty} ${label} back from my stall.`, 1);
   refreshSeen(state, agent, stall.id);
   agent.action = { type: 'rest', until: state.tick + 5 };
@@ -197,6 +205,7 @@ function buyFromStall(
     [agent.id, seller.id],
     `${fullName(agent)} bought ${qty} ${label} at ${fullName(seller)}'s stall for ${total} coins.`,
     2,
+    [stall.id],
   );
   refreshSeen(state, agent, stall.id);
   agent.action = { type: 'rest', until: state.tick + 5 };

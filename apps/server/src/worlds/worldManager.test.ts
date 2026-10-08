@@ -367,3 +367,26 @@ describe('previewing the starting cast', () => {
     await wm.closeAll();
   });
 });
+
+describe('object history', () => {
+  it('shows a founded house with its residents, and refuses unknown objects', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Houses', seed: 'houses', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active;
+    if (!runner) throw new Error('no active world');
+    const house = runner.state.map.objects.find(
+      (o) => o.kind === 'house' && runner.state.agents.some((a) => a.alive && a.homeId === o.id),
+    );
+    if (!house) throw new Error('no occupied house in the sample world');
+
+    const history = wm.objectHistory(w.id, house.id);
+    expect(history.objectId).toBe(house.id);
+    expect(history.founded).toBe(true);
+    expect(history.residents.length).toBeGreaterThan(0);
+    expect(history.recordedSince).toBe(history.foundedTick);
+
+    expect(() => wm.objectHistory(w.id, 'no-such-object')).toThrow(NotFoundError);
+    await wm.closeAll();
+  });
+});

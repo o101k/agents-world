@@ -6,12 +6,14 @@ import {
   CastPreviewRequest,
   ControlRequest,
   EventsQuery,
+  ObjectHistoryQuery,
   SetBrainsRequest,
   SpawnRequest,
   WorldEventRequest,
   ReplayQuery,
   type BrainsResponse,
   type CastPreviewResponse,
+  type ObjectHistoryResponse,
   type ReplayResponse,
   type StoryResponse,
   type CallsResponse,
@@ -172,6 +174,14 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     async (req): Promise<StoryResponse> => ({
       entries: worlds.story(req.params.id, req.params.agentId),
     }),
+  );
+
+  app.get<{ Params: { id: string; objectId: string } }>(
+    '/api/worlds/:id/objects/:objectId/history',
+    async (req): Promise<ObjectHistoryResponse> => {
+      const q = ObjectHistoryQuery.parse(req.query ?? {});
+      return worlds.objectHistory(req.params.id, req.params.objectId, q.tick);
+    },
   );
 
   app.delete<IdParams>('/api/worlds/:id', async (req, reply) => {

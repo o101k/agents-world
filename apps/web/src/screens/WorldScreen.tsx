@@ -18,6 +18,7 @@ import { EventLog } from '../components/EventLog.tsx';
 import { BrainEditor } from '../components/BrainEditor.tsx';
 import { WorldBrainsDialog } from '../components/WorldBrainsDialog.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
+import { ObjectHistory } from '../components/ObjectHistory.tsx';
 import { PenFacts, StallStock, useVillage, VillagePanel } from '../components/VillagePanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
@@ -150,6 +151,14 @@ export function WorldScreen({ worldId }: { worldId: string }) {
     useWorld.getState().select(sel);
     rendererRef.current?.select(sel, true);
   };
+  /** Select a house, bush… (e.g. from a timeline entry) and show it on the map. */
+  const pickObject = (id: string) => {
+    const object = shownMap?.objects.find((o) => o.id === id);
+    if (!object) return;
+    const sel: MapSelection = { kind: 'object', id, tile: { x: object.x, y: object.y } };
+    useWorld.getState().select(sel);
+    rendererRef.current?.select(sel, true);
+  };
 
   return (
     <div className="world-screen">
@@ -209,7 +218,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </div>
       )}
       {rateLimit && <RateLimitBanner notice={rateLimit} />}
-      <ConditionsBar map={shownMap} />
+      <ConditionsBar map={shownMap} onPickObject={pickObject} />
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
@@ -252,7 +261,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
             </div>
           </div>
           <ReplayBar worldId={worldId} />
-          <EventLog onPickAgent={pickAgent} />
+          <EventLog onPickAgent={pickAgent} onPickObject={pickObject} />
         </main>
 
         <aside className="sidebar">
@@ -455,6 +464,9 @@ function SelectionDetails({
             {Math.round((object.progress ?? 0) * 100)}%). Unusable until finished.
           </p>
         )}
+        {object.burntTick === undefined && object.progress !== undefined && (
+          <p>Being built ({Math.round(object.progress * 100)}%).</p>
+        )}
         {owners?.length ? (
           <p>
             <strong>Owned by:</strong> {owners.join(', ')}
@@ -469,6 +481,13 @@ function SelectionDetails({
         {(object.kind === 'pen' || object.kind === 'stall') && (
           <VillageObjectFacts worldId={worldId} object={object} />
         )}
+        <ObjectHistory
+          key={object.id}
+          worldId={worldId}
+          objectId={object.id}
+          atTick={past?.tick}
+          onPick={onPick}
+        />
       </div>
     );
   }

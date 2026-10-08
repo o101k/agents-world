@@ -241,8 +241,16 @@ export function emit(
   actors: string[],
   text: string,
   importance: number,
+  objects?: string[],
 ) {
-  ctx.events.push({ tick: ctx.state.tick, kind, actors, text, importance });
+  ctx.events.push({
+    tick: ctx.state.tick,
+    kind,
+    actors,
+    text,
+    importance,
+    ...(objects?.length ? { objects } : {}),
+  });
   if (SUCCESS_EVENTS.has(kind) && actors[0]) {
     const a = findAgent(ctx.state, actors[0]);
     if (a) a.failStreak = 0;
@@ -495,6 +503,7 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
     [agent.id],
     `${fullName(agent)} died of ${cause}, aged ${Math.floor(agent.age)}.`,
     5,
+    agent.homeId ? [agent.homeId] : [],
   );
   mournDeath(ctx, agent);
   settleEstate(ctx, agent);
@@ -663,7 +672,17 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       if (state.tick >= action.until) {
         agent.needs.water = 100;
         agent.action = null;
-        emit(ctx, 'drank', [agent.id], `${fullName(agent)} drank some water.`, 1);
+        const well = state.map.objects.find(
+          (o) => o.kind === 'well' && isAt(agent, interactionTiles(state.map, o)),
+        );
+        emit(
+          ctx,
+          'drank',
+          [agent.id],
+          `${fullName(agent)} drank some water.`,
+          1,
+          well ? [well.id] : [],
+        );
         remember(agent, state.tick, 'I drank water.');
       }
       return;
@@ -1274,6 +1293,7 @@ function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
       [agent.id],
       `${fullName(agent)} gathered ${got} ${label} at ${objName(state, o.id)}.`,
       1,
+      [o.id],
     );
     remember(agent, state.tick, `I gathered ${got} ${label} at ${objName(state, o.id)}.`);
   } else {
@@ -1502,7 +1522,7 @@ function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
   r.amount -= got;
   agent.inventory.wood = (agent.inventory.wood ?? 0) + got;
   train(agent, 'building', 0.1);
-  emit(ctx, 'gathered', [agent.id], `${fullName(agent)} chopped ${got} wood.`, 1);
+  emit(ctx, 'gathered', [agent.id], `${fullName(agent)} chopped ${got} wood.`, 1, [treeId]);
   remember(agent, state.tick, `I chopped ${got} wood.`);
 }
 
@@ -1582,7 +1602,17 @@ function finishCraft(ctx: Ctx, agent: Agent, name: keyof typeof RECIPES): void {
   train(agent, recipe.skill, 0.5);
   observeWork(state, agent, recipe.skill);
   const where = recipe.place === 'bakery' ? 'the bakery' : 'the workshop';
-  emit(ctx, 'crafted', [agent.id], `${fullName(agent)} made ${made.join(', ')} at ${where}.`, 2);
+  const place = state.map.objects.find(
+    (o) => o.kind === recipe.place && isAt(agent, interactionTiles(state.map, o)),
+  );
+  emit(
+    ctx,
+    'crafted',
+    [agent.id],
+    `${fullName(agent)} made ${made.join(', ')} at ${where}.`,
+    2,
+    place ? [place.id] : [],
+  );
   remember(agent, state.tick, `I made ${made.join(', ')} at ${where}.`, 2);
 }
 
@@ -1628,6 +1658,7 @@ function marketTrade(
       [agent.id],
       `${fullName(agent)} bought ${qty} ${label} at the market for ${qty * q.buy} coins.`,
       2,
+      [market.id],
     );
     remember(
       agent,
@@ -1651,6 +1682,7 @@ function marketTrade(
       [agent.id],
       `${fullName(agent)} sold ${qty} ${label} at the market for ${qty * q.sell} coins.`,
       2,
+      [market.id],
     );
     remember(
       agent,

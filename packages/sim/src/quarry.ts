@@ -116,6 +116,6 @@ export function finishQuarry(ctx: Ctx, agent: Agent, action: TaskAction): void {
   ctx.changed.add(rock.id);
   train(agent, 'building', 0.15);
   observeWork(state, agent, 'building');
-  emit(ctx, 'quarried', [agent.id], `${fullName(agent)} cut ${got} stone.`, 1);
+  emit(ctx, 'quarried', [agent.id], `${fullName(agent)} cut ${got} stone.`, 1, [rock.id]);
   remember(agent, state.tick, `I cut ${got} stone.`, 2);
 }

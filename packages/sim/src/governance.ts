@@ -128,7 +128,14 @@ function callMeeting(ctx: Ctx, agent: Agent, topic: string): void {
     }
   }
   agent.speech = { text: `A village meeting about ${topic}, at the market in an hour!`, until: tick + 30 };
-  emit(ctx, 'meeting', [agent.id], `${fullName(agent)} called a village meeting about “${topic}”.`, 4);
+  emit(
+    ctx,
+    'meeting',
+    [agent.id],
+    `${fullName(agent)} called a village meeting about “${topic}”.`,
+    4,
+    [market.id],
+  );
   agent.action = { type: 'rest', until: tick + 3 };
 }
 
@@ -161,7 +168,7 @@ function startMeeting(ctx: Ctx, m: Meeting, market: MapObject): void {
   const { state } = ctx;
   const attendees = state.agents.filter((a) => isAttendee(a, market));
   if (attendees.length < 2) {
-    emit(ctx, 'meeting', [m.caller], `Nobody came to the meeting about ${m.topic}.`, 2);
+    emit(ctx, 'meeting', [m.caller], `Nobody came to the meeting about ${m.topic}.`, 2, [m.placeId]);
     const caller = findAgent(state, m.caller);
     if (caller) remember(caller, state.tick, `Nobody came to my meeting about “${m.topic}”.`, 4);
     removeMeeting(state, m);
@@ -178,6 +185,7 @@ function startMeeting(ctx: Ctx, m: Meeting, market: MapObject): void {
     m.attendees.slice(0, 6),
     `The village meeting about ${m.topic} began with ${attendees.length} people.`,
     3,
+    [m.placeId],
   );
 }
 

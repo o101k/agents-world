@@ -65,7 +65,9 @@ export function startClearField(
     agent.knowledge[id] = { lastSeenTick: state.tick };
     invalidateMapCaches(map);
     state.mapVersion += 1;
-    emit(ctx, 'farmed', [agent.id], `${fullName(agent)} started clearing land for a field.`, 3);
+    emit(ctx, 'farmed', [agent.id], `${fullName(agent)} started clearing land for a field.`, 3, [
+      field.id,
+    ]);
     remember(
       agent,
       state.tick,
@@ -152,10 +154,15 @@ function finishClearing(ctx: Ctx, agent: Agent, fieldId: string): void {
       for (let x = field.x; x < field.x + field.w; x++)
         map.tiles[y * map.width + x] = Tile.Farmland;
     invalidateMapCaches(map);
-    emit(ctx, 'farmed', [agent.id], `${fullName(agent)} cleared a new field (${name}).`, 4);
+    emit(ctx, 'farmed', [agent.id], `${fullName(agent)} cleared a new field (${name}).`, 4, [
+      field.id,
+    ]);
     remember(agent, state.tick, `I cleared a field of my own (${name}). Now it needs sowing.`, 7);
   } else {
     const pct = Math.round(field.progress * 100);
+    emit(ctx, 'farmed', [agent.id], `${fullName(agent)} cleared land for ${name} (${pct}% done).`, 2, [
+      field.id,
+    ]);
     remember(agent, state.tick, `I cleared more land for my field (${pct}% done).`, 2);
   }
 }
@@ -177,7 +184,7 @@ function finishSowing(ctx: Ctx, agent: Agent, fieldId: string, item: ItemName): 
 
   const name = objName(state, field.id);
   const label = ITEM_LABELS[item].toLowerCase();
-  emit(ctx, 'farmed', [agent.id], `${fullName(agent)} sowed ${name} with ${label}.`, 2);
+  emit(ctx, 'farmed', [agent.id], `${fullName(agent)} sowed ${name} with ${label}.`, 2, [field.id]);
   remember(agent, state.tick, `I sowed ${name} with ${label}.`, 4);
 }
 
