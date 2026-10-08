@@ -1,6 +1,6 @@
 /**
  * Stress test: a large generated village run headless with the free Mock brain.
- *   bun run stress [adults=100] [children=50] [days=3] [mapSize=huge]
+ *   npm run stress -- [adults=100] [children=50] [days=3] [mapSize=huge]
  * Prints simulation speed, survival, and the sizes of what gets saved and sent to the browser.
  * Exits with an error if fewer than half the villagers survive (used as a smoke test in CI).
  */

@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun --bun vite",
-    "build": "bun --bun vite build",
+    "dev": "vite",
+    "build": "vite build",
     "typecheck": "tsgo -p tsconfig.json"
   },
   "dependencies": {

@@ -29,24 +29,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v7
         with:
-          bun-version-file: package.json
+          node-version-file: .nvmrc
+          cache: npm
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Typecheck
-        run: bun run typecheck
+        run: npm run typecheck
 
       - name: Lint
-        run: bun run lint
+        run: npm run lint
 
       - name: Unit and integration tests
-        run: bun run test
+        run: npm test
 
       - name: Stress smoke test (small village, one in-game day)
-        run: bun run stress 20 10 1 medium
+        run: npm run stress -- 20 10 1 medium
 
   e2e:
     name: Browser end-to-end tests
@@ -56,18 +57,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v7
         with:
-          bun-version-file: package.json
+          node-version-file: .nvmrc
+          cache: npm
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Install Chromium for Playwright
-        run: bunx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
 
       - name: End-to-end tests (builds the UI, starts the helper, drives a real browser)
-        run: bun run test:e2e
+        run: npm run test:e2e
 
       - name: Keep the test report when something fails
         if: failure()
@@ -77,4 +79,39 @@ jobs:
           path: |
             playwright-report/
             test-results/
+          retention-days: 7
+
+  agentic:
+    name: AI-driven end-to-end tests (Tester Army e2e)
+    runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium for e2e
+        run: npm run install-browser -w @aw/agentic-tests -- --with-deps
+
+      # The AI-driven tests are skipped when neither the ANTHROPIC_API_KEY nor the OPENROUTER_API_KEY
+      # secret is set.
+      - name: AI-driven tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: npm run test:agentic
+
+      - name: Keep the test report when something fails
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentic-report
+          path: tests/agentic/.e2e/
           retention-days: 7

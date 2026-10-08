@@ -24,10 +24,10 @@ Ollama/LM Studio), or with the free rule-based Mock brain. See
 
 ## Requirements
 
-- **Bun 1.4 or newer.** Bun installs the packages, runs the helper, the tests and the tools. Node.js
-  is no longer needed. The version this project uses is pinned in `package.json`. On macOS install
-  it with `brew install oven-sh/bun/bun` or `curl -fsSL https://bun.sh/install | bash`. Check with
-  `bun --version`.
+- **Node.js 24 or newer.** The tested version is pinned in [`.nvmrc`](.nvmrc) (24.21.0, the
+  current LTS and the version CI uses). With [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use`
+  in the project folder. Otherwise on macOS: `brew install node@24` (or the LTS installer from nodejs.org).
+  Check with `node -v`.
 - A modern browser (Chrome, Safari, Firefox, Edge).
 
 Everything runs on your own computer. Nothing is uploaded anywhere. (From Phase 2, the prompts
@@ -38,11 +38,11 @@ for AI villagers go to whichever AI providers you choose, using your own keys.)
 ```bash
 git clone <this repo> agents-world
 cd agents-world
-bun install      # first time only (and after pulling updates)
-bun start
+npm install      # first time only (and after pulling updates)
+npm start
 ```
 
-`bun start` builds the UI, starts the local helper and opens **http://127.0.0.1:4747** in your
+`npm start` builds the UI, starts the local helper and opens **http://127.0.0.1:4747** in your
 browser. Leave the terminal window open while you play; press **Ctrl+C** in it to stop.
 
 ### Using it
@@ -118,7 +118,7 @@ API key because it starts a `claude` process. If calls fail with an unknown opti
    - **Test connection** lists the models it can see.
      Keys stay in `~/.agents-world/secrets.json` (readable only by you) and are never shown again or
      sent to the browser. You can instead set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
-     `OPENAI_COMPATIBLE_API_KEY` before `bun start`.
+     `OPENAI_COMPATIBLE_API_KEY` before `npm start`.
 2. Pick brains for the villagers (see below).
 3. Press Play. The meter in the top bar shows AI spending against the world's cap (default $1); click
    it to change the cap. When the cap is reached, time pauses.
@@ -183,7 +183,7 @@ them out). They arrive on the road knowing no one.
 **Big villages**: the helper handles 150+ people comfortably with the Mock brain (about 300
 in-game minutes per second on a laptop). With AI brains, the AI's speed and your budget set the
 pace: requests queue per provider, conversation replies go first, and a request that waits too
-long is dropped rather than sent late. To see how your machine copes: `bun run stress` (below).
+long is dropped rather than sent late. To see how your machine copes: `npm run stress` (below).
 
 ### Where your worlds are saved
 
@@ -198,7 +198,7 @@ In `~/.agents-world/` (a hidden folder in your home directory):
 ```
 
 To back up a world, copy its `.sqlite` file while the helper is stopped. To use a different
-folder: `AGENTS_WORLD_HOME=/path/to/folder bun start`.
+folder: `AGENTS_WORLD_HOME=/path/to/folder npm start`.
 
 ### Settings (environment variables)
 
@@ -211,8 +211,8 @@ folder: `AGENTS_WORLD_HOME=/path/to/folder bun start`.
 ## Stress test
 
 ```bash
-bun run stress                    # 100 adults + 50 children, 3 in-game days, huge map
-bun run stress 120 60 8 huge      # adults, children, days, map size
+npm run stress                    # 100 adults + 50 children, 3 in-game days, huge map
+npm run stress -- 120 60 8 huge   # adults, children, days, map size
 ```
 
 Runs a big village headless with the free Mock brain and prints the simulation speed, survival,
@@ -221,22 +221,20 @@ and the sizes of snapshots and per-frame updates.
 ## Development
 
 ```bash
-bun run dev        # hot reload: helper on :4747, UI on http://localhost:5173
-bun run check      # typecheck + lint + unit and integration tests
-bun run test       # unit and integration tests only (Vitest)
-bun run test:e2e   # end-to-end browser tests (Playwright)
-bun run format     # Prettier (optional; CI doesn't check formatting)
+npm run dev        # hot reload: helper on :4747, UI on http://localhost:5173
+npm run check      # typecheck + lint + unit and integration tests
+npm test           # unit and integration tests only (Vitest)
+npm run test:e2e   # end-to-end browser tests (Playwright)
+npm run test:agentic # AI-driven browser tests (Tester Army e2e; needs ANTHROPIC_API_KEY or OPENROUTER_API_KEY for the AI steps)
+npm run format     # Prettier (optional; CI doesn't check formatting)
 ```
 
-`bun run check` goes through Turborepo, which runs the typecheck, lint and tests in parallel and
+`npm run check` goes through Turborepo, which runs the typecheck, lint and tests in parallel and
 caches the results, so a second run with nothing changed is instant. The cache lives in `.turbo/`
-(git-ignored). Turborepo sends anonymous usage data to its makers (Vercel); turn that off once with
-`bunx turbo telemetry disable`.
+(ignored by version control). Turborepo sends anonymous usage data to its makers (Vercel); turn that
+off once with `npx turbo telemetry disable`.
 
-Our tests run with `bun run test` (Vitest). Plain `bun test` is Bun's own test runner and is not
-what we use.
-
-For the end-to-end tests, install a browser once with `bunx playwright install chromium`
+For the end-to-end tests, install a browser once with `npx playwright install chromium`
 (or point `PW_CHROMIUM_PATH` at an existing Chromium).
 
 ### Tests and CI
@@ -252,7 +250,64 @@ For the end-to-end tests, install a browser once with `bunx playwright install c
   request (and by hand from the Actions tab):
   typecheck, lint and all Vitest tests on Linux and macOS, a small stress run, then the
   end-to-end tests on Linux (the Playwright report is attached to the run if they fail).
-  The workflow installs Bun from the version in `package.json`.
+  The workflow installs Node 24 from `.nvmrc`.
+
+### AI-driven tests (Tester Army e2e)
+
+`tests/agentic` is a small suite built on Tester Army's open-source [`e2e`](https://tester.army/e2e)
+runner (docs: https://e2e.tester.army/docs). A test mixes three kinds of step:
+
+- **Locators and `expect`**, like Playwright. No AI, so they're free.
+- **`agent.act('plain-English goal')`**: an AI drives the browser. The clicks are recorded in a
+  replay cache (`tests/agentic/.e2e/cache/`), so later runs replay them without calling the model
+  until the UI changes.
+- **`agent.assert` and `agent.extract`**: the AI judges or reads the screen. These always make a
+  live call.
+
+The tests are `tests/agentic/*.e2e.ts`. `worlds.e2e.ts` makes a world with locators and needs no AI.
+`villagers.e2e.ts` creates a world from a sentence, checks the map with a vision check, and opens
+Maren Holt's inspector.
+
+Setup and runs (from the repo root):
+
+```bash
+npm run install-browser -w @aw/agentic-tests   # once: the Chromium that e2e's Playwright pins
+export ANTHROPIC_API_KEY=sk-ant-...            # for the AI-driven tests (or OPENROUTER_API_KEY=sk-or-...)
+npm run test:agentic                           # builds the UI, then runs the suite
+npm run test:agentic -- --headed               # watch the browser
+npm run test:agentic -- --no-cache             # ignore recorded replays
+npm run test:agentic -- villagers.e2e.ts       # one file
+npm run test:agentic -- --grep Maren           # tests whose title matches
+```
+
+e2e starts its own helper on a free port with a throwaway data folder, so your real worlds are
+never touched. It needs Node.js 24.8 or newer, which `.nvmrc` already gives you.
+
+The AI runs on **Claude Haiku 5.5**, the cheapest Claude model here, with either key from your
+environment:
+
+- `ANTHROPIC_API_KEY`: straight from Anthropic, model `claude-haiku-5-5`.
+- `OPENROUTER_API_KEY`: through OpenRouter, model `anthropic/claude-haiku-5.5`. That id follows
+  OpenRouter's naming but hasn't been checked against its model list yet; if OpenRouter rejects
+  it, look the id up on https://openrouter.ai/models and set `E2E_MODEL`.
+
+If both keys are set, Anthropic is used unless `E2E_PROVIDER=openrouter`. `E2E_MODEL=<model id>`
+picks another model from the chosen provider (on OpenRouter, any model that handles tool calls and
+images). e2e doesn't load `.env` files and doesn't use the keys saved in Agents World's settings.
+e2e can't use a Claude Pro or Max subscription, so a key is needed. Without a key the AI tests are
+skipped and the no-AI test still runs. A full run with a key costs a few cents at most. e2e's
+anonymous telemetry is switched off in the package scripts.
+
+Results are git-ignored: `tests/agentic/.e2e/report.json`, screenshots and traces in
+`tests/agentic/.e2e/artifacts/`, and the helper's log in `tests/agentic/.e2e/logs/helper.log`.
+Other e2e commands go through the same package, for example
+`npm run e2e -w @aw/agentic-tests -- cache ls`.
+
+In CI, the `agentic` job always runs the no-AI test. The AI tests run only when the repository has
+an `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` Actions secret (Settings → Secrets and variables →
+Actions). GitHub doesn't give secrets to pull requests from forks, so those runs skip the AI tests.
+In CI, e2e retries a failed test once and only reads the replay cache. The report is attached to
+the run when something fails.
 
 ### Project layout
 
@@ -263,15 +318,15 @@ packages/brain    the AI layer: providers, prompts, mock brain, pricing
 apps/server       the local helper: saves worlds, runs the simulation, serves the UI
 apps/web          the browser UI: React panels + PixiJS map
 tests/e2e         Playwright tests
+tests/agentic     AI-driven browser tests (Tester Army e2e)
 turbo.json        task pipeline (Turborepo): what runs, in what order, what is cached
-bunfig.toml       Bun settings (tools run on Bun, npm-style node_modules)
 docs/DESIGN.md    design doc
 ```
 
 ### Troubleshooting
 
 - **"Port 4747 is already in use"**: the helper is probably already running in another terminal.
-  Open http://127.0.0.1:4747, or stop the other one, or use `AW_PORT=4800 bun start`.
-- **The page says it can't reach the helper**: start it with `bun start`; the page reconnects by itself.
-- **`bun install` fails**: make sure Bun is 1.4 or newer (`bun --version`; update with `bun upgrade`).
-  The native SQLite driver ships ready-built, so nothing needs compiling.
+  Open http://127.0.0.1:4747, or stop the other one, or use `AW_PORT=4800 npm start`.
+- **The page says it can't reach the helper**: start it with `npm start`; the page reconnects by itself.
+- **`npm install` fails building `better-sqlite3`**: make sure you're on Node 24+; on macOS you may
+  need the Xcode command line tools (`xcode-select --install`).
