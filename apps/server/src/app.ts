@@ -91,7 +91,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
         .send(
           config.dev
             ? `<p>Dev mode: open <a href="http://localhost:${DEV_WEB_PORT}">http://localhost:${DEV_WEB_PORT}</a>.</p>`
-            : '<p>The UI has not been built. Run <code>bun start</code> from the project folder.</p>',
+            : '<p>The UI has not been built. Run <code>npm start</code> from the project folder.</p>',
         ),
     );
   }

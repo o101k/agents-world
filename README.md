@@ -24,10 +24,10 @@ Ollama/LM Studio), or with the free rule-based Mock brain. See
 
 ## Requirements
 
-- **Bun 1.4 or newer.** Bun installs the packages, runs the helper, the tests and the tools. Node.js
-  is no longer needed. The version this project uses is pinned in `package.json`. On macOS install
-  it with `brew install oven-sh/bun/bun` or `curl -fsSL https://bun.sh/install | bash`. Check with
-  `bun --version`.
+- **Node.js 24 or newer.** The tested version is pinned in [`.nvmrc`](.nvmrc) (24.21.0, the
+  current LTS and the version CI uses). With [nvm](https://github.com/nvm-sh/nvm): `nvm install && nvm use`
+  in the project folder. Otherwise on macOS: `brew install node@24` (or the LTS installer from nodejs.org).
+  Check with `node -v`.
 - A modern browser (Chrome, Safari, Firefox, Edge).
 
 Everything runs on your own computer. Nothing is uploaded anywhere. (From Phase 2, the prompts
@@ -38,11 +38,11 @@ for AI villagers go to whichever AI providers you choose, using your own keys.)
 ```bash
 git clone <this repo> agents-world
 cd agents-world
-bun install      # first time only (and after pulling updates)
-bun start
+npm install      # first time only (and after pulling updates)
+npm start
 ```
 
-`bun start` builds the UI, starts the local helper and opens **http://127.0.0.1:4747** in your
+`npm start` builds the UI, starts the local helper and opens **http://127.0.0.1:4747** in your
 browser. Leave the terminal window open while you play; press **Ctrl+C** in it to stop.
 
 ### Using it
@@ -118,7 +118,7 @@ API key because it starts a `claude` process. If calls fail with an unknown opti
    - **Test connection** lists the models it can see.
      Keys stay in `~/.agents-world/secrets.json` (readable only by you) and are never shown again or
      sent to the browser. You can instead set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
-     `OPENAI_COMPATIBLE_API_KEY` before `bun start`.
+     `OPENAI_COMPATIBLE_API_KEY` before `npm start`.
 2. Pick brains for the villagers (see below).
 3. Press Play. The meter in the top bar shows AI spending against the world's cap (default $1); click
    it to change the cap. When the cap is reached, time pauses.
@@ -183,7 +183,7 @@ them out). They arrive on the road knowing no one.
 **Big villages**: the helper handles 150+ people comfortably with the Mock brain (about 300
 in-game minutes per second on a laptop). With AI brains, the AI's speed and your budget set the
 pace: requests queue per provider, conversation replies go first, and a request that waits too
-long is dropped rather than sent late. To see how your machine copes: `bun run stress` (below).
+long is dropped rather than sent late. To see how your machine copes: `npm run stress` (below).
 
 ### Where your worlds are saved
 
@@ -198,7 +198,7 @@ In `~/.agents-world/` (a hidden folder in your home directory):
 ```
 
 To back up a world, copy its `.sqlite` file while the helper is stopped. To use a different
-folder: `AGENTS_WORLD_HOME=/path/to/folder bun start`.
+folder: `AGENTS_WORLD_HOME=/path/to/folder npm start`.
 
 ### Settings (environment variables)
 
@@ -211,8 +211,8 @@ folder: `AGENTS_WORLD_HOME=/path/to/folder bun start`.
 ## Stress test
 
 ```bash
-bun run stress                    # 100 adults + 50 children, 3 in-game days, huge map
-bun run stress 120 60 8 huge      # adults, children, days, map size
+npm run stress                    # 100 adults + 50 children, 3 in-game days, huge map
+npm run stress -- 120 60 8 huge   # adults, children, days, map size
 ```
 
 Runs a big village headless with the free Mock brain and prints the simulation speed, survival,
@@ -221,22 +221,19 @@ and the sizes of snapshots and per-frame updates.
 ## Development
 
 ```bash
-bun run dev        # hot reload: helper on :4747, UI on http://localhost:5173
-bun run check      # typecheck + lint + unit and integration tests
-bun run test       # unit and integration tests only (Vitest)
-bun run test:e2e   # end-to-end browser tests (Playwright)
-bun run format     # Prettier (optional; CI doesn't check formatting)
+npm run dev        # hot reload: helper on :4747, UI on http://localhost:5173
+npm run check      # typecheck + lint + unit and integration tests
+npm test           # unit and integration tests only (Vitest)
+npm run test:e2e   # end-to-end browser tests (Playwright)
+npm run format     # Prettier (optional; CI doesn't check formatting)
 ```
 
-`bun run check` goes through Turborepo, which runs the typecheck, lint and tests in parallel and
+`npm run check` goes through Turborepo, which runs the typecheck, lint and tests in parallel and
 caches the results, so a second run with nothing changed is instant. The cache lives in `.turbo/`
-(git-ignored). Turborepo sends anonymous usage data to its makers (Vercel); turn that off once with
-`bunx turbo telemetry disable`.
+(ignored by version control). Turborepo sends anonymous usage data to its makers (Vercel); turn that
+off once with `npx turbo telemetry disable`.
 
-Our tests run with `bun run test` (Vitest). Plain `bun test` is Bun's own test runner and is not
-what we use.
-
-For the end-to-end tests, install a browser once with `bunx playwright install chromium`
+For the end-to-end tests, install a browser once with `npx playwright install chromium`
 (or point `PW_CHROMIUM_PATH` at an existing Chromium).
 
 ### Tests and CI
@@ -252,7 +249,7 @@ For the end-to-end tests, install a browser once with `bunx playwright install c
   request (and by hand from the Actions tab):
   typecheck, lint and all Vitest tests on Linux and macOS, a small stress run, then the
   end-to-end tests on Linux (the Playwright report is attached to the run if they fail).
-  The workflow installs Bun from the version in `package.json`.
+  The workflow installs Node 24 from `.nvmrc`.
 
 ### Project layout
 
@@ -264,14 +261,13 @@ apps/server       the local helper: saves worlds, runs the simulation, serves th
 apps/web          the browser UI: React panels + PixiJS map
 tests/e2e         Playwright tests
 turbo.json        task pipeline (Turborepo): what runs, in what order, what is cached
-bunfig.toml       Bun settings (tools run on Bun, npm-style node_modules)
 docs/DESIGN.md    design doc
 ```
 
 ### Troubleshooting
 
 - **"Port 4747 is already in use"**: the helper is probably already running in another terminal.
-  Open http://127.0.0.1:4747, or stop the other one, or use `AW_PORT=4800 bun start`.
-- **The page says it can't reach the helper**: start it with `bun start`; the page reconnects by itself.
-- **`bun install` fails**: make sure Bun is 1.4 or newer (`bun --version`; update with `bun upgrade`).
-  The native SQLite driver ships ready-built, so nothing needs compiling.
+  Open http://127.0.0.1:4747, or stop the other one, or use `AW_PORT=4800 npm start`.
+- **The page says it can't reach the helper**: start it with `npm start`; the page reconnects by itself.
+- **`npm install` fails building `better-sqlite3`**: make sure you're on Node 24+; on macOS you may
+  need the Xcode command line tools (`xcode-select --install`).

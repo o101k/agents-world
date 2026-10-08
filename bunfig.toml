@@ -1,9 +1,0 @@
-# Bun settings for the whole repo.
-
-[run]
-# Run the tools behind root scripts (Vitest, ESLint, Playwright…) on Bun too, even where Node is installed.
-bun = true
-
-[install]
-# npm-style node_modules (everything hoisted to the root), as the repo had with npm.
-linker = "hoisted"

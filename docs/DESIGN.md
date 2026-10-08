@@ -8,7 +8,7 @@ _Last updated: Phase 6._
 ## Processes
 
 ```
-Browser tab (apps/web)  ──HTTP /api/* + WebSocket /ws──►  Local helper (apps/server, Bun)
+Browser tab (apps/web)  ──HTTP /api/* + WebSocket /ws──►  Local helper (apps/server, Node)
                                                            ├─ WorldManager → one SQLite file per world
                                                            ├─ WorldRunner (the active world's clock)
                                                            ├─ @aw/sim  (pure world rules)
@@ -20,8 +20,8 @@ Browser tab (apps/web)  ──HTTP /api/* + WebSocket /ws──►  Local helper
 - **Local-only guard** (`apps/server/src/security.ts`): every request must have a loopback `Host`
   (prevents DNS rebinding) and, if it has an `Origin`, it must be the app's own origin. No CORS
   headers are ever sent.
-- Bun runs the TypeScript directly, so there is no build step for the helper; internal packages export their TS source.
-- Bun workspaces hold the packages, and Turborepo (`turbo.json`) runs the tasks: per-package `typecheck` (tsgo), `build` (the web UI) and `dev`; ESLint and Vitest run once over the whole repo as root tasks. Results are cached in `.turbo/` (git-ignored).
+- TypeScript runs directly via `tsx` in the helper; internal packages export their TS source.
+- npm workspaces hold the packages, and Turborepo (`turbo.json`) runs the tasks: per-package `typecheck` (tsgo), `build` (the web UI) and `dev`; ESLint and Vitest run once over the whole repo as root tasks. Results are cached in `.turbo/` (git-ignored).
 
 ## Packages and boundaries
 
@@ -195,7 +195,7 @@ it means. The mock brain stocks more food in autumn and winter.
 
 ## Scale
 
-- 150+ people run at ~2–3 ms per tick with the Mock brain (`bun run stress`). What made it fast:
+- 150+ people run at ~2–3 ms per tick with the Mock brain (`npm run stress`). What made it fast:
   an id → person index (`findAgent`), trees in their own spatial grid (`treesNear`), cheaper recall
   scoring, and chit-chat overheard between strangers kept only in working memory (talk about
   one's family or oneself is still remembered).
@@ -389,9 +389,9 @@ decide.
 Vitest runs unit tests beside the code and integration tests in `apps/server` (the real helper on
 a real port over HTTP + WebSocket; exact resume and replay; mock-brain village life). Playwright
 drives the built UI (`tests/e2e`). GitHub Actions (`.github/workflows/ci.yml`):
-typecheck, lint and Vitest on Ubuntu and macOS, a small `bun run stress` smoke run (fails if fewer
-than half survive), then Playwright on Ubuntu with the report uploaded on failure. CI installs Bun
-with `oven-sh/setup-bun` (version from `package.json`). No AI provider
+typecheck, lint and Vitest on Ubuntu and macOS, a small `npm run stress` smoke run (fails if fewer
+than half survive), then Playwright on Ubuntu with the report uploaded on failure. CI installs Node 24
+with `actions/setup-node` (version from `.nvmrc`). No AI provider
 is ever called in tests: everything uses the Mock brain or a fake HTTP server.
 
 ## Rendering (`apps/web/src/map/`)

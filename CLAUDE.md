@@ -34,14 +34,14 @@ roadmap. **Keep it updated whenever a decision changes** (add to the Decision lo
 ## Commands
 
 ```bash
-bun install          # once
-bun start            # build UI, start helper, open browser (http://127.0.0.1:4747)
-bun run dev          # hot-reload dev mode (UI at http://localhost:5173)
-bun run check        # typecheck + lint + unit/integration tests — run before every commit
+npm install          # once
+npm start            # build UI, start helper, open browser (http://127.0.0.1:4747)
+npm run dev          # hot-reload dev mode (UI at http://localhost:5173)
+npm run check        # typecheck + lint + unit/integration tests — run before every commit
 
-bun run test         # Vitest (not `bun test`, which is Bun's own runner)
-bun run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
-bun run stress       # headless big-village stress test (args: adults children days mapSize)
+npm test             # Vitest unit and integration tests
+npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
+npm run stress       # headless big-village stress test (args: adults children days mapSize)
 ```
 
 Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port override: `AW_PORT`.
@@ -130,7 +130,7 @@ Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port overr
 
 | Topic                  | Decision                                                                                                                                                                     |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| How it runs            | `bun start` launches a **local helper process** (Bun) that runs the simulation, saves worlds, holds keys and calls AI providers; the browser is only the viewer/controller. |
+| How it runs            | `npm start` launches a **local helper process** (Node) that runs the simulation, saves worlds, holds keys and calls AI providers; the browser is only the viewer/controller. |
 | Owner's OS             | macOS                                                                                                                                                                        |
 | AI providers first     | Anthropic (Claude), OpenAI, OpenRouter / other OpenAI-compatible APIs — plus a free offline **Mock brain** (always).                                                         |
 | Lifespan / aging speed | **An adjustable aging slider** (in-game days per year), changeable any time.                                                                                                 |
@@ -154,7 +154,7 @@ Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port overr
 ## Agreed architecture
 
 ```
-Browser (the viewer)                        Local helper process (Bun, on the Mac only)
+Browser (the viewer)                        Local helper process (Node, on the Mac only)
 ┌────────────────────────┐   WebSocket   ┌──────────────────────────────────────────────┐
 │ Map (PixiJS)           │◄──localhost──►│ World manager: create / switch / delete      │
 │ Panels (React):        │     only      │ Tick loop ─► SIMULATION (world rules only)   │
@@ -175,10 +175,10 @@ Browser (the viewer)                        Local helper process (Bun, on the Ma
 | `apps/server`              | Local helper: tick loop, saving, keys, talks to browser                        | —                                                     |
 | `apps/web`                 | UI                                                                             | Keys, AI, rules                                       |
 
-**Tech stack:** TypeScript everywhere · Bun 1.4+ helper with Fastify + WebSocket, loopback only ·
+**Tech stack:** TypeScript everywhere · Node.js 24 LTS helper with Fastify + WebSocket, loopback only ·
 SQLite (better-sqlite3), one file per world · PixiJS map + React panels (Vite) · official SDKs
 `@anthropic-ai/sdk` and `openai` (the latter also for OpenRouter/compatible via base URL) · Zod ·
-Vitest + Playwright · Bun workspaces + Turborepo.
+Vitest + Playwright · npm workspaces + Turborepo.
 
 **Storage:** `~/.agents-world/secrets.json` (keys, user-only permissions; env vars also work) and
 `~/.agents-world/worlds/<id>.sqlite`.
@@ -299,6 +299,21 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-10-08 — Back to npm and Node, keep Turborepo (owner request).** Tester Army's `e2e`
+  test runner (https://tester.army/e2e) only runs on Node.js 24.8+: its TypeScript loader needs
+  `module.registerHooks`, which Bun lacks. The owner chose one runtime: "revert the bun changes and
+  make it npm node again, but keep the mono repo and turborepo". Back to npm and Node 24:
+  `package-lock.json` (npm 11, bundled with Node 24), `.nvmrc` pinned to 24.21.0, `tsx` runs the
+  helper and scripts, `cross-env` sets dev variables, `allowScripts` (better-sqlite3 and esbuild
+  run their install scripts, fsevents denied) instead of `trustedDependencies`, and CI uses
+  `actions/setup-node` from `.nvmrc`. Bun's `bun.lock`, `bunfig.toml` and Bun-only scripts are gone.
+  What stays: Turborepo (`turbo.json`) runs the tasks: per-package typecheck, the web build and dev;
+  ESLint and Vitest stay single runs over the whole repo; `npm run check` (`turbo run typecheck lint
+  test`) caches, so an unchanged re-run is near-instant; `npm run dev` is `turbo run dev` (server via
+  `tsx watch`, web via Vite); Turborepo's env mode is loose so `AW_PORT` and API-key variables reach
+  dev. `concurrently` stays out. This replaces the Bun half of the 2026-10-08 "Bun and Turborepo"
+  entry below, whose Turborepo notes still stand.
 
 - **2026-10-08 — Bun and Turborepo (owner request).** Bun replaces npm and Node: it installs
   packages (`bun.lock`, with npm-style hoisted `node_modules` as before), runs the scripts, the

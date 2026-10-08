@@ -23,7 +23,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'bun run --cwd apps/server start',
+    command: 'npm run start -w @aw/server',
     url: `http://127.0.0.1:${PORT}/api/health`,
     reuseExistingServer: false,
     env: {
