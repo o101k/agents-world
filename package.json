@@ -13,26 +13,26 @@
     "apps/*"
   ],
   "scripts": {
-    "start": "bun run --cwd apps/web build && bun run --cwd apps/server start",
-    "dev": "concurrently -k -n server,web -c blue,magenta \"bun run --cwd apps/server dev\" \"bun run --cwd apps/web dev\"",
+    "start": "turbo run build --filter=@aw/web && bun run --cwd apps/server start",
+    "dev": "turbo run dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "bun run --cwd apps/web build && playwright test",
-    "typecheck": "bun run --filter '*' typecheck",
+    "test:e2e": "turbo run build --filter=@aw/web && playwright test",
+    "typecheck": "turbo run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "check": "bun run typecheck && bun run lint && bun run test",
+    "check": "turbo run typecheck lint test",
     "stress": "bun run --cwd apps/server stress"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@playwright/test": "^1.63.0",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "concurrently": "^10.0.5",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.0.0",
     "prettier": "^3.9.9",
+    "turbo": "^2.11.7",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"

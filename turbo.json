@@ -1,0 +1,13 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "envMode": "loose",
+  "agentGuidance": false,
+  "tasks": {
+    "typecheck": { "dependsOn": ["^typecheck"] },
+    "build": { "outputs": ["dist/**"] },
+    "dev": { "cache": false, "persistent": true },
+    "//#lint": {},
+    "//#test": {}
+  }
+}
