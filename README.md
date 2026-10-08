@@ -9,7 +9,10 @@ trade, fall in love, have children and die. You can observe everything, but you 
 **Status: Phase 6 (replay and scale) — all planned phases are built.** Villagers are born, grow up, learn to talk, work, trade, fall in
 love, have children, build houses, grow old and die; children inherit looks, temperament and
 aptitudes from their parents, and estates pass to heirs. They farm, fish, forage, chop wood, bake,
-make tools, trade at the market, and can also steal and fight. Over a long life they keep a diary,
+make tools, trade at the market, and can also steal and fight. They can grow the village too:
+clear and sow fields of their own, quarry stone, put up bakeries, workshops, wells, animal pens
+and market stalls, keep hens and sheep, sew warm clothes, sell from their own stalls, hire each
+other for a wage, and hold village meetings that pass rules, set a levy and elect a leader. Over a long life they keep a diary,
 write a chapter of their life story every year, form beliefs and forget what didn't matter. You can
 send droughts, storms, sickness, fires and bumper harvests, search the whole history, and read
 anyone's life story. The year turns through spring, summer, autumn and winter; you can scrub the
@@ -150,6 +153,14 @@ and open **Raw AI exchanges** to see the exact prompt and reply behind recent de
 and the workshop turns wood into planks and tools. The town market (click it, or see the World tab)
 buys and sells everything at prices that follow supply and demand. Villagers can give things to each
 other and make trade offers; they only know market prices they've seen themselves.
+
+**Growing the village**: villagers can clear land for fields of their own, cut stone, build new
+bakeries, workshops, stone wells, animal pens and market stalls (a building with enough stone in it
+can't burn), keep hens and sheep for eggs and wool, make warm clothes, sell from their own stall at
+their own price, hire each other for a daily wage, and call village meetings at the market to vote
+on rules: a daily levy into the village purse, or a leader who may spend it. The World tab's
+**Village** section shows the leader, purse, rules, meetings, stalls, pens, owned fields and work
+agreements; click a stall or pen on the map for its goods or animals.
 
 **Families**: each person's inspector shows their family, relationships (how they feel about whom),
 pregnancy, will, inborn aptitudes and a **Family tree** (grandparents to grandchildren). Babies stay

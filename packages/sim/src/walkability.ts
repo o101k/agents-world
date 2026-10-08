@@ -9,6 +9,8 @@ const BLOCKING: ReadonlySet<MapObjectKind> = new Set([
   'workshop',
   'market',
   'well',
+  'pen',
+  'stall',
 ]);
 
 /** 1 = a person can stand here. Buildings are solid except for their doorway tile. */

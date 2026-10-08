@@ -61,7 +61,14 @@ export interface KnownPlaceState {
   lastSeenAmount?: number;
   /** Last time the agent tried and failed to find a way there. */
   unreachableTick?: number;
+  /** A market stall's goods when last seen. */
+  lastSeenForSale?: { item: ItemName; quantity: number; price: number }[];
+  /** An animal pen's animals when last seen. */
+  lastSeenAnimals?: { hens: number; sheep: number };
 }
+
+/** Longer jobs done at a place: clearing land, sowing, quarrying, tending animals. */
+export type TaskKind = 'clear_field' | 'sow' | 'quarry' | 'tend_animals';
 
 /** What the body is doing right now. Multi-tick; plans are made of these. */
 export type ActionState =
@@ -79,10 +86,13 @@ export type ActionState =
   | { type: 'chop'; objectId: string; until: number }
   | { type: 'craft'; recipe: RecipeName; until: number }
   | { type: 'build'; objectId: string; until: number }
+  | { type: 'task'; task: TaskKind; objectId: string; until: number; item?: ItemName }
   | { type: 'eat'; item: ItemName; until: number }
   | { type: 'drink'; until: number }
   | { type: 'sleep'; since: number }
   | { type: 'rest'; until: number };
+
+export type TaskAction = Extract<ActionState, { type: 'task' }>;
 
 export interface Agent {
   id: string;
@@ -179,6 +189,18 @@ export interface Agent {
   sickness: { severity: number; since: number; known: boolean; tended: number } | null;
   /** Can't catch the same sickness again until this tick. */
   immuneUntil: number;
+  // ---- Growing the village (state v9)
+  /** Meetings this person has heard called (ids in `state.meetings`). */
+  knownMeetings: string[];
+  /** The market notice board (rules, leader, purse) as last read. */
+  noticeBoard: {
+    tick: number;
+    ruleIds: string[];
+    leaderId: string | null;
+    treasury: number;
+    taxPerDay: number;
+  } | null;
+
   /** Market prices as last seen in person. */
   priceKnowledge: {
     tick: number;

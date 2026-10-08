@@ -40,10 +40,35 @@ export type DecisionTrigger =
   | { kind: 'reflect'; scope: 'day' | 'year' }
   | { kind: 'unwell' }
   | { kind: 'world_event'; description: string }
+  | { kind: 'job_offer'; fromId: string; fromName: string; wage: number; days: number }
+  | { kind: 'job_answered'; byName: string; accepted: boolean }
+  | { kind: 'job_ended'; byName: string; reason: string }
+  | {
+      kind: 'meeting_called';
+      byName: string;
+      topic: string;
+      place: string;
+      startsInMinutes: number;
+    }
+  | { kind: 'meeting_open'; topic: string }
+  | { kind: 'rule_proposed'; proposalId: string; byName: string; text: string }
   | { kind: 'check_in' };
 
 export type ItemName =
-  'berries' | 'vegetables' | 'fish' | 'bread' | 'wheat' | 'wood' | 'planks' | 'tools';
+  | 'berries'
+  | 'vegetables'
+  | 'fish'
+  | 'bread'
+  | 'wheat'
+  | 'wood'
+  | 'planks'
+  | 'tools'
+  | 'stone'
+  | 'eggs'
+  | 'wool'
+  | 'clothes'
+  | 'hen'
+  | 'sheep';
 
 export interface ItemInfo {
   label: string;
@@ -62,6 +87,12 @@ export const ITEMS: Record<ItemName, ItemInfo> = {
   wood: { label: 'Wood', nutrition: 0, basePrice: 2 },
   planks: { label: 'Planks', nutrition: 0, basePrice: 6 },
   tools: { label: 'Tools', nutrition: 0, basePrice: 24 },
+  stone: { label: 'Stone', nutrition: 0, basePrice: 3 },
+  eggs: { label: 'Eggs', nutrition: 12, basePrice: 3 },
+  wool: { label: 'Wool', nutrition: 0, basePrice: 4 },
+  clothes: { label: 'Warm clothes', nutrition: 0, basePrice: 16 },
+  hen: { label: 'Hen', nutrition: 0, basePrice: 10 },
+  sheep: { label: 'Sheep', nutrition: 0, basePrice: 28 },
 };
 export const ITEM_NAMES = Object.keys(ITEMS) as ItemName[];
 export const FOOD_ITEMS = ITEM_NAMES.filter((i) => ITEMS[i].nutrition > 0);
@@ -71,7 +102,7 @@ export const ITEM_LABELS = Object.fromEntries(ITEM_NAMES.map((i) => [i, ITEMS[i]
   string
 >;
 
-export type RecipeName = 'bread' | 'planks' | 'tools';
+export type RecipeName = 'bread' | 'planks' | 'tools' | 'clothes';
 
 export interface Recipe {
   inputs: Partial<Record<ItemName, number>>;
@@ -104,8 +135,50 @@ export const RECIPES: Record<RecipeName, Recipe> = {
     minutes: 60,
     skill: 'building',
   },
+  clothes: {
+    inputs: { wool: 3 },
+    outputs: { clothes: 1 },
+    place: 'workshop',
+    minutes: 60,
+    skill: 'building',
+  },
 };
 export const RECIPE_NAMES = Object.keys(RECIPES) as RecipeName[];
+
+/** Animals live in pens; bought and sold at the market like goods. */
+export const ANIMAL_ITEMS = ['hen', 'sheep'] as const satisfies readonly ItemName[];
+/** Crops a cleared field can be sown with (the seed is the crop itself). */
+export const CROP_ITEMS = ['wheat', 'vegetables'] as const satisfies readonly ItemName[];
+export type CropItem = (typeof CROP_ITEMS)[number];
+
+/** What villagers can build. */
+export type BuildingKind = 'house' | 'bakery' | 'workshop' | 'well' | 'pen' | 'stall';
+
+export interface BuildingInfo {
+  label: string;
+  /** Footprint in tiles. */
+  w: number;
+  h: number;
+  /** Has a doorway (people go in); without one it is used from any side. */
+  door: boolean;
+  /** Materials used by each hour-long stretch of work. */
+  planks: number;
+  stone: number;
+  /** How much work it takes compared with a house (1). */
+  work: number;
+}
+
+export const BUILDINGS: Record<BuildingKind, BuildingInfo> = {
+  house: { label: 'House', w: 3, h: 3, door: true, planks: 3, stone: 0, work: 1 },
+  bakery: { label: 'Bakery', w: 4, h: 3, door: true, planks: 3, stone: 0, work: 1.2 },
+  workshop: { label: 'Workshop', w: 4, h: 3, door: true, planks: 3, stone: 0, work: 1.2 },
+  well: { label: 'Well', w: 1, h: 1, door: false, planks: 0, stone: 3, work: 0.5 },
+  pen: { label: 'Animal pen', w: 3, h: 3, door: true, planks: 2, stone: 0, work: 0.4 },
+  stall: { label: 'Market stall', w: 2, h: 1, door: false, planks: 2, stone: 0, work: 0.3 },
+};
+export const BUILDING_KINDS = Object.keys(BUILDINGS) as BuildingKind[];
+/** Extra stone that turns a stretch of building into stonework (stone buildings don't burn). */
+export const STONEWORK_STONE = 2;
 
 /** Goods and/or coins in a trade offer or gift. */
 export interface Bundle {
@@ -158,7 +231,23 @@ export type Intent =
   | { type: 'respond_adoption'; fromId: string; accept: boolean }
   | { type: 'declare_will'; agentId: string }
   | { type: 'build_house' }
-  | { type: 'tend'; agentId: string; tries?: number };
+  | { type: 'tend'; agentId: string; tries?: number }
+  // ---- Growing the village
+  | { type: 'build'; building: BuildingKind }
+  | { type: 'clear_field' }
+  | { type: 'sow'; item: CropItem; objectId?: string }
+  | { type: 'quarry'; objectId?: string }
+  | { type: 'tend_animals'; objectId?: string }
+  | { type: 'stock_stall'; item: ItemName; quantity: number; price: number }
+  | { type: 'take_from_stall'; item: ItemName; quantity: number }
+  | { type: 'buy_from_stall'; objectId: string; item: ItemName; quantity: number }
+  | { type: 'hire'; agentId: string; wage: number; days: number; tries?: number }
+  | { type: 'respond_job'; fromId: string; accept: boolean }
+  | { type: 'end_job'; agentId: string }
+  | { type: 'call_meeting'; topic: string }
+  | { type: 'propose_rule'; text: string; tax?: number; leaderId?: string }
+  | { type: 'vote'; proposalId: string; accept: boolean }
+  | { type: 'pay_from_treasury'; agentId: string; coins: number; tries?: number };
 
 export interface Decision {
   /** Inner monologue shown to the observer. */
@@ -203,6 +292,51 @@ export interface KnownPlace {
   /** Who owns it, as the agent knows them ('you' for their own). */
   owner?: string;
   lastSeenTick: number;
+  /** Unfinished (being built, or a field being cleared): how far along, 0–1. */
+  progress?: number;
+  /** A market stall: what was for sale when last seen. */
+  forSale?: { item: ItemName; quantity: number; price: number }[];
+  /** An animal pen: the animals in it when last seen. */
+  animals?: { hens: number; sheep: number };
+}
+
+/** A person's work agreements (hired help, or a job). */
+export interface JobView {
+  role: 'employer' | 'worker';
+  otherId: string;
+  otherName: string;
+  /** Coins a day. */
+  wage: number;
+  /** The agreement ends at the start of this day. */
+  untilDay: number;
+}
+
+/** What a person knows of the village's meetings, rules and leader. */
+export interface VillageKnowledge {
+  leader: { id: string; name: string } | null;
+  rules: string[];
+  /** The village purse, as last read on the notice board (null = never read it). */
+  treasury: number | null;
+  /** Daily levy per grown-up, as last read (0 = none). */
+  taxPerDay: number;
+  meetings: {
+    id: string;
+    topic: string;
+    place: string;
+    placeId: string;
+    /** Negative once it has started. */
+    startsInMinutes: number;
+    open: boolean;
+  }[];
+  /** Proposals at the meeting they are attending right now. */
+  proposals: {
+    id: string;
+    byName: string;
+    text: string;
+    tax?: number;
+    leaderName?: string;
+    voted: boolean;
+  }[];
 }
 
 export interface OfferView {
@@ -236,6 +370,8 @@ export interface Perception {
     homeId: string | null;
     asleep: boolean;
     indoors: boolean;
+    /** Their own skills, 0–100 (whole numbers). */
+    skills: Record<SkillName, number>;
   };
   /** A short description of where the agent is. */
   location: string;
@@ -269,8 +405,14 @@ export interface Perception {
   pregnant: boolean;
   /** Language ability 0–100 (shapes how they speak and understand). */
   language: number;
-  /** Pending requests addressed to this agent (partnership, child, adoption). */
-  requests: { kind: RequestKind; fromId: string; fromName: string }[];
+  /** Pending requests addressed to this agent (partnership, child, adoption, a job). */
+  requests: {
+    kind: RequestKind;
+    fromId: string;
+    fromName: string;
+    /** A job offer's terms. */
+    terms?: { wage: number; days: number };
+  }[];
   /** What's going on around them that they can sense (season, weather, drought, sickness, fire). */
   conditions: string[];
   season?: Season;
@@ -297,10 +439,16 @@ export interface Perception {
   offers: OfferView[];
   /** Trees within sight (for chopping wood). */
   treesNearby: number;
+  /** Rocks within sight (for quarrying stone). */
+  rocksNearby?: number;
+  /** Work agreements: people they employ, or who employ them. */
+  jobs?: JobView[];
+  /** Meetings, rules and leadership they know about. */
+  village?: VillageKnowledge;
 }
 
 /** Questions one person puts to another that wait for an answer. */
-export type RequestKind = 'proposal' | 'child_request' | 'adoption';
+export type RequestKind = 'proposal' | 'child_request' | 'adoption' | 'job';
 
 export interface DecisionRequest {
   agentId: string;
@@ -319,6 +467,12 @@ const ItemSchema = z.enum([
   'wood',
   'planks',
   'tools',
+  'stone',
+  'eggs',
+  'wool',
+  'clothes',
+  'hen',
+  'sheep',
 ]);
 const Qty = z.number().int().min(1).max(999);
 const BundleSchema = z.object({
@@ -345,7 +499,7 @@ export const IntentSchema = z.discriminatedUnion('type', [
     message: z.string().min(1).max(600),
   }),
   z.object({ type: z.literal('chop_wood'), objectId: z.string().optional() }),
-  z.object({ type: z.literal('craft'), recipe: z.enum(['bread', 'planks', 'tools']) }),
+  z.object({ type: z.literal('craft'), recipe: z.enum(['bread', 'planks', 'tools', 'clothes']) }),
   z.object({ type: z.literal('buy'), item: ItemSchema, quantity: Qty }),
   z.object({ type: z.literal('sell'), item: ItemSchema, quantity: Qty }),
   z.object({ type: z.literal('give'), agentId: z.string(), gift: BundleSchema }),
@@ -388,6 +542,52 @@ export const IntentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('declare_will'), agentId: z.string() }),
   z.object({ type: z.literal('build_house') }),
   z.object({ type: z.literal('tend'), agentId: z.string() }),
+  z.object({
+    type: z.literal('build'),
+    building: z.enum(['house', 'bakery', 'workshop', 'well', 'pen', 'stall']),
+  }),
+  z.object({ type: z.literal('clear_field') }),
+  z.object({
+    type: z.literal('sow'),
+    item: z.enum(['wheat', 'vegetables']),
+    objectId: z.string().optional(),
+  }),
+  z.object({ type: z.literal('quarry'), objectId: z.string().optional() }),
+  z.object({ type: z.literal('tend_animals'), objectId: z.string().optional() }),
+  z.object({
+    type: z.literal('stock_stall'),
+    item: ItemSchema,
+    quantity: Qty,
+    price: z.number().int().min(1).max(999),
+  }),
+  z.object({ type: z.literal('take_from_stall'), item: ItemSchema, quantity: Qty }),
+  z.object({
+    type: z.literal('buy_from_stall'),
+    objectId: z.string(),
+    item: ItemSchema,
+    quantity: Qty,
+  }),
+  z.object({
+    type: z.literal('hire'),
+    agentId: z.string(),
+    wage: z.number().int().min(1).max(999),
+    days: z.number().int().min(1).max(30),
+  }),
+  z.object({ type: z.literal('respond_job'), fromId: z.string(), accept: z.boolean() }),
+  z.object({ type: z.literal('end_job'), agentId: z.string() }),
+  z.object({ type: z.literal('call_meeting'), topic: z.string().trim().min(1).max(200) }),
+  z.object({
+    type: z.literal('propose_rule'),
+    text: z.string().trim().min(1).max(300),
+    tax: z.number().int().min(0).max(100).optional(),
+    leaderId: z.string().optional(),
+  }),
+  z.object({ type: z.literal('vote'), proposalId: z.string(), accept: z.boolean() }),
+  z.object({
+    type: z.literal('pay_from_treasury'),
+    agentId: z.string(),
+    coins: z.number().int().min(1).max(100000),
+  }),
 ]);
 
 export const DecisionSchema = z.object({
@@ -475,5 +675,35 @@ export function describeIntent(intent: Intent, names: (id: string) => string = (
       return 'Work on building a house';
     case 'tend':
       return `Tend to ${names(intent.agentId)}`;
+    case 'build':
+      return `Work on building ${BUILDINGS[intent.building].label.toLowerCase()}`;
+    case 'clear_field':
+      return 'Clear land for a new field';
+    case 'sow':
+      return `Sow ${intent.item}${intent.objectId ? ` at ${names(intent.objectId)}` : ''}`;
+    case 'quarry':
+      return 'Quarry stone';
+    case 'tend_animals':
+      return `Tend the animals${intent.objectId ? ` at ${names(intent.objectId)}` : ''}`;
+    case 'stock_stall':
+      return `Put ${intent.quantity} ${intent.item} on the stall at ${intent.price} coins each`;
+    case 'take_from_stall':
+      return `Take ${intent.quantity} ${intent.item} back from the stall`;
+    case 'buy_from_stall':
+      return `Buy ${intent.quantity} ${intent.item} at ${names(intent.objectId)}`;
+    case 'hire':
+      return `Offer ${names(intent.agentId)} work: ${intent.wage} coins a day for ${intent.days} days`;
+    case 'respond_job':
+      return `${intent.accept ? 'Accept' : 'Turn down'} ${names(intent.fromId)}'s job offer`;
+    case 'end_job':
+      return `End the work agreement with ${names(intent.agentId)}`;
+    case 'call_meeting':
+      return `Call a village meeting: ${intent.topic}`;
+    case 'propose_rule':
+      return `Propose: ${intent.text}`;
+    case 'vote':
+      return `Vote ${intent.accept ? 'for' : 'against'} proposal ${intent.proposalId}`;
+    case 'pay_from_treasury':
+      return `Pay ${intent.coins} coins from the village purse to ${names(intent.agentId)}`;
   }
 }

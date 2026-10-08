@@ -6,6 +6,7 @@ import {
   formatClock,
   rateLimitFacts,
   rateLimitSource,
+  type MapObject,
   type MapObjectKind,
   type RateLimitNotice,
   type WorldMap,
@@ -18,6 +19,7 @@ import { BrainEditor } from '../components/BrainEditor.tsx';
 import { WorldBrainsDialog } from '../components/WorldBrainsDialog.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
 import { ObjectHistory } from '../components/ObjectHistory.tsx';
+import { PenFacts, StallStock, useVillage, VillagePanel } from '../components/VillagePanel.tsx';
 import { PeopleList } from '../components/PeopleList.tsx';
 import { SpawnDialog } from '../components/SpawnDialog.tsx';
 import { ConditionsBar, WorldEventsDialog } from '../components/WorldEventsDialog.tsx';
@@ -33,14 +35,17 @@ import { useWorld } from '../worldStore.ts';
 const OBJECT_BLURBS: Partial<Record<MapObjectKind, string>> = {
   house: 'A family home. Shelter from cold and storms; a place to sleep, rest and be ill in.',
   market: 'The town market buys and sells basic goods at prices driven by supply and demand.',
-  well: 'Fresh drinking water for everyone.',
-  field: 'Common farmland anyone may work. Crops grow back over time.',
+  well: 'Fresh drinking water. New wells are built of stone.',
+  field:
+    'Farmland. Common fields belong to everyone; cleared fields belong to whoever cleared them.',
   bakery: 'Turns wheat into bread (3 wheat → 2 bread).',
   workshop: 'Turns wood into planks (2 → 2) and planks into tools (3 → 1).',
   dock: 'A good spot for fishing.',
   tree: 'Chop it for wood. It grows back slowly.',
   berry_bush: 'Wild berries — free food for whoever finds them. They grow back slowly.',
-  rock: 'Stone for building.',
+  rock: 'Quarry it for stone.',
+  pen: 'Hens and sheep live here. Tend them for eggs and wool.',
+  stall: "A villager's own stall: their goods at their prices.",
 };
 
 type Tab = 'selected' | 'people' | 'world';
@@ -352,6 +357,8 @@ function WorldInfo({
       </p>
       <h3>Town market</h3>
       <MarketPanel worldId={worldId} />
+      <h3>Village</h3>
+      <VillagePanel worldId={worldId} />
       <h3>Default brain</h3>
       <p className="muted small">
         Used for newborns and spawned people. You can also set each person’s brain in their
@@ -471,6 +478,9 @@ function SelectionDetails({
           </p>
         )}
         {object.kind === 'market' && <MarketPanel worldId={worldId} />}
+        {(object.kind === 'pen' || object.kind === 'stall') && (
+          <VillageObjectFacts worldId={worldId} object={object} />
+        )}
         <ObjectHistory
           key={object.id}
           worldId={worldId}
@@ -489,6 +499,25 @@ function SelectionDetails({
       </div>
     </div>
   );
+}
+
+/** A stall's goods or a pen's animals, from the village's records. */
+function VillageObjectFacts({ worldId, object }: { worldId: string; object: MapObject }) {
+  const village = useVillage(worldId);
+  if (!village) return null;
+  if (object.kind === 'stall') {
+    const stall = village.stalls.find((s) => s.id === object.id);
+    if (!stall) return null;
+    return (
+      <>
+        <h4 className="village-sub">Goods for sale</h4>
+        <StallStock stock={stall.stock} />
+      </>
+    );
+  }
+  const pen = village.pens.find((p) => p.id === object.id);
+  if (!pen) return null;
+  return <PenFacts hens={pen.hens} sheep={pen.sheep} wool={pen.wool} />;
 }
 
 /** Says exactly what stopped the world: whose decision, which provider and model, which limit. */

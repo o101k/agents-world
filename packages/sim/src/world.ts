@@ -26,7 +26,7 @@ import { generateVillageMap } from './mapgen.ts';
 import { Rng, type RngState } from './rng.ts';
 import { mapCache } from './spatial.ts';
 
-export const WORLD_STATE_VERSION = 8;
+export const WORLD_STATE_VERSION = 9;
 
 /** Regrowing resource on a map object (berries on a bush, crops in a field). */
 export interface ResourceState {
@@ -47,6 +47,69 @@ export interface Offer {
   ask: Bundle;
   createdTick: number;
   expiresTick: number;
+}
+
+/** A market stall's goods, each with its asking price. */
+export interface StallState {
+  stock: Partial<Record<ItemName, { quantity: number; price: number }>>;
+}
+
+/** Animals in a pen. */
+export interface PenState {
+  hens: number;
+  sheep: number;
+  /** Wool grown but not yet collected (fractional). */
+  wool: number;
+  /** Last time someone tended them (neglected animals stray or die). */
+  lastTendedTick: number;
+}
+
+/** A work agreement: `worker` is paid `wage` coins a day by `employer` until `endTick`. */
+export interface Contract {
+  id: string;
+  employer: string;
+  worker: string;
+  wage: number;
+  startTick: number;
+  endTick: number;
+  /** In-game day of the last wage paid. */
+  lastPaidDay: number;
+}
+
+/** Something put to the vote at a meeting. */
+export interface Proposal {
+  id: string;
+  by: string;
+  text: string;
+  /** A daily levy per grown-up (replaces any earlier one; 0 abolishes it). */
+  tax?: number;
+  /** Elect this person village leader. */
+  leaderId?: string;
+  /** Votes by person id (true = yes). */
+  votes: Record<string, boolean>;
+}
+
+/** A village meeting at a place, called by someone. */
+export interface Meeting {
+  id: string;
+  caller: string;
+  topic: string;
+  placeId: string;
+  startTick: number;
+  endTick: number;
+  proposals: Proposal[];
+  /** People who were there while it was open. */
+  attendees: string[];
+}
+
+/** A rule the village voted for. */
+export interface Rule {
+  id: string;
+  text: string;
+  tax?: number;
+  leaderId?: string;
+  proposer: string;
+  passedTick: number;
 }
 
 /**
@@ -70,7 +133,14 @@ export interface WorldState {
   /** Owners of buildings by object id (houses: the household; bakery/workshop: their keepers). */
   owners: Record<string, string[]>;
   /** Partnership proposals, requests to try for a child and adoption offers, awaiting an answer. */
-  requests: { kind: RequestKind; from: string; to: string; tick: number }[];
+  requests: {
+    kind: RequestKind;
+    from: string;
+    to: string;
+    tick: number;
+    /** A job offer's terms (coins a day, for how many days). */
+    terms?: { wage: number; days: number };
+  }[];
   /** Bumped whenever the map changes (e.g. a new house), so viewers reload it. */
   mapVersion: number;
   /** World events in progress (drought, storm, disease, fires, plenty). */
@@ -78,6 +148,24 @@ export interface WorldState {
   nextConditionNum: number;
   /** Year and season (advances with the aging slider). */
   calendar: Calendar;
+
+  // ---- Growing the village (state v9)
+  /** Goods on market stalls, by stall object id. */
+  stalls: Record<string, StallState>;
+  /** Animals in pens, by pen object id. */
+  pens: Record<string, PenState>;
+  contracts: Contract[];
+  nextContractNum: number;
+  /** Meetings called and not yet over. */
+  meetings: Meeting[];
+  nextMeetingNum: number;
+  nextProposalNum: number;
+  /** Rules passed at meetings, oldest first. */
+  rules: Rule[];
+  nextRuleNum: number;
+  leaderId: string | null;
+  /** The village purse (coins). */
+  treasury: number;
 }
 
 /** JSON-safe form of WorldState, used for snapshots. */
@@ -150,6 +238,7 @@ export function createWorldState({
     conditions: [],
     nextConditionNum: 1,
     calendar: { ...START_CALENDAR },
+    ...emptyVillage(),
   };
   withRng(state, (r) => {
     state.resources = initialResources(map, r);
@@ -159,6 +248,36 @@ export function createWorldState({
   linkFamilies(state, cast);
   assignOwnership(state);
   return state;
+}
+
+/** Village institutions a new world (or an upgraded old save) starts without. */
+export function emptyVillage(): Pick<
+  WorldState,
+  | 'stalls'
+  | 'pens'
+  | 'contracts'
+  | 'nextContractNum'
+  | 'meetings'
+  | 'nextMeetingNum'
+  | 'nextProposalNum'
+  | 'rules'
+  | 'nextRuleNum'
+  | 'leaderId'
+  | 'treasury'
+> {
+  return {
+    stalls: {},
+    pens: {},
+    contracts: [],
+    nextContractNum: 1,
+    meetings: [],
+    nextMeetingNum: 1,
+    nextProposalNum: 1,
+    rules: [],
+    nextRuleNum: 1,
+    leaderId: null,
+    treasury: 0,
+  };
 }
 
 /** Households own their houses; the baker keeps the bakery and the carpenter the workshop. */
@@ -239,6 +358,23 @@ export function deserializeWorldState(data: SerializedWorldState | LegacyV1State
     // State v8: adoption.
     state.version = WORLD_STATE_VERSION;
     for (const a of state.agents as Partial<AgentT>[]) a.adoptiveParentIds ??= [];
+  }
+  if (from <= 8) {
+    // State v9: growing the village (new goods, stalls, pens, jobs, meetings and rules).
+    state.version = WORLD_STATE_VERSION;
+    const fresh = emptyVillage();
+    for (const [k, v] of Object.entries(fresh)) {
+      const key = k as keyof typeof fresh;
+      if ((state as Partial<WorldState>)[key] === undefined)
+        (state as unknown as Record<string, unknown>)[key] = v;
+    }
+    const market = initialMarket();
+    for (const [item, n] of Object.entries(market.stock))
+      state.market.stock[item as ItemName] ??= n;
+    for (const a of state.agents as Partial<AgentT>[]) {
+      a.knownMeetings ??= [];
+      a.noticeBoard ??= null;
+    }
   }
   return state;
 }
@@ -359,6 +495,7 @@ function upgradeV1(old: LegacyV1State): WorldState {
     conditions: [],
     nextConditionNum: 1,
     calendar: { ...START_CALENDAR },
+    ...emptyVillage(),
   };
   withRng(state, (r) => {
     state.resources = initialResources(state.map, r);

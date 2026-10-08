@@ -299,6 +299,30 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-07 — Growing the village (owner request).** Seven new kinds of work, planned in
+  [`docs/plans/growing-the-village.md`](docs/plans/growing-the-village.md) and built in parallel
+  (one sim module + one mock-brain file each, after shared groundwork wired every action into the
+  engine, perception, prompt and decide tool): (1) `clear_field` / `sow`: fields of one's own
+  near home, at most 2 per person, owned with the partner; owners notice crop takers. (2) `build
+  {building}`: house, bakery, workshop, well (stone), animal pen, market stall; `build_house`
+  stays as the house shortcut. Spare stone in at least half the stretches makes a stone building
+  that fire can't burn. (3) `quarry`: stone from rocks. (4) `tend_animals`: hens and sheep bought
+  at the market live in pens (eggs, wool; neglect loses them, care breeds them); wool → warm
+  clothes that cut the night cold by 40% and wear out. (5) Own market stalls at one's own prices.
+  (6) `hire` / `respond_job` / `end_job`: daily wages paid at 20:00, no enforcement beyond trust.
+  (7) `call_meeting` / `propose_rule` / `vote` / `pay_from_treasury`: meetings at the market; a
+  rule passes with more yes than no and at least 2 yes; rules may set a daily levy into a village
+  purse or elect a leader who alone spends it. People learn rules from the market's notice board.
+  No courts or enforcement: rules are social, as theft already is. World state v9. Fire can now
+  also burn pens and stalls (never stone buildings). The observer gets a **Village** section in
+  the World tab. Found in review: villagers never saw their own skill levels, so they tried to
+  build without the skill and failed (a paid call each time); the prompt now lists their skills
+  (0–100) and the skill a new building needs. The Mock brain gives each feature its own roll (rare
+  ones like meetings were swallowed by small talk) and only starts a building it has the skill
+  for and can pay for to the end, so none are left half-built. In 8-day mock runs of 16 people
+  each village now builds a stall or pen, hires, and sometimes holds a meeting; deaths unchanged.
+  New fields, buildings, pens, stalls and quarried rocks get object histories like everything else.
+
 - **2026-10-07 — Every map object has a history (owner request).** Clicking a house, bush, tree,
   field, the well, a workshop… shows whether it was there when the village was founded or who
   built it, then its lasting changes (built, burnt, rebuilt, inherited, someone moving in, births

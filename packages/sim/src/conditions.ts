@@ -4,6 +4,7 @@ import {
   TICKS_PER_HOUR,
   type ActiveCondition,
   type Intent,
+  type MapObject,
   type Point,
 } from '@aw/shared';
 import { fullName, remember, type Agent } from './agent.ts';
@@ -40,7 +41,9 @@ export interface WorldEventSpec {
 export type Condition = ActiveCondition;
 
 const FIRE_TICKS = 60;
-const BURNABLE = new Set(['house', 'bakery', 'workshop']);
+const BURNABLE_KINDS = new Set(['house', 'bakery', 'workshop', 'pen', 'stall']);
+/** Wooden buildings burn; stone-built ones don't. */
+const burnable = (o: MapObject) => BURNABLE_KINDS.has(o.kind) && !o.stone;
 /** How long someone who recovered can't catch the sickness again. */
 const IMMUNITY_TICKS = 30 * TICKS_PER_DAY;
 /** Symptoms show a few hours after catching it. */
@@ -162,7 +165,7 @@ export function startWorldEvent(ctx: Ctx, spec: WorldEventSpec): void {
       const cache = mapCache(state.map);
       const pick = spec.targetId ? cache.byId.get(spec.targetId) : undefined;
       const candidates = state.map.objects.filter(
-        (o) => BURNABLE.has(o.kind) && (o.progress ?? 1) >= 1 && !onFire(state, o.id),
+        (o) => burnable(o) && (o.progress ?? 1) >= 1 && !onFire(state, o.id),
       );
       const target =
         pick && candidates.includes(pick)
@@ -247,7 +250,7 @@ function burnDown(ctx: Ctx, fire: Condition): void {
   }
   if (conditionLevel(state, 'storm') >= 0.3) return; // the rain stops it spreading
   for (const other of state.map.objects) {
-    if (other === o || !BURNABLE.has(other.kind) || (other.progress ?? 1) < 1) continue;
+    if (other === o || !burnable(other) || (other.progress ?? 1) < 1) continue;
     if (onFire(state, other.id)) continue;
     const gap = Math.max(
       other.x - (o.x + o.w - 1),

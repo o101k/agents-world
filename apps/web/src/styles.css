@@ -1339,6 +1339,35 @@ input[type='range'] {
   overflow-wrap: anywhere;
 }
 
+/* Village panel (World tab and the details of a pen or stall) */
+.village {
+  font-size: 13px;
+}
+.village p {
+  margin: 4px 0;
+}
+.village-sub {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.village-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.village-list li {
+  margin: 3px 0;
+}
+.village-item {
+  margin: 6px 0 10px;
+}
+.village-item strong {
+  font-weight: 600;
+}
+
 /* ---------- object history (inspector) */
 .object-history {
   list-style: none;

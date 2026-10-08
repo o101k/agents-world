@@ -37,6 +37,26 @@ const ADULT_ONLY: IntentType[] = [
   'build_house',
   'name_child',
   'adopt_child',
+  // Growing the village: grown-ups build, hire, and take part in village politics.
+  'build',
+  'hire',
+  'call_meeting',
+  'propose_rule',
+  'vote',
+  'pay_from_treasury',
+];
+/** Grown-up work that children can't do yet (teens can). */
+const NOT_FOR_CHILDREN: IntentType[] = [
+  'craft',
+  'attack',
+  'teach',
+  'clear_field',
+  'sow',
+  'quarry',
+  'stock_stall',
+  'take_from_stall',
+  'respond_job',
+  'end_job',
 ];
 const ALL: IntentType[] = [
   'go_to',
@@ -60,6 +80,15 @@ const ALL: IntentType[] = [
   'teach',
   'tend',
   'respond_adoption',
+  'clear_field',
+  'sow',
+  'quarry',
+  'tend_animals',
+  'stock_stall',
+  'take_from_stall',
+  'buy_from_stall',
+  'respond_job',
+  'end_job',
   ...ADULT_ONLY,
 ];
 
@@ -67,9 +96,7 @@ const ALL: IntentType[] = [
 export const ABILITIES: Record<LifeStage, IntentType[]> = {
   infant: INFANT,
   toddler: TODDLER,
-  child: ALL.filter(
-    (t) => !ADULT_ONLY.includes(t) && t !== 'craft' && t !== 'attack' && t !== 'teach',
-  ),
+  child: ALL.filter((t) => !ADULT_ONLY.includes(t) && !NOT_FOR_CHILDREN.includes(t)),
   teen: ALL.filter((t) => !ADULT_ONLY.includes(t) || t === 'respond_proposal'),
   adult: ALL,
   elder: ALL,

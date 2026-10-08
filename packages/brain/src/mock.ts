@@ -10,6 +10,7 @@ import {
   type KnownPlace,
   type Perception,
 } from '@aw/shared';
+import { villagePlan, villageReply } from './mockVillage/index.ts';
 import type { BrainProvider, BrainResult } from './types.ts';
 
 const NUTRITION = Object.fromEntries(FOOD_ITEMS.map((i) => [i, ITEMS[i].nutrition])) as Record<
@@ -52,6 +53,8 @@ export function mockDecide(p: Perception): Decision {
 
   const life = lifePlan(p, roll);
   if (life) return life;
+  const answer = villageReply(p, roll);
+  if (answer) return answer;
 
   // Someone spoke to us: answer briefly (unless we're in real trouble), then carry on.
   if (p.trigger.kind === 'spoken_to') {
@@ -286,6 +289,8 @@ export function mockDecide(p: Perception): Decision {
       ],
     };
   }
+  const grow = villagePlan(p, roll);
+  if (grow) return grow;
   const work = workPlan(p, roll);
   if (work) return work;
   if (roll < 0.15) {

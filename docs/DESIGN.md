@@ -71,19 +71,23 @@ Object ids are never reused. Worlds upgraded to this (migration 4) get their `bu
 events matched to buildings by name, and meta `objectHistorySince` marks when day-to-day use
 started being recorded.
 
-## World state (v8)
+## World state (v9)
 
 `seed, tick, rng, settings {daysPerYear, defaultBrain}, map {width, height, tiles, objects},
 agents[], resources{}, market {stock}, offers[], requests[], owners{}, nextAgentNum, nextOfferNum,
-mapVersion, conditions[], nextConditionNum, calendar {year, progress}`. Agents are never removed (the dead stay for history
-and family trees). Map objects may carry `progress` (being built or rebuilt) and `burntTick`.
+mapVersion, conditions[], nextConditionNum, calendar {year, progress}, stalls{}, pens{}, contracts[],
+meetings[], rules[], leaderId, treasury` (plus the `next…Num` counters for contracts, meetings,
+proposals and rules). Agents are never removed (the dead stay for history
+and family trees). Map objects may carry `progress` (being built or rebuilt), `burntTick`, and for
+buildings `workDone`/`stoneWork`/`stone` (built with stone: fire can't burn it).
 
 An **agent** holds identity (name, family name, sex, age in years), appearance, personality (Big
 Five), traits, background, occupation, home, position, needs, health, inventory, money, skills,
 knowledge (places seen, last-seen amounts, market prices seen), people (relationships), memory
 (recent + long-term stream), brain config, current thought/goal/plan/action, family links,
 aptitude, constitution, pregnancy, will, adoptive parents, sickness and immunity, the forgotten list, and the day of
-the last reflection and age of the last life chapter.
+the last reflection and age of the last life chapter, the meetings they've heard of, and what
+they last read on the market's notice board.
 
 ## The tick engine (`packages/sim/src/engine.ts`)
 
@@ -118,13 +122,15 @@ the person (5 min × streak, max 60) before deciding again, so a confused brain 
 
 ## Perception — no omniscience (`packages/sim/src/perception.ts`)
 
-A person's `Perception` has only: their body, bag, money and position; where they are; people in
+A person's `Perception` has only: their body, bag, money, skill levels and position; where they are; people in
 sight (strangers described by looks until introduced); places they've seen (with food seen there,
 crop, owner); prices they saw at the market; recent experiences; recalled memories; people they
 know and how they feel about them; family (children's needs only when with them); open offers and
 requests; their stage, what they can do, language ability; the unfinished plan; the conditions
 they can sense (storm, drought, dry river, fire in sight, sickness going around); whether they're
-ill; their latest life chapters and beliefs; for a reflection, the material to look back on.
+ill; their latest life chapters and beliefs; their work agreements; what they know of the village
+(rules, leader and purse as last read on the market's notice board, meetings they heard called,
+proposals at a meeting they're at); rocks in sight; for a reflection, the material to look back on.
 Places they couldn't reach recently are flagged, so nobody keeps walking into a wall.
 
 Memory recall ranks the long-term stream by vividness (strength) + recency + relevance (people
@@ -213,6 +219,32 @@ it means. The mock brain stocks more food in autumn and winter.
   the other person (`approach`, three catch-up attempts).
 - Conversation: `talk_to` within 2 tiles; bystanders within 5 overhear; replies until 6 turns;
   talking takes time; young speakers are simplified and young listeners understand only part.
+
+## Growing the village
+
+Seven kinds of work let villagers change the world itself (plan and specs:
+[`docs/plans/growing-the-village.md`](plans/growing-the-village.md)). Each lives in its own sim
+module and mock-brain file; the engine, perception, prompt and decide tool were wired for all of
+them up front so the modules could be built in parallel.
+
+| Module            | Actions                                                     | In short                                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `farming.ts`      | `clear_field`, `sow`                                        | Clear a 4×3 plot near home (trees give wood) over several hours; it becomes farmland owned by the clearer and partner (at most 2 each). Sow 2 wheat or vegetables to make it grow. Owners notice people taking crops. |
+| `construction.ts` | `build {building}` (`build_house` = house)                  | House, bakery, workshop, well, animal pen, market stall (`BUILDINGS` in `@aw/shared`): skill, planks and stone per one-hour stretch. Spare stone in half the stretches makes a stone building that fire can't burn.   |
+| `quarry.ts`       | `quarry`                                                    | Cut 2 stone (3 with tools) from a rock in 45 minutes; a rock holds 6 and refills 0.5 a day.                                                                                                                          |
+| `animals.ts`      | `tend_animals` (+ buy hens/sheep, craft `clothes`)          | Pens hold up to 8 animals. Tending every 6 h gives eggs and wool (more with fodder); neglected pens lose animals, tended ones breed. Wool → warm clothes (cold hits 40% less; they wear out).                          |
+| `stalls.ts`       | `stock_stall`, `take_from_stall`, `buy_from_stall`          | A villager's own stall at their own prices; coins go to the owner. Passers-by see what's for sale.                                                                                                                   |
+| `jobs.ts`         | `hire`, `respond_job`, `end_job`                            | Work agreements for a daily wage over some days, paid at 20:00; an unpaid wage ends the agreement and costs trust. Hired hands may tend their employer's pen.                                                       |
+| `governance.ts`   | `call_meeting`, `propose_rule`, `vote`, `pay_from_treasury` | Meetings at the market (called an hour ahead, heard within 12 tiles). Proposals pass with more yes than no and at least 2 yes; rules can set a daily levy into the village purse or elect a leader who spends it.   |
+
+- People only know what they've seen: a stall's goods and a pen's animals when they last looked,
+  the rules, leader and purse from the market's notice board, and meetings they heard called.
+- Longer body actions use a generic `task` action (`clear_field`, `sow`, `quarry`,
+  `tend_animals`) finished by the module that started it. Per-tick hooks (`animalsTick`,
+  `jobsTick`, `governanceTick`) return at once unless it's their hour.
+- New land comes from `land.ts`: `findFreePlot` (grass, a one-tile margin, a walkable doorstep)
+  and `clearPlot` (removes trees, bushes and rocks). Map changes bump `mapVersion`.
+- The observer sees it all in the World tab's **Village** section (`GET /api/worlds/:id/village`).
 
 ## Life cycle (`packages/sim/src/life.ts`)
 
@@ -332,6 +364,7 @@ in/out, cost) and the dialog polls it every 3 s; bulk changes are one `set_brain
 | PUT    | `/api/worlds/:id/cap`                       | `{ capUsd }`                                                       |
 | PUT    | `/api/worlds/:id/aging`                     | `{ daysPerYear }`                                                  |
 | GET    | `/api/worlds/:id/market`                    | `{ stock, quotes, moneySupply }`                                   |
+| GET    | `/api/worlds/:id/village`                   | leader, purse, levy, rules, meetings, stalls, pens, fields, jobs   |
 | POST   | `/api/worlds/:id/spawn`                     | `{ description, name?, sex?, age? }` → `{ agentId }`               |
 | POST   | `/api/worlds/:id/world-event`               | `{ kind, intensity?, hours?, targetId? }`                          |
 | GET    | `/api/worlds/:id/agents/:agentId/story`     | `{ entries }`: their events + diary/chapters, oldest first         |

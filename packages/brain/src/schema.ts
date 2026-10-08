@@ -1,9 +1,13 @@
 import {
+  BUILDING_KINDS,
+  CROP_ITEMS,
   ITEM_NAMES,
   RECIPE_NAMES,
   SKILL_NAMES,
   type SkillName,
   type Bundle,
+  type BuildingKind,
+  type CropItem,
   type Decision,
   type Intent,
   type ItemName,
@@ -43,6 +47,21 @@ export const ACTIONS = [
   'declare_will',
   'build_house',
   'tend',
+  'build',
+  'clear_field',
+  'sow',
+  'quarry',
+  'tend_animals',
+  'stock_stall',
+  'take_from_stall',
+  'buy_from_stall',
+  'hire',
+  'respond_job',
+  'end_job',
+  'call_meeting',
+  'propose_rule',
+  'vote',
+  'pay_from_treasury',
 ] as const;
 
 /**
@@ -75,12 +94,45 @@ export const DECIDE_SCHEMA = {
           item: {
             type: 'string',
             enum: ITEMS,
-            description: 'For eat / buy / sell / give / steal: which item.',
+            description:
+              'For eat / buy / sell / give / steal / sow / stock_stall / take_from_stall / buy_from_stall: which item.',
           },
-          quantity: { type: 'integer', description: 'For buy / sell / give: how many.' },
-          coins: { type: 'integer', description: 'For give: coins to hand over.' },
+          quantity: {
+            type: 'integer',
+            description:
+              'For buy / sell / give / stock_stall / take_from_stall / buy_from_stall: how many.',
+          },
+          coins: {
+            type: 'integer',
+            description: 'For give / pay_from_treasury: coins to hand over.',
+          },
           minutes: { type: 'integer', description: 'For rest: how long (1–600).' },
-          message: { type: 'string', description: 'For talk_to: exactly what you say out loud.' },
+          message: {
+            type: 'string',
+            description:
+              'For talk_to: exactly what you say out loud. For call_meeting: what the meeting is about. For propose_rule: the rule you propose.',
+          },
+          building: {
+            type: 'string',
+            enum: BUILDING_KINDS,
+            description: 'For build: what to build.',
+          },
+          price: {
+            type: 'integer',
+            description: 'For stock_stall: your asking price, coins each.',
+          },
+          wage: { type: 'integer', description: 'For hire: coins a day you will pay.' },
+          days: { type: 'integer', description: 'For hire: for how many days (1–30).' },
+          tax: {
+            type: 'integer',
+            description:
+              'For propose_rule: a daily levy each grown-up pays into the village purse (0 ends any levy). Omit for other rules.',
+          },
+          leader: {
+            type: 'string',
+            description: 'For propose_rule: person id to elect village leader. Omit otherwise.',
+          },
+          proposal_id: { type: 'string', description: 'For vote: which proposal.' },
           recipe: { type: 'string', enum: RECIPE_NAMES, description: 'For craft.' },
           give_item: {
             type: 'string',
@@ -96,7 +148,7 @@ export const DECIDE_SCHEMA = {
           accept: {
             type: 'boolean',
             description:
-              'For respond_offer / respond_proposal / respond_child_request / respond_adoption.',
+              'For respond_offer / respond_proposal / respond_child_request / respond_adoption / respond_job / vote (true = yes).',
           },
           skill: { type: 'string', enum: [...SKILL_NAMES], description: 'For teach.' },
           name: { type: 'string', description: 'For name_child: the first name you give.' },
@@ -164,6 +216,13 @@ interface RawStep {
   accept?: unknown;
   skill?: unknown;
   name?: unknown;
+  building?: unknown;
+  price?: unknown;
+  wage?: unknown;
+  days?: unknown;
+  tax?: unknown;
+  leader?: unknown;
+  proposal_id?: unknown;
 }
 
 const asItem = (v: unknown): ItemName | undefined =>
@@ -247,7 +306,11 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
       case 'buy':
       case 'sell': {
         const item = asItem(step.item);
-        if (item) plan.push({ type: action, item, quantity: asCount(step.quantity) || 1 });
+        const quantity = asCount(step.quantity) || 1;
+        if (item)
+          plan.push(
+            action === 'buy' ? { type: 'buy', item, quantity } : { type: 'sell', item, quantity },
+          );
         break;
       }
       case 'give': {
@@ -349,6 +412,114 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
       case 'tend':
         if (target) plan.push({ type: 'tend', agentId: target });
         break;
+      case 'build':
+        if (
+          typeof step.building === 'string' &&
+          (BUILDING_KINDS as string[]).includes(step.building)
+        )
+          plan.push({ type: 'build', building: step.building as BuildingKind });
+        break;
+      case 'clear_field':
+        plan.push({ type: 'clear_field' });
+        break;
+      case 'sow': {
+        const crop = asItem(step.item);
+        if (crop && (CROP_ITEMS as readonly string[]).includes(crop))
+          plan.push(
+            target
+              ? { type: 'sow', item: crop as CropItem, objectId: target }
+              : { type: 'sow', item: crop as CropItem },
+          );
+        break;
+      }
+      case 'quarry':
+        plan.push(target ? { type: 'quarry', objectId: target } : { type: 'quarry' });
+        break;
+      case 'tend_animals':
+        plan.push(target ? { type: 'tend_animals', objectId: target } : { type: 'tend_animals' });
+        break;
+      case 'stock_stall': {
+        const item = asItem(step.item);
+        const price = asCount(step.price);
+        if (item && price)
+          plan.push({ type: 'stock_stall', item, quantity: asCount(step.quantity) || 1, price });
+        break;
+      }
+      case 'take_from_stall': {
+        const item = asItem(step.item);
+        if (item)
+          plan.push({ type: 'take_from_stall', item, quantity: asCount(step.quantity) || 1 });
+        break;
+      }
+      case 'buy_from_stall': {
+        const item = asItem(step.item);
+        if (target && item)
+          plan.push({
+            type: 'buy_from_stall',
+            objectId: target,
+            item,
+            quantity: asCount(step.quantity) || 1,
+          });
+        break;
+      }
+      case 'hire': {
+        const wage = asCount(step.wage);
+        if (target && wage)
+          plan.push({
+            type: 'hire',
+            agentId: target,
+            wage,
+            days: Math.min(30, asCount(step.days) || 3),
+          });
+        break;
+      }
+      case 'respond_job':
+        if (target)
+          plan.push({
+            type: 'respond_job',
+            fromId: target,
+            accept: step.accept === true || step.accept === 'true',
+          });
+        break;
+      case 'end_job':
+        if (target) plan.push({ type: 'end_job', agentId: target });
+        break;
+      case 'call_meeting':
+        if (typeof step.message === 'string' && step.message.trim())
+          plan.push({ type: 'call_meeting', topic: step.message.trim().slice(0, 200) });
+        break;
+      case 'propose_rule':
+        if (typeof step.message === 'string' && step.message.trim()) {
+          const rule: Extract<Intent, { type: 'propose_rule' }> = {
+            type: 'propose_rule',
+            text: step.message.trim().slice(0, 300),
+          };
+          const tax = Math.floor(Number(step.tax));
+          if (step.tax !== undefined && step.tax !== null && Number.isFinite(tax))
+            rule.tax = Math.min(100, Math.max(0, tax));
+          if (typeof step.leader === 'string' && step.leader.trim())
+            rule.leaderId = step.leader.trim();
+          plan.push(rule);
+        }
+        break;
+      case 'vote': {
+        const proposalId =
+          typeof step.proposal_id === 'string' && step.proposal_id.trim()
+            ? step.proposal_id.trim()
+            : target;
+        if (proposalId)
+          plan.push({
+            type: 'vote',
+            proposalId,
+            accept: step.accept === true || step.accept === 'true',
+          });
+        break;
+      }
+      case 'pay_from_treasury': {
+        const coins = asCount(step.coins);
+        if (target && coins) plan.push({ type: 'pay_from_treasury', agentId: target, coins });
+        break;
+      }
     }
   }
   const reflecting = perception.trigger.kind === 'reflect';

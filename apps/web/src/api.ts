@@ -2,6 +2,7 @@ import type {
   AgentResponse,
   FamilyNode,
   MarketResponse,
+  VillageResponse,
   BrainConfig,
   BrainsResponse,
   CastPreviewRequest,
@@ -83,6 +84,7 @@ export const api = {
   updatePrices: (prices: Record<string, ModelPrice | null>) =>
     request<SettingsResponse>('PUT', '/api/settings/prices', prices),
   market: (id: string) => request<MarketResponse>('GET', `/api/worlds/${id}/market`),
+  village: (id: string) => request<VillageResponse>('GET', `/api/worlds/${id}/village`),
   setAging: (id: string, daysPerYear: number) =>
     request<WorldSettings>('PUT', `/api/worlds/${id}/aging`, { daysPerYear }),
   familyTree: (id: string, agentId: string) =>

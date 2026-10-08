@@ -39,7 +39,15 @@ export type EventKind =
   | 'tended'
   | 'reflected'
   | 'fire'
-  | 'season';
+  | 'season'
+  | 'farmed'
+  | 'quarried'
+  | 'animals'
+  | 'stall'
+  | 'job'
+  | 'meeting'
+  | 'rule_passed'
+  | 'treasury';
 
 /** A readable history entry. importance: 1 = routine … 5 = life-changing. */
 export interface WorldEvent {

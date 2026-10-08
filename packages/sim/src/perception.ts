@@ -5,8 +5,12 @@ import {
   tickToClock,
   type KnownPlace,
   type Perception,
+  type SkillName,
 } from '@aw/shared';
 import { conditionLevel, sensedConditions } from './conditions.ts';
+import { villageKnowledge } from './governance.ts';
+import { jobsFor } from './jobs.ts';
+import { rocksNear } from './quarry.ts';
 import { ABILITIES } from './life.ts';
 import type { Agent, Memory } from './agent.ts';
 import { lifeStory, reflectionMaterial } from './memory.ts';
@@ -42,6 +46,8 @@ function doingOf(a: Agent): string {
       return 'making something';
     case 'build':
       return 'building';
+    case 'task':
+      return TASK_DOING[a.action.task];
     case 'sleep':
       return 'sleeping';
     case undefined:
@@ -54,6 +60,14 @@ function doingOf(a: Agent): string {
     }
   }
 }
+
+const TASK_DOING: Record<NonNullable<Extract<Agent['action'], { type: 'task' }>>['task'], string> =
+  {
+    clear_field: 'clearing land',
+    sow: 'sowing a field',
+    quarry: 'quarrying stone',
+    tend_animals: 'tending animals',
+  };
 
 const COLOR_NAMES: [string, [number, number, number]][] = [
   ['red', [192, 80, 77]],
@@ -225,6 +239,11 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         : {}),
       ...(state.resources[id]?.item ? { produce: state.resources[id]!.item } : {}),
       ...(ownerLabel(state, agent, id) ? { owner: ownerLabel(state, agent, id)! } : {}),
+      ...(o.progress !== undefined && o.burntTick === undefined
+        ? { progress: Math.round(o.progress * 100) / 100 }
+        : {}),
+      ...(k.lastSeenForSale ? { forSale: k.lastSeenForSale.map((f) => ({ ...f })) } : {}),
+      ...(k.lastSeenAnimals ? { animals: { ...k.lastSeenAnimals } } : {}),
     });
   }
   knownPlaces.sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
@@ -301,9 +320,17 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive, adoptive: true })),
     ],
   };
+  const rocks = senses ? rocksNear(state.map, agent, isNight ? 4 : 8).length : 0;
+  const jobs = jobsFor(state, agent);
+  const village = villageKnowledge(state, agent);
   const requests = state.requests
     .filter((r) => r.to === agent.id)
-    .map((r) => ({ kind: r.kind, fromId: r.from, fromName: nameAsKnown(agent, find(r.from)!) }));
+    .map((r) => ({
+      kind: r.kind,
+      fromId: r.from,
+      fromName: nameAsKnown(agent, find(r.from)!),
+      ...(r.terms ? { terms: { ...r.terms } } : {}),
+    }));
 
   return {
     agentId: agent.id,
@@ -325,6 +352,9 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       homeId: agent.homeId,
       asleep: agent.asleep,
       indoors: agent.indoorsId !== null,
+      skills: Object.fromEntries(
+        Object.entries(agent.skills).map(([k, v]) => [k, Math.round(v)]),
+      ) as Record<SkillName, number>,
     },
     location: describeLocation(state, agent),
     visibleAgents,
@@ -355,6 +385,9 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         };
       }),
     treesNearby: senses ? countTrees(state, agent, isNight ? 4 : 8) : 0,
+    ...(rocks > 0 ? { rocksNearby: rocks } : {}),
+    ...(jobs.length ? { jobs } : {}),
+    ...(village ? { village } : {}),
     stage: stageOf(agent.age),
     canDo: ABILITIES[stageOf(agent.age)],
     family,

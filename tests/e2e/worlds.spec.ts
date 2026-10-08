@@ -344,3 +344,16 @@ test("choose each villager's brain when creating a world, then change them in th
   await page.getByRole('button', { name: /Brains & spending/ }).click();
   await expect(page.getByRole('dialog', { name: 'Brains and spending' })).toBeVisible();
 });
+
+test('the World tab shows the village: no rules yet, and empty sections', async ({ page }) => {
+  await page.goto('/');
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+  await createWorld(page, 'Village Panel Town', 'village');
+  await expect(page.locator('.topbar-title')).toHaveText('Village Panel Town');
+
+  await page.getByRole('tab', { name: 'World' }).click();
+  await expect(page.getByRole('heading', { name: 'Village', exact: true })).toBeVisible();
+  await expect(page.getByText('No rules yet.')).toBeVisible();
+  await expect(page.getByText('No stalls yet.')).toBeVisible();
+});

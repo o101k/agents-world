@@ -161,6 +161,8 @@ export function createAgent(
     spentUsd: 0,
     decisions: 0,
     priceKnowledge: null,
+    knownMeetings: [],
+    noticeBoard: null,
     failStreak: 0,
     motherId: null,
     fatherId: null,

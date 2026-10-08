@@ -112,8 +112,11 @@ describe('WorldRunner', () => {
     expect(view.lastTick).toBe(runner.state.tick);
     expect(view.map).toBeDefined();
     expect(view.conditions.map((c) => c.kind)).toEqual(['storm']);
-    expect(wm.replay(w.id, 0, view.mapVersion).tick).toBe(view.firstTick);
-    expect(wm.replay(w.id, 0, view.mapVersion).map).toBeUndefined();
+    // The map is only sent when it differs from the version the viewer already has.
+    const first = wm.replay(w.id, 0, -1);
+    expect(first.tick).toBe(view.firstTick);
+    expect(wm.replay(w.id, 0, first.mapVersion).tick).toBe(view.firstTick);
+    expect(wm.replay(w.id, 0, first.mapVersion).map).toBeUndefined();
     expect(wm.replayAgent(w.id, marks[0]![0], 'a1').name).toBe('Maren Holt');
     const early = wm.events(w.id, { limit: 500, minImportance: 1, atOrBeforeTick: marks[0]![0] });
     expect(early.every((e) => e.tick <= marks[0]![0])).toBe(true);

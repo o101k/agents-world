@@ -22,6 +22,7 @@ import {
   type LlmCallView,
   type MarketResponse,
   type ObjectHistoryResponse,
+  type VillageResponse,
   type ReplayResponse,
   type SpawnRequest,
   type StoryEntry,
@@ -40,6 +41,7 @@ import {
   fullName,
   generateCast,
   ownerNames,
+  villageView,
   type Agent,
   type AgentSpec,
   type TickInput,
@@ -294,6 +296,10 @@ export class WorldManager {
       quotes: allQuotes(state.market),
       moneySupply: state.agents.filter((a) => a.alive).reduce((s, a) => s + a.money, 0),
     };
+  }
+
+  village(worldId: string): VillageResponse {
+    return villageView(this.requireActive(worldId).state);
   }
 
   agent(worldId: string, agentId: string): AgentDetail {
