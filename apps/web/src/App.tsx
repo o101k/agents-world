@@ -10,7 +10,7 @@ export function App() {
     <>
       {connection === 'offline' && (
         <div className="banner banner-error" role="alert">
-          Can’t reach the Agents World helper. Is it running? Start it with <code>npm start</code>{' '}
+          Can’t reach the Agents World helper. Is it running? Start it with <code>bun start</code>{' '}
           in the project folder — this page reconnects automatically.
         </div>
       )}

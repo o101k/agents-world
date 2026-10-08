@@ -4,24 +4,25 @@
   "version": "0.1.0",
   "description": "A browser-based 2D life simulation where every human is an independent AI agent.",
   "type": "module",
+  "packageManager": "bun@1.4.2",
   "engines": {
-    "node": ">=24"
+    "bun": ">=1.4"
   },
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
   "scripts": {
-    "start": "npm run build -w @aw/web && npm run start -w @aw/server",
-    "dev": "concurrently -k -n server,web -c blue,magenta \"npm run dev -w @aw/server\" \"npm run dev -w @aw/web\"",
+    "start": "bun run --cwd apps/web build && bun run --cwd apps/server start",
+    "dev": "concurrently -k -n server,web -c blue,magenta \"bun run --cwd apps/server dev\" \"bun run --cwd apps/web dev\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build -w @aw/web && playwright test",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:e2e": "bun run --cwd apps/web build && playwright test",
+    "typecheck": "bun run --filter '*' typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "check": "npm run typecheck && npm run lint && npm test",
-    "stress": "npm run stress -w @aw/server --"
+    "check": "bun run typecheck && bun run lint && bun run test",
+    "stress": "bun run --cwd apps/server stress"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
@@ -36,9 +37,8 @@
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"
   },
-  "allowScripts": {
-    "better-sqlite3": true,
-    "esbuild": true,
-    "fsevents": false
-  }
+  "trustedDependencies": [
+    "better-sqlite3",
+    "esbuild"
+  ]
 }
