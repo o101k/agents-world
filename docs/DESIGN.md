@@ -110,13 +110,15 @@ the person (5 min × streak, max 60) before deciding again, so a confused brain 
 
 ## Perception — no omniscience (`packages/sim/src/perception.ts`)
 
-A person's `Perception` has only: their body, bag, money and position; where they are; people in
+A person's `Perception` has only: their body, bag, money, skill levels and position; where they are; people in
 sight (strangers described by looks until introduced); places they've seen (with food seen there,
 crop, owner); prices they saw at the market; recent experiences; recalled memories; people they
 know and how they feel about them; family (children's needs only when with them); open offers and
 requests; their stage, what they can do, language ability; the unfinished plan; the conditions
 they can sense (storm, drought, dry river, fire in sight, sickness going around); whether they're
-ill; their latest life chapters and beliefs; for a reflection, the material to look back on.
+ill; their latest life chapters and beliefs; their work agreements; what they know of the village
+(rules, leader and purse as last read on the market's notice board, meetings they heard called,
+proposals at a meeting they're at); rocks in sight; for a reflection, the material to look back on.
 Places they couldn't reach recently are flagged, so nobody keeps walking into a wall.
 
 Memory recall ranks the long-term stream by vividness (strength) + recency + relevance (people

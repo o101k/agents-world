@@ -315,7 +315,12 @@ Newest first. Record every change to an agreed decision here.
   purse or elect a leader who alone spends it. People learn rules from the market's notice board.
   No courts or enforcement: rules are social, as theft already is. World state v9. Fire can now
   also burn pens and stalls (never stone buildings). The observer gets a **Village** section in
-  the World tab.
+  the World tab. Found in review: villagers never saw their own skill levels, so they tried to
+  build without the skill and failed (a paid call each time); the prompt now lists their skills
+  (0–100) and the skill a new building needs. The Mock brain gives each feature its own roll (rare
+  ones like meetings were swallowed by small talk) and only starts a building it has the skill
+  for and can pay for to the end, so none are left half-built. In 8-day mock runs of 16 people
+  each village now builds a stall or pen, hires, and sometimes holds a meeting; deaths unchanged.
 
 - **2026-10-07 — Typecheck with the native TypeScript compiler (owner request).** `npm run typecheck`
   runs `tsgo` (TypeScript 7 native preview, pinned to an exact version) instead of `tsc`, about 5×
