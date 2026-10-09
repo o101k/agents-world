@@ -111,11 +111,11 @@ export class PeopleLayer {
     }
   }
 
-  /** Puts people and graves back into the world container (after the map was rebuilt). */
+  /** Puts people and graves back into the world container if the map took them out. */
   reattach(): void {
     for (const a of this.agents.values()) {
-      this.world.addChild(a.sprite);
-      if (a.grave) this.world.addChild(a.grave);
+      if (a.sprite.parent !== this.world) this.world.addChild(a.sprite);
+      if (a.grave && a.grave.parent !== this.world) this.world.addChild(a.grave);
     }
   }
 

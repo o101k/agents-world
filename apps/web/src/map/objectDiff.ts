@@ -11,9 +11,18 @@ import type { MapObject } from '@aw/shared';
  * and fields that aren't drawn (name, resources, work done) are left out on purpose.
  */
 export function lookKey(o: MapObject): string {
-  return [o.kind, o.x, o.y, o.w, o.h, o.progress ?? '-', o.burntTick ?? '-', o.stone ? 1 : 0].join(
-    '|',
-  );
+  return [
+    o.kind,
+    o.x,
+    o.y,
+    o.w,
+    o.h,
+    o.progress ?? '-',
+    o.burntTick ?? '-',
+    o.stone ? 1 : 0,
+    // Room spots keep clear of the door.
+    o.door ? `${o.door.x},${o.door.y}` : '-',
+  ].join('|');
 }
 
 export interface ObjectDiff {

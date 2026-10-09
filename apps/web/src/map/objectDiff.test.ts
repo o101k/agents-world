@@ -20,6 +20,7 @@ describe('lookKey', () => {
     expect(lookKey(obj({ w: 4 }))).not.toBe(base);
     expect(lookKey(obj({ h: 4 }))).not.toBe(base);
     expect(lookKey(obj({ stone: true }))).not.toBe(base);
+    expect(lookKey(obj({ door: { x: 10, y: 7 } }))).not.toBe(base);
   });
 
   it('tells a missing progress or burn tick apart from zero', () => {

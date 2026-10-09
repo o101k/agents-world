@@ -3,7 +3,7 @@
  * Map rendering benchmark: a big generated village in headless Chromium.
  *   npm run bench:render -- [--adults 150] [--children 100] [--map huge] [--speed 60]
  *     [--warm 360] [--json out.json] [--shots dir [--shots-only]] [--profile out.cpuprofile]
- *     [--trace out.json]
+ *     [--profile-load out.cpuprofile] [--trace out.json]
  * Starts its own helper on a throwaway data folder, creates the world, runs it `--warm` in-game
  * minutes, then opens the page and measures loading, playing, panning and zooming.
  * PW_CHROMIUM_PATH points at a Chromium if Playwright has none of its own.
@@ -30,6 +30,7 @@ const MAP = opt('map', 'huge');
 const SPEED = Number(opt('speed', 60));
 const WARM = Number(opt('warm', 360));
 const PROFILE = opt('profile', '');
+const PROFILE_LOAD = opt('profile-load', '');
 const TRACE = opt('trace', '');
 const JSON_OUT = opt('json', '');
 const SHOTS = opt('shots', '');
@@ -206,12 +207,21 @@ async function main() {
   const map = page.locator('[data-testid="map"]');
 
   // ---- load (world paused at a fixed tick)
+  if (PROFILE_LOAD) {
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 100 });
+    await cdp.send('Profiler.start');
+  }
   await page.goto(BASE);
   await map.locator('canvas').waitFor();
   await page.waitForFunction(() => window.__bench.firstDraw !== undefined, null, {
     timeout: 60_000,
   });
   await sleep(1500);
+  if (PROFILE_LOAD) {
+    const { profile } = await cdp.send('Profiler.stop');
+    writeFileSync(PROFILE_LOAD, JSON.stringify(profile));
+  }
   const load = await page.evaluate(() => ({
     firstMapFrameMs: window.__bench.firstDraw,
     longTasks: window.__bench.long.filter(([s]) => s < window.__bench.firstDraw + 1000),

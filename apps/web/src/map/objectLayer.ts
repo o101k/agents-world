@@ -52,7 +52,6 @@ function overlaps(e: Pick<ObjEntry, 'x' | 'y' | 'w' | 'h'>, v: ViewRect): boolea
  * ones are redrawn, and removed ones are dropped.
  */
 export class ObjectLayer {
-  private map: WorldMap | null = null;
   /** Every map object by id (drawn or not). */
   private byId = new Map<string, MapObject>();
   /** Doorway tile ("x,y") → id of the house with that door. */
@@ -79,7 +78,6 @@ export class ObjectLayer {
 
   /** Shows the objects of `map`, changing only what differs from the map shown before. */
   setMap(map: WorldMap): void {
-    this.map = map;
     this.byId = new Map();
     this.doors = new Map();
     const keys = new Map<string, string>();
