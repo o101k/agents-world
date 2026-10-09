@@ -150,6 +150,9 @@ export class WorldRunner {
       planUsd: this.meta.planUsd + (coveredByPlan ? cost : 0),
     };
     this.file.writeMeta({ spentUsd: this.meta.spentUsd, planUsd: this.meta.planUsd });
+    // The spending meter shows it even while paused.
+    this.hooks.onStatus?.(this.currentMeta());
+    this.emitFrame(true);
   }
 
   setCap(capUsd: number): void {

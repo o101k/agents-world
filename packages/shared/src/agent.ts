@@ -213,6 +213,8 @@ export interface AgentDetail extends AgentView {
   bornTick: number;
   /** Cost of their AI decisions (USD), Claude-plan calls included at their API-price value. */
   spentUsd: number;
+  /** Cost of the observer's questions about them, answered by their AI (live view only). */
+  askedUsd?: number;
   decisions: number;
   /** Buildings they own (or co-own). */
   owns: { id: string; name: string }[];

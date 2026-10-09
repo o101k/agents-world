@@ -16,6 +16,7 @@ import { useWorld } from '../worldStore.ts';
 import { Bar } from './Bars.tsx';
 import { Portrait } from './Portrait.tsx';
 import { LifeStory } from './LifeStory.tsx';
+import { AskSection } from './AskSection.tsx';
 
 const ACTIVITY_LABEL: Record<string, string> = {
   idle: 'Idle',
@@ -113,6 +114,18 @@ export function AgentInspector({
           </button>
         )}
       </div>
+
+      <AskSection
+        key={agentId}
+        worldId={worldId}
+        agentId={agentId}
+        firstName={agent.name.split(' ')[0] ?? agent.name}
+        fullName={agent.name}
+        sex={agent.sex}
+        alive={agent.alive}
+        brain={agent.brain}
+        atTick={atTick}
+      />
 
       {agent.alive && (
         <section>
@@ -297,6 +310,9 @@ export function AgentInspector({
           {agent.brain.provider === 'claude_plan'
             ? `${formatUsd(agent.spentUsd)} of AI use (Claude plan, at API prices)`
             : `${formatUsd(agent.spentUsd)} spent on AI`}
+          {agent.askedUsd && agent.askedUsd > 0
+            ? ` · + ${formatUsd(agent.askedUsd)} on your questions`
+            : null}
         </p>
         {replaying && (
           <p className="muted small">As they were on {formatClock(atTick)} (replay).</p>
