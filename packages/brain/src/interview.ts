@@ -230,8 +230,10 @@ export function mockInterview(digest: PersonDigest, question: string): string {
   const thoughtSentence = thought
     ? `Lately ${she} has been thinking: “${thought.text.replace(GOAL_RE, '')}”`
     : '';
-  const feelings = [diarySentence, thoughtSentence].filter(Boolean).join('. ');
-  const feelingsParagraph = feelings ? `${feelings}.` : '';
+  const feelingsParagraph = [diarySentence, thoughtSentence]
+    .filter(Boolean)
+    .map(sentenceEnd)
+    .join(' ');
 
   const goals: string[] = [];
   for (const t of digest.entries.filter((e) => e.kind === 'thought').reverse()) {
@@ -241,7 +243,7 @@ export function mockInterview(digest: PersonDigest, question: string): string {
   }
   const wants = [
     goals.length ? `${Her} goals lately: ${goals.join('; ')}.` : '',
-    thoughtSentence ? `${thoughtSentence}.` : '',
+    thoughtSentence ? sentenceEnd(thoughtSentence) : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -274,7 +276,11 @@ export function mockInterview(digest: PersonDigest, question: string): string {
     return [
       digest.background,
       chapters.length ? `${Her} chapters so far:\n${chapters.join('\n')}` : '',
-      eventSentences(digest.entries, 6, 5).join(' '),
+      eventSentences(
+        digest.entries.filter((e) => e.kind === 'event'),
+        6,
+        5,
+      ).join(' '),
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -284,7 +290,7 @@ export function mockInterview(digest: PersonDigest, question: string): string {
   const parts = [
     primary,
     topic !== 'doing' ? doing : '',
-    topic !== 'feelings' ? feelingsParagraph : '',
+    topic !== 'feelings' && topic !== 'wants' ? feelingsParagraph : '',
   ].filter(Boolean);
   const answer = parts.length ? parts.join('\n\n') : emptyPeriod;
   return answer.length > MAX_MOCK_CHARS ? `${answer.slice(0, MAX_MOCK_CHARS - 1)}…` : answer;
