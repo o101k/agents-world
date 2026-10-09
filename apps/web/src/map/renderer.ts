@@ -1,13 +1,4 @@
-import {
-  Application,
-  Container,
-  CullerPlugin,
-  Graphics,
-  Rectangle,
-  Texture,
-  TextureStyle,
-  extensions,
-} from 'pixi.js';
+import { Application, Container, Graphics, Rectangle, Texture, TextureStyle } from 'pixi.js';
 import {
   Tile,
   objectContains,
@@ -29,14 +20,13 @@ import {
   zoomAt,
   type Camera,
 } from './camera.ts';
-import { GroundLayer } from './ground.ts';
+import { GroundLayer, type ViewRect } from './ground.ts';
 import { hash } from './hash.ts';
 import { ObjectLayer } from './objectLayer.ts';
 import { PeopleLayer } from './people.ts';
 import { TILE_PX, buildAtlas, type SpriteName } from './pixelArt.ts';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
-extensions.add(CullerPlugin);
 
 const DRAG_THRESHOLD = 4;
 
@@ -75,8 +65,12 @@ export class WorldRenderer {
 
   private readonly app = new Application();
   private readonly scene = new Container();
-  /** Map objects and people, depth-sorted together. */
-  private readonly world = new Container({ sortableChildren: true });
+  /**
+   * Map objects and people, depth-sorted together. Its own render group (like the ground and
+   * the overlay): moving the camera then doesn't recompute every sprite's transform, and people
+   * moving don't make Pixi rebuild the ground's or the labels' draw lists.
+   */
+  private readonly world = new Container({ sortableChildren: true, isRenderGroup: true });
   private readonly night = new Graphics();
   /** Flames on burning buildings (world space, above objects). */
   private readonly fires = new Graphics();
@@ -87,7 +81,7 @@ export class WorldRenderer {
   private readonly hoverBox = new Graphics();
   private readonly selectBox = new Graphics();
   /** Screen-space labels and speech bubbles. */
-  private readonly overlay = new Container();
+  private readonly overlay = new Container({ isRenderGroup: true });
   private layers: Layers | null = null;
   private map: WorldMap | null = null;
   /** Resource amounts by object id, kept until the layers exist. */
@@ -97,6 +91,13 @@ export class WorldRenderer {
   private host: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private renderQueued = false;
+  /** The camera moved or the map changed since the last cull. */
+  private viewDirty = true;
+  /** What the night/season/weather tint was last drawn for. */
+  private tintKey = '';
+  /** What the selection outline was last drawn for. */
+  private selectionKey = '';
+  private effectsDrawn = false;
   private animating = false;
   private ready = false;
   private destroyed = false;
@@ -117,6 +118,9 @@ export class WorldRenderer {
       resolution: window.devicePixelRatio || 1,
       autoStart: false,
       preference: 'webgl',
+      // Input is handled with DOM listeners (bindInput): skip Pixi's per-move hit-testing.
+      eventMode: 'none',
+      eventFeatures: { move: false, globalMove: false, click: false, wheel: false },
     });
     if (this.destroyed) {
       this.app.destroy(true, { children: true });
@@ -137,6 +141,7 @@ export class WorldRenderer {
       ]),
     ) as Record<SpriteName, Texture>;
     const ground = new GroundLayer(atlas, textures);
+    ground.container.isRenderGroup = true;
     const objects = new ObjectLayer(this.world, textures);
     objects.setResources(this.resources);
     this.layers = { ground, objects, people: new PeopleLayer(this.world, this.overlay, textures) };
@@ -187,10 +192,7 @@ export class WorldRenderer {
     this.conditions = conditions;
     this.drawNight();
     if (this.hasMotion()) this.startAnimating();
-    else {
-      this.fires.clear();
-      this.rain.clear();
-    }
+    else this.drawEffects(performance.now());
     this.requestRender();
   }
 
@@ -293,6 +295,7 @@ export class WorldRenderer {
     layers.ground.setMap(map);
     layers.objects.setMap(map);
     layers.people.reattach();
+    this.viewDirty = true;
 
     if (!keepCamera) this.cam = fitCamera(this.worldSize(), this.screenSize());
     this.drawNight();
@@ -307,40 +310,67 @@ export class WorldRenderer {
     this.animating = true;
     const loop = () => {
       if (this.destroyed) return;
-      const busy = this.animate(performance.now());
-      this.app.render();
+      const busy = this.frame(performance.now());
       if (busy || this.followId || this.hasMotion()) requestAnimationFrame(loop);
       else this.animating = false;
     };
     requestAnimationFrame(loop);
   }
 
-  /** Move sprites toward their targets; returns true while anything is still moving. */
-  private animate(now: number): boolean {
+  /** Updates everything for one animation frame and draws it; true while anything moves. */
+  private frame(now: number): boolean {
     const layers = this.layers;
     if (!layers) return false;
-    const selectedId = this.selected?.kind === 'agent' ? this.selected.id : null;
-    const busy = layers.people.animate(now, this.cam, selectedId);
-    layers.objects.updateOccluders(layers.people.standing());
     if (this.followId) {
+      // Follow the person where they will be drawn this frame.
       const a = layers.people.agents.get(this.followId);
       if (a) {
-        const { width, height } = this.screenSize();
-        const target = centerOn(a.shown.x, a.shown.y - 8, this.cam.zoom, { width, height });
+        const p = layers.people.positionAt(a, now);
+        const target = centerOn(p.x, p.y - 8, this.cam.zoom, this.screenSize());
         this.cam = clampCamera(target, this.worldSize(), this.screenSize());
         this.applyTransform();
+        this.viewDirty = true;
       }
+    }
+    const selectedId = this.selected?.kind === 'agent' ? this.selected.id : null;
+    const busy = layers.people.animate(now, this.cam, this.screenSize(), selectedId);
+    layers.objects.updateOccluders(layers.people.standing());
+    if (this.viewDirty) {
+      this.viewDirty = false;
+      const view = this.viewRect();
+      layers.ground.cull(view);
+      layers.objects.cull(view);
     }
     this.drawSelection();
     this.drawEffects(now);
+    this.app.render();
     return busy;
+  }
+
+  /** The part of the world on screen, in world pixels. */
+  private viewRect(): ViewRect {
+    const { width, height } = this.screenSize();
+    return {
+      x0: this.cam.x,
+      y0: this.cam.y,
+      x1: this.cam.x + width / this.cam.zoom,
+      y1: this.cam.y + height / this.cam.zoom,
+    };
   }
 
   /** Flickering flames on burning buildings and rain streaks in a storm. */
   private drawEffects(now: number): void {
+    if (!this.map || !this.layers || this.conditions.length === 0) {
+      if (this.effectsDrawn) {
+        this.fires.clear();
+        this.rain.clear();
+        this.effectsDrawn = false;
+      }
+      return;
+    }
     const f = this.fires.clear();
     const r = this.rain.clear();
-    if (!this.map || !this.layers || this.conditions.length === 0) return;
+    this.effectsDrawn = true;
     for (const c of this.conditions) {
       if (c.kind !== 'fire' || !c.targetId) continue;
       const o = this.layers.objects.object(c.targetId);
@@ -420,11 +450,14 @@ export class WorldRenderer {
     );
   }
 
+  /**
+   * Moves the view. The per-person work and drawing happen once in the next animation frame,
+   * however many pan or zoom events arrive before it.
+   */
   private applyCamera(): void {
     this.applyTransform();
-    this.drawSelection();
+    this.viewDirty = true;
     this.drawHover();
-    this.animate(performance.now());
     this.requestRender();
   }
 
@@ -433,10 +466,7 @@ export class WorldRenderer {
     this.renderQueued = true;
     requestAnimationFrame(() => {
       this.renderQueued = false;
-      if (!this.destroyed) {
-        this.animate(performance.now());
-        this.app.render();
-      }
+      if (!this.destroyed) this.frame(performance.now());
     });
   }
 
@@ -450,10 +480,15 @@ export class WorldRenderer {
   }
 
   private drawNight(): void {
-    const g = this.night.clear();
-    if (!this.map) return;
     const { width, height } = this.worldSize();
     const level = nightLevel(this.tick);
+    const key = this.map
+      ? `${level}|${this.season}|${this.level('storm')}|${this.level('drought')}|${width}|${height}`
+      : '';
+    if (key === this.tintKey) return; // the clock is set on every update; redraw only on change
+    this.tintKey = key;
+    const g = this.night.clear();
+    if (!this.map) return;
     if (level > 0) g.rect(0, 0, width, height).fill({ color: 0x0b1640, alpha: 0.5 * level });
     if (this.season === 'winter')
       g.rect(0, 0, width, height).fill({ color: 0xdfe8f5, alpha: 0.28 });
@@ -467,20 +502,31 @@ export class WorldRenderer {
       g.rect(0, 0, width, height).fill({ color: 0xe0a848, alpha: 0.14 + 0.2 * drought });
   }
 
+  /** The selection outline; redrawn only when what it outlines moves or the zoom changes. */
   private drawSelection(): void {
-    const g = this.selectBox.clear();
     const sel = this.selected;
-    if (!sel || !this.map || !this.layers) return;
     const width = 2 / this.cam.zoom;
+    if (!sel || !this.map || !this.layers) {
+      if (this.selectionKey) this.selectBox.clear();
+      this.selectionKey = '';
+      return;
+    }
     if (sel.kind === 'agent') {
       const a = this.layers.people.agents.get(sel.id);
-      if (!a) return;
-      const p = a.view.alive ? a.shown : a.to;
-      g.ellipse(p.x, p.y, 7, 3).stroke({ width, color: 0xffd84a });
+      const p = a ? (a.view.alive ? a.shown : a.to) : null;
+      const key = p ? `a|${sel.id}|${p.x}|${p.y}|${width}` : 'a';
+      if (key === this.selectionKey) return;
+      this.selectionKey = key;
+      const g = this.selectBox.clear();
+      if (p) g.ellipse(p.x, p.y, 7, 3).stroke({ width, color: 0xffd84a });
       return;
     }
     const obj = sel.kind === 'object' ? this.layers.objects.object(sel.id) : undefined;
     const r = obj ?? { x: sel.tile.x, y: sel.tile.y, w: 1, h: 1 };
+    const key = `o|${sel.kind}|${r.x}|${r.y}|${r.w}|${r.h}|${width}`;
+    if (key === this.selectionKey) return;
+    this.selectionKey = key;
+    const g = this.selectBox.clear();
     g.rect(r.x * TILE_PX, r.y * TILE_PX, r.w * TILE_PX, r.h * TILE_PX).stroke({
       width,
       color: 0xffd84a,

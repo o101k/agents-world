@@ -164,12 +164,18 @@ async function main() {
   // The last few minutes go slowly so it pauses exactly at the same tick every run.
   const tickNow = async () => (await api(`/api/worlds/${world.id}/view`)).tick;
   const target = (await tickNow()) + WARM;
-  await api(`/api/worlds/${world.id}/control`, { running: true, speed: 0 });
-  while ((await tickNow()) < target - 10) await sleep(100);
-  await api(`/api/worlds/${world.id}/control`, { speed: 1 });
-  while ((await tickNow()) < target) await sleep(50);
+  // (Flat out runs up to ~20 ticks per 40 ms slice, so slow down well before the target.)
+  for (const [speed, until, poll] of [
+    [0, target - 120, 50],
+    [30, target - 3, 20],
+    [1, target, 20],
+  ]) {
+    await api(`/api/worlds/${world.id}/control`, { running: true, speed });
+    while ((await tickNow()) < until) await sleep(poll);
+  }
   await api(`/api/worlds/${world.id}/control`, { running: false });
   const pausedAt = (await api(`/api/worlds/${world.id}/view`)).tick;
+  if (pausedAt !== target) console.error(`warning: paused at tick ${pausedAt}, not ${target}`);
 
   const browser = await chromium.launch({
     executablePath: process.env.PW_CHROMIUM_PATH || undefined,

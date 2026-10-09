@@ -1,7 +1,6 @@
 import { Container, Graphics, Rectangle, Sprite, Text, Texture } from 'pixi.js';
 import type { AgentView, Point } from '@aw/shared';
 import type { Camera } from './camera.ts';
-import type { ViewRect } from './ground.ts';
 import { BUBBLE_TAIL, layoutBubbles, type BubbleRequest } from './layout.ts';
 import type { Standing } from './objectLayer.ts';
 import {
@@ -11,6 +10,12 @@ import {
   characterCanvas,
   type SpriteName,
 } from './pixelArt.ts';
+
+/**
+ * How far past the screen edge (in screen pixels) someone still counts as on screen: their
+ * label and speech bubble reach well above and beside their feet.
+ */
+const SCREEN_MARGIN = 220;
 
 export interface AgentSprite {
   /** Current label colour (to avoid restyling every frame). */
@@ -114,41 +119,70 @@ export class PeopleLayer {
     }
   }
 
-  /** Where each living person is drawn, for fading what stands in front of them. */
+  /** Where each living person on screen is drawn, for fading what stands in front of them. */
   standing(): Standing[] {
     const out: Standing[] = [];
     for (const a of this.agents.values())
-      if (a.view.alive) out.push({ x: a.shown.x, y: a.shown.y, z: a.sprite.zIndex });
+      if (a.sprite.visible) out.push({ x: a.shown.x, y: a.shown.y, z: a.sprite.zIndex });
     return out;
+  }
+
+  /** Where a person is drawn at time `now` (feet, world pixels), on screen or not. */
+  positionAt(a: AgentSprite, now: number): Point {
+    const t = a.moveDuration > 0 ? Math.min(1, (now - a.moveStart) / a.moveDuration) : 1;
+    return { x: a.from.x + (a.to.x - a.from.x) * t, y: a.from.y + (a.to.y - a.from.y) * t };
   }
 
   /**
    * Moves sprites toward their targets and places labels, markers and speech bubbles for the
-   * camera `cam`. Returns true while anyone is still moving or walking.
+   * camera `cam` on a screen of `size`. People off screen are hidden and skipped.
+   * Returns true while anyone is still moving or walking.
    */
-  animate(now: number, cam: Camera, selectedId: string | null): boolean {
+  animate(
+    now: number,
+    cam: Camera,
+    size: { width: number; height: number },
+    selectedId: string | null,
+  ): boolean {
     let busy = false;
     const showLabels = cam.zoom >= 2;
     const bubbles: BubbleRequest[] = [];
     const labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[] = [];
     for (const [id, a] of this.agents) {
-      const t = a.moveDuration > 0 ? Math.min(1, (now - a.moveStart) / a.moveDuration) : 1;
-      a.shown = { x: a.from.x + (a.to.x - a.from.x) * t, y: a.from.y + (a.to.y - a.from.y) * t };
-      const moving = t < 1;
-      if (moving) busy = true;
-      if (a.view.alive) {
-        a.sprite.position.set(a.shown.x, a.shown.y);
-        // +2 so someone standing in a doorway draws in front of their house; people inside
-        // are drawn just in front of their (open) building.
-        a.sprite.zIndex = a.indoorZ ?? a.shown.y + 2;
-        if (a.frames.length)
-          a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
-        if (a.view.activity === 'walking') busy = true;
+      a.shown = this.positionAt(a, now);
+      const moving = a.moveDuration > 0 && now - a.moveStart < a.moveDuration;
+      // Keep animating for walkers off screen too, so they walk (not jump) into view.
+      if (a.view.alive && (moving || a.view.activity === 'walking')) busy = true;
+      // The top of their head on screen.
+      const screen = {
+        x: (a.shown.x - cam.x) * cam.zoom,
+        y: (a.shown.y - 17 - cam.y) * cam.zoom,
+      };
+      const visible =
+        a.view.alive &&
+        screen.x > -SCREEN_MARGIN &&
+        screen.x < size.width + SCREEN_MARGIN &&
+        screen.y > -SCREEN_MARGIN &&
+        screen.y < size.height + SCREEN_MARGIN;
+      // Only changes when someone dies or crosses the edge of the view (a change makes Pixi
+      // rebuild the world's draw list).
+      a.sprite.visible = visible;
+      if (!visible) {
+        a.label.visible = false;
+        a.zzz.visible = false;
+        a.bubble.visible = false;
+        continue;
       }
+      a.sprite.position.set(a.shown.x, a.shown.y);
+      // Depth by tile row, so it only changes (and makes Pixi re-sort) when someone crosses a
+      // row. Objects sit on row boundaries, so the order against them is the same as by exact
+      // height. +2 so someone standing in a doorway draws in front of their house; people
+      // inside are drawn just in front of their (open) building.
+      a.sprite.zIndex = a.indoorZ ?? Math.floor((a.shown.y + 2) / TILE_PX) * TILE_PX + 1;
+      if (a.frames.length)
+        a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
       const selected = selectedId === id;
-      const visible = a.view.alive;
-      const screen = { x: (a.shown.x - cam.x) * cam.zoom, y: (a.shown.y - 17 - cam.y) * cam.zoom };
-      a.label.visible = visible && (showLabels || selected);
+      a.label.visible = showLabels || selected;
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
       // Only touch text styles when they change (restyling re-renders the text).
       const fill = selected ? '#ffd84a' : '#ffffff';
@@ -157,7 +191,7 @@ export class PeopleLayer {
         a.label.style.fill = fill;
       }
       const thinking = a.view.activity === 'thinking';
-      a.zzz.visible = visible && (a.view.activity === 'sleeping' || thinking) && cam.zoom >= 1.5;
+      a.zzz.visible = (a.view.activity === 'sleeping' || thinking) && cam.zoom >= 1.5;
       const marker = thinking ? '…' : 'z z';
       if (a.zzz.text !== marker) a.zzz.text = marker;
       a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
@@ -171,18 +205,12 @@ export class PeopleLayer {
             h: a.label.height,
           },
         });
-      const req = this.prepareBubble(a, visible && (cam.zoom >= 1.5 || selected), screen);
+      const req = this.prepareBubble(a, cam.zoom >= 1.5 || selected, screen);
       if (req) bubbles.push(req);
     }
     this.placeBubbles(bubbles, labels);
     return busy;
   }
-
-  /**
-   * Shows only the people (and their labels and bubbles) near `view`. Called every frame.
-   * (For now Pixi's culler hides off-screen sprites, so this does nothing.)
-   */
-  cull(_view: ViewRect): void {}
 
   /** The person drawn under a world point (their sprite is about 12×16 px above the feet). */
   pick(w: Point): string | null {
@@ -205,7 +233,6 @@ export class PeopleLayer {
   private createAgentSprite(v: AgentView, at: Point): AgentSprite {
     const sprite = new Sprite();
     sprite.anchor.set(0.5, 1);
-    sprite.cullable = true;
     this.world.addChild(sprite);
     const label = new Text({
       text: v.name,
@@ -304,7 +331,8 @@ export class PeopleLayer {
       }
       return;
     }
-    a.sprite.visible = true; // nobody is ever hidden: people indoors are drawn in the open room
+    // Nobody is ever hidden: people indoors are drawn in the open room. (animate shows the
+    // living who are on screen.)
     a.baseScale =
       v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
     const sleeping = v.activity === 'sleeping';
