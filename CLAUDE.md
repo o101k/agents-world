@@ -43,6 +43,7 @@ npm test             # Vitest unit and integration tests
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
 npm run test:agentic # Tester Army e2e, AI-driven (AI steps need ANTHROPIC_API_KEY or OPENROUTER_API_KEY; skipped without)
 npm run stress       # headless big-village stress test (args: adults children days mapSize)
+npm run bench:render # map rendering benchmark in headless Chromium (250 people, huge map; --json, --shots)
 ```
 
 Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port override: `AW_PORT`.
@@ -300,6 +301,26 @@ teacher and a closer relationship).
 ## Decision log
 
 Newest first. Record every change to an agreed decision here.
+
+- **2026-10-09 — Faster map rendering (owner request).** Measured first with a new benchmark,
+  `npm run bench:render` (`tests/perf/bench-render.mjs`: 150 adults + 100 children on the huge map,
+  headless Chromium; its frames per second are meaningless because it draws in software, so
+  compare JavaScript time per frame and per map update). The renderer is split into layers
+  (`ground.ts`, `objectLayer.ts`, `people.ts`; `renderer.ts` keeps scene, camera, input, effects).
+  Map changes no longer rebuild the scene: ground chunks are painted onto canvases and only
+  changed chunks repainted; map objects are diffed by id and look; the page fetches only the map
+  (`GET /api/worlds/:id/map`), one request at a time. Per frame: camera input only moves the
+  camera and the work runs once per animation frame; ground, world and overlay are separate Pixi
+  render groups; people's depth is their tile row (exact against objects, which sit on row
+  boundaries; two walkers in one row may overlap in either order); each layer culls itself
+  (Pixi's culler and pointer events are off); people off screen skip labels and bubbles. The
+  people list and timeline re-render only changed rows. Screenshots at the same tick and camera
+  match the old renderer (walking-frame timing aside). Planned in
+  `/mnt/project-files/plans/faster-rendering.md`; ground, objects, lists and map fetch built by
+  Haiku workers in parallel, reviewed and integrated by Opus.
+- **2026-10-09 — Crash fix:** clearing land for a field or building no longer crashes the helper when
+  someone is gathering from or chopping a bush or tree that the clearing removed; they fail the
+  action and remember why.
 
 - **2026-10-08 — Opus as the Claude Code advisor (owner request).** `.claude/settings.json` (project
   settings, committed) sets `"advisorModel": "opus"`, so Claude Code sessions in this repo consult

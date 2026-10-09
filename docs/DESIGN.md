@@ -206,8 +206,9 @@ it means. The mock brain stocks more food in autumn and winter.
 - AI requests queue per provider with priorities: conversation replies and emergencies first,
   routine planning next, night reflections last. A request that times out while still queued is
   dropped and never sent (so never paid for).
-- The map caches each 32×32 ground chunk as a texture, and text labels are only restyled when they
-  change. Frames carry ~40 KB for 150 people; a snapshot is ~5–7 MB of JSON (~0.5–0.8 MB gzipped).
+- The map paints each 32×32 ground chunk onto one canvas and updates only what changed (see
+  Rendering), and text labels are only restyled when they change. Frames carry ~40 KB for 150
+  people; a snapshot is ~5–7 MB of JSON (~0.5–0.8 MB gzipped).
 
 ## Work, trade and conflict
 
@@ -352,7 +353,8 @@ in/out, cost) and the dialog polls it every 3 s; bulk changes are one `set_brain
 | POST   | `/api/cast-preview`                         | `{ seed?, cast }` → `{ seed, people }` (who a new world will have) |
 | POST   | `/api/worlds`                               | create `{ name, seed?, mapSize?, cast?, brains?, defaultBrain? }`  |
 | POST   | `/api/worlds/:id/activate`                  | make it the active (running) world                                 |
-| GET    | `/api/worlds/:id/view`                      | `{ meta, settings, map, tick, runner, agents, resources, owners }` |
+| GET    | `/api/worlds/:id/view`                      | `{ meta, settings, map, mapVersion, tick, runner, agents, … }`     |
+| GET    | `/api/worlds/:id/map`                       | `{ mapVersion, map, owners }` (fetched when frames say it changed) |
 | POST   | `/api/worlds/:id/control`                   | `{ running?, speed? }`                                             |
 | GET    | `/api/worlds/:id/events`                    | `?limit&beforeId&agentId&minImportance&q&atOrBeforeTick`           |
 | GET    | `/api/worlds/:id/agents/:agentId`           | inspector detail                                                   |
@@ -406,12 +408,29 @@ one and only reads it, and `tests/agentic/.e2e/` is uploaded on failure.
 
 - `pixelArt.ts` paints every sprite in code (16 px tiles) into one atlas; people get a sprite strip
   (down/up/side × 2 walk frames) painted from their own colours, with an outline.
-- `renderer.ts` (PixiJS v8): ground in 32×32-tile chunks with cull areas; objects and people in one
-  depth-sorted layer; people tween between frames; children drawn smaller; sleepers lie down;
+- `renderer.ts` (PixiJS v8) owns the scene, camera, input and effects; the layers draw the rest:
+  `ground.ts` paints each 32×32-tile chunk straight onto a canvas (`groundPaint.ts`: which sprites
+  each tile gets, and which chunks a map change touches) and repaints only changed chunks;
+  `objectLayer.ts` diffs map objects by id and look (`objectDiff.ts`) so a map change adds, redraws
+  or removes only what changed, and finds objects and doors by id in O(1); `people.ts` draws
+  people, graves, labels and bubbles. Objects and people share one depth-sorted container;
+  people tween between frames; children drawn smaller; sleepers lie down;
   nobody is ever hidden: a house with someone inside is drawn cut away (roof off, `house_open*`; other buildings turn see-through) and its occupants stand on distinct spots in the room (`layout.ts` `interiorSpots`, sorted by id); sprites in front of a person (roofs, tree canopies) fade to 40% via a per-tile object grid; the dead become gravestones; half-built houses fade in; speech
   bubbles (laid out together each frame by `layoutBubbles` so none overlap, tails pointing at the speaker), name labels and "z z"/"…" in a screen-space overlay; night tint; follow mode. Weather:
   storms darken the map and draw falling rain (screen space); droughts give a hot, bleached tint;
   burning buildings get flickering flames and smoke; ruins are drawn blackened; the sick look pale
   green; winter frosts the land and autumn warms it. It animates only while something moves (or
   burns, or rains). In replay mode it is fed the replayed moment instead of live frames.
+- Speed (measured with `npm run bench:render`): camera input only moves the camera, and all
+  per-frame work (people, occluders, culling, drawing) runs once per animation frame. The ground,
+  the world (objects + people) and the screen overlay are separate Pixi render groups, so moving
+  the camera or people doesn't rebuild the others' draw lists. A person's depth is their tile
+  row (objects sit on row boundaries, so the order against them is exact), so Pixi only re-sorts
+  when someone crosses a row. Each layer culls against the current camera (Pixi's culler and
+  pointer hit-testing are off; input uses DOM listeners); people off screen skip label and bubble
+  work. Room spots are cached per house and head count. The night tint and selection outline are
+  redrawn only when they change. When frames carry a new map version the page fetches just the
+  map (`/map`, no people), one request at a time, never applying an older map over a newer one.
+  The people list and timeline re-render only rows that changed, and each look's portrait is
+  painted once.
 - `camera.ts`: pure camera maths (tested).
