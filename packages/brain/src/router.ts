@@ -13,6 +13,8 @@ import {
   RateLimitError,
   type BrainProvider,
   type BrainResult,
+  type GenerateRequest,
+  type Usage,
 } from './types.ts';
 
 export interface RateLimitInfo {
@@ -37,6 +39,28 @@ export interface RoutedResult {
   timedOut?: boolean;
   /** A rate or usage limit was hit (the decision was not made; ask again once it lifts). */
   limit?: RateLimitInfo;
+}
+
+/** What `BrainRouter.generate` gives back: never throws; failures are described instead. */
+export interface RoutedGenerate {
+  /** The provider asked (when it exists). */
+  provider: ProviderId;
+  model: string;
+  /** The tool's input (or JSON found in the text); null on failure or when the model gave none. */
+  output: unknown;
+  /** Any plain text the model wrote. */
+  text?: string;
+  /** What the call cost, also when it then failed (refusal, no answer). */
+  usage?: Usage;
+  latencyMs: number;
+  /** The provider isn't set up, or can't do free-form calls. Nothing was sent. */
+  notSetUp?: boolean;
+  timedOut?: boolean;
+  refused?: boolean;
+  /** A rate or usage limit was hit. */
+  limit?: RateLimitInfo;
+  /** What went wrong, in the provider's words (for the call log). */
+  error?: string;
 }
 
 /**
@@ -144,6 +168,22 @@ export class BrainRouter {
 
   has(id: ProviderId): boolean {
     return this.providers.has(id);
+  }
+
+  /**
+   * A free-form structured call on a person's brain (e.g. answering the observer's question about
+   * them), queued with that provider's decisions under the same concurrency limit and timeout.
+   * Never throws. A rate limit is reported, not acted on: it doesn't pause the world.
+   */
+  async generate(
+    config: BrainConfig,
+    req: GenerateRequest,
+    opts: { priority?: number; timeoutMs?: number } = {},
+  ): Promise<RoutedGenerate> {
+    void config;
+    void req;
+    void opts;
+    throw new Error('BrainRouter.generate is not built yet');
   }
 
   async decide(

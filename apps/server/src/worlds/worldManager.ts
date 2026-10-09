@@ -21,7 +21,12 @@ import {
   type FamilyNode,
   type LlmCallView,
   type MarketResponse,
+  type InterviewView,
+  type InterviewsResponse,
   type ObjectHistoryResponse,
+  type RecordQuery,
+  type RecordResponse,
+  type AskRequest,
   type VillageResponse,
   type ReplayResponse,
   type SpawnRequest,
@@ -545,6 +550,36 @@ export class WorldManager {
       };
     };
     return node(root, 2, 2);
+  }
+
+  /**
+   * Everything asked about a person so far (oldest first), and the span of their life the
+   * observer can ask about.
+   */
+  interviews(worldId: string, agentId: string): InterviewsResponse {
+    void worldId;
+    void agentId;
+    throw new Error('interviews is not built yet');
+  }
+
+  /**
+   * The observer asks about a person: their own brain answers from their record for the period
+   * (the free summary when it can't). Never changes the world; a paid answer counts toward the
+   * spending cap and the person's AI use.
+   */
+  async ask(worldId: string, agentId: string, req: AskRequest): Promise<InterviewView> {
+    void worldId;
+    void agentId;
+    void req;
+    throw new Error('ask is not built yet');
+  }
+
+  /** A page of a person's record (what the village holds about them) for a period. */
+  record(worldId: string, agentId: string, query: RecordQuery): RecordResponse {
+    void worldId;
+    void agentId;
+    void query;
+    throw new Error('record is not built yet');
   }
 
   calls(worldId: string, agentId: string, limit = 10): LlmCallView[] {

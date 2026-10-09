@@ -28,11 +28,17 @@ export interface BrainProvider {
   decide(request: DecisionRequest, config: BrainConfig, signal?: AbortSignal): Promise<BrainResult>;
   /** Model ids the provider offers (for the settings UI). */
   listModels?(): Promise<string[]>;
-  /** Free-form structured call (used to flesh out spawned people). */
-  generate?(
-    req: GenerateRequest,
-    signal?: AbortSignal,
-  ): Promise<{ output: unknown; usage?: Usage; model: string }>;
+  /** Free-form structured call (used to flesh out spawned people and to answer the observer). */
+  generate?(req: GenerateRequest, signal?: AbortSignal): Promise<GenerateResult>;
+}
+
+export interface GenerateResult {
+  /** The tool's input (or JSON found in the text); null if the model gave none. */
+  output: unknown;
+  /** Any plain text the model wrote besides (or instead of) the tool call. */
+  text?: string;
+  usage?: Usage;
+  model: string;
 }
 
 export interface GenerateRequest {
