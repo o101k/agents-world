@@ -3,12 +3,15 @@ import type { AgentView, MapObject, Point, WorldMap } from '@aw/shared';
 import type { ViewRect } from './ground.ts';
 import { hashString } from './hash.ts';
 import { interiorSpots } from './layout.ts';
+import { diffObjects, lookKey } from './objectDiff.ts';
 import { HOUSE_VARIANTS, TILE_PX, type SpriteName } from './pixelArt.ts';
 
 /** Alpha of a sprite drawn in front of a person (roof, tree canopy) so they stay visible. */
 const OCCLUDER_ALPHA = 0.4;
 /** Alpha of a building without a cutaway sprite while someone is inside. */
 const SEE_THROUGH_ALPHA = 0.45;
+/** Up to this many sprites are removed one by one; more go in a single pass (see removeSprites). */
+const SINGLE_REMOVE_LIMIT = 32;
 
 /** A map object's sprite plus what's needed to fade it and swap it for its open version. */
 interface ObjEntry {
@@ -35,21 +38,38 @@ export interface Standing {
   z: number;
 }
 
+/** Whether an entry's drawn rectangle touches the view. */
+function overlaps(e: Pick<ObjEntry, 'x' | 'y' | 'w' | 'h'>, v: ViewRect): boolean {
+  return e.x < v.x1 && e.x + e.w > v.x0 && e.y < v.y1 && e.y + e.h > v.y0;
+}
+
 /**
  * The map's objects (trees, bushes, houses, workshops, fields being cleared…) as depth-sorted
  * sprites in the shared world container, where people are drawn too. Also knows who is inside
  * which building (to open it up) and fades whatever stands in front of a person.
+ *
+ * A new map is applied as a diff: objects that look the same keep their sprite, only changed
+ * ones are redrawn, and removed ones are dropped.
  */
 export class ObjectLayer {
   private map: WorldMap | null = null;
+  /** Every map object by id (drawn or not). */
+  private byId = new Map<string, MapObject>();
+  /** Doorway tile ("x,y") → id of the house with that door. */
+  private doors = new Map<string, string>();
+  /** Look key of every map object as last set (drawn or not), for diffing. */
+  private lookKeys = new Map<string, string>();
   private resources: Record<string, number> = {};
-  private sprites = new Map<string, Sprite>();
   private entries = new Map<string, ObjEntry>();
   /** Object entries bucketed by the tiles their drawn rectangle touches. */
   private grid = new Map<number, ObjEntry[]>();
   private occluding = new Set<ObjEntry>();
   /** Living people inside each building (by building id). */
   private occupancy = new Map<string, number>();
+  /** Interior spots by `${id}:${count}`. */
+  private spots = new Map<string, Point[]>();
+  /** The last camera view given to cull(); null until then, when everything is visible. */
+  private view: ViewRect | null = null;
 
   constructor(
     /** The depth-sorted container shared with people. */
@@ -57,83 +77,51 @@ export class ObjectLayer {
     private readonly textures: Record<SpriteName, Texture>,
   ) {}
 
-  /** Shows the objects of `map`, replacing whatever was shown before. */
+  /** Shows the objects of `map`, changing only what differs from the map shown before. */
   setMap(map: WorldMap): void {
-    const tex = this.textures;
     this.map = map;
-    for (const s of this.sprites.values()) s.destroy();
-    this.sprites.clear();
-    this.entries.clear();
-    this.grid.clear();
-    this.occluding.clear();
-
+    this.byId = new Map();
+    this.doors = new Map();
+    const keys = new Map<string, string>();
     for (const o of map.objects) {
-      const name = this.spriteFor(o);
-      if (!name) continue;
-      const s = new Sprite(tex[name]);
-      s.cullable = true;
-      const bottom = (o.y + o.h) * TILE_PX;
-      s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
-      s.zIndex = bottom;
-      let baseAlpha = 1;
-      if (o.burntTick !== undefined) {
-        // A burnt-out ruin, blackened until rebuilt.
-        baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
-        s.tint = 0x5a4a40;
-      } else if (o.progress !== undefined && o.kind !== 'field') {
-        // Under construction: fades in as the work progresses.
-        baseAlpha = 0.3 + 0.6 * o.progress;
-        s.tint = 0xd8c8a8;
-      } else if (o.stone) {
-        // Stone buildings read as cool grey.
-        s.tint = 0xc8d4dc;
+      this.byId.set(o.id, o);
+      keys.set(o.id, lookKey(o));
+      if (o.kind === 'house' && o.door) {
+        const key = `${o.door.x},${o.door.y}`;
+        if (!this.doors.has(key)) this.doors.set(key, o.id);
       }
-      s.alpha = baseAlpha;
-      this.world.addChild(s);
-      this.sprites.set(o.id, s);
-      const openName =
-        o.kind === 'house'
-          ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName)
-          : null;
-      const entry: ObjEntry = {
-        sprite: s,
-        obj: o,
-        x: s.position.x,
-        y: s.position.y,
-        w: s.texture.frame.width,
-        h: s.texture.frame.height,
-        z: bottom,
-        baseAlpha,
-        normal: s.texture,
-        open: openName ? tex[openName] : null,
-        inside: false,
-        occluding: false,
-      };
-      this.entries.set(o.id, entry);
-      // Bucket by tile (only things that can stand in front of someone: tall or wide sprites).
-      for (
-        let ty = Math.floor(entry.y / TILE_PX);
-        ty <= Math.floor((entry.y + entry.h - 1) / TILE_PX);
-        ty++
-      )
-        for (
-          let tx = Math.floor(entry.x / TILE_PX);
-          tx <= Math.floor((entry.x + entry.w - 1) / TILE_PX);
-          tx++
-        ) {
-          const key = ty * 100000 + tx;
-          const list = this.grid.get(key);
-          if (list) list.push(entry);
-          else this.grid.set(key, [entry]);
-        }
     }
-    this.setResources({ ...this.resources });
-    this.applyOccupancy();
+    const diff = diffObjects(this.lookKeys, map.objects);
+    this.lookKeys = keys;
+
+    // Changed and removed buildings lose their sprite, their cached spots and their occlusion.
+    const stale = [...diff.changed.map((o) => o.id), ...diff.removed];
+    const gone: Sprite[] = [];
+    for (const id of stale) {
+      const e = this.entries.get(id);
+      if (!e) continue;
+      gone.push(e.sprite);
+      this.entries.delete(id);
+      this.occluding.delete(e);
+    }
+    if (stale.length) this.dropSpots(new Set(stale));
+    for (const id of diff.removed) this.occupancy.delete(id);
+    this.removeSprites(gone);
+
+    // New and changed objects get a sprite; their occupancy (if any) opens them up at once.
+    for (const o of diff.added) this.addEntry(o);
+    for (const o of diff.changed) this.addEntry(o);
+    for (const o of diff.same) {
+      const e = this.entries.get(o.id);
+      if (e) e.obj = o;
+    }
+
+    if (diff.added.length + diff.changed.length + diff.removed.length > 0) this.rebuildGrid();
   }
 
   /** The map object with this id (any kind, drawn as a sprite or as ground). */
   object(id: string): MapObject | undefined {
-    return this.map?.objects.find((o) => o.id === id);
+    return this.byId.get(id);
   }
 
   /** Resource amounts changed (by object id): bushes show whether they have berries. */
@@ -141,9 +129,12 @@ export class ObjectLayer {
     Object.assign(this.resources, changes);
     const tex = this.textures;
     for (const id of Object.keys(changes)) {
-      const s = this.sprites.get(id);
-      if (s && id.startsWith('berry_bush'))
-        s.texture = (changes[id] ?? 0) >= 1 ? tex.berry_bush : tex.berry_bush_empty;
+      const e = this.entries.get(id);
+      if (!e || !id.startsWith('berry_bush')) continue;
+      // Set the normal texture too, so a later refresh (occupancy, occlusion) doesn't bring back
+      // the old one.
+      e.normal = (changes[id] ?? 0) >= 1 ? tex.berry_bush : tex.berry_bush_empty;
+      this.refreshEntry(e);
     }
   }
 
@@ -160,36 +151,38 @@ export class ObjectLayer {
       let id = v.indoorsId;
       if (!id || !this.entries.has(id)) {
         // Older frames: find the home whose door this person is standing on.
-        id = this.map?.objects.find(
-          (o) => o.kind === 'house' && o.door && o.door.x === v.x && o.door.y === v.y,
-        )?.id;
+        id = this.doors.get(`${v.x},${v.y}`);
       }
       if (!id || !this.entries.has(id)) continue;
       const list = groups.get(id);
       if (list) list.push(v);
       else groups.set(id, [v]);
     }
+    const before = this.occupancy;
     this.occupancy = new Map();
     for (const [id, list] of groups) {
       const e = this.entries.get(id)!;
       list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const pts = interiorSpots(e.obj, list.length);
+      const pts = this.spotsFor(e, list.length);
       list.forEach((v, i) => out.set(v.id, { ...pts[i]!, z: e.z + 1 }));
       this.occupancy.set(id, list.length);
     }
-    this.applyOccupancy();
+    this.applyOccupancy(before);
     return out;
   }
 
-  /** Occupied houses show their cutaway; other buildings turn see-through. */
-  private applyOccupancy(): void {
-    for (const e of this.entries.values()) {
-      const inside = (this.occupancy.get(e.obj.id) ?? 0) > 0;
-      if (inside !== e.inside) {
-        e.inside = inside;
-        this.refreshEntry(e);
-      }
-    }
+  /** Opens up or closes only the buildings whose occupied state changed since `before`. */
+  private applyOccupancy(before: Map<string, number>): void {
+    const occupied = (id: string) => (this.occupancy.get(id) ?? 0) > 0;
+    for (const id of before.keys()) this.setInside(id, occupied(id));
+    for (const id of this.occupancy.keys()) this.setInside(id, occupied(id));
+  }
+
+  private setInside(id: string, inside: boolean): void {
+    const e = this.entries.get(id);
+    if (!e || e.inside === inside) return;
+    e.inside = inside;
+    this.refreshEntry(e);
   }
 
   private refreshEntry(e: ObjEntry): void {
@@ -232,9 +225,112 @@ export class ObjectLayer {
 
   /**
    * Shows only the objects that overlap `view`. Called whenever the camera moves or the map
-   * changes. (For now Pixi's culler hides off-screen sprites, so this does nothing.)
+   * changes. Sprites are not left to Pixi's culler.
    */
-  cull(_view: ViewRect): void {}
+  cull(view: ViewRect): void {
+    const v: ViewRect = { x0: view.x0, y0: view.y0, x1: view.x1, y1: view.y1 };
+    this.view = v;
+    for (const e of this.entries.values()) {
+      const visible = overlaps(e, v);
+      if (e.sprite.visible !== visible) e.sprite.visible = visible;
+    }
+  }
+
+  /** Creates the sprite and entry for an object (none for objects drawn as ground). */
+  private addEntry(o: MapObject): void {
+    const name = this.spriteFor(o);
+    if (!name) return;
+    const tex = this.textures;
+    const s = new Sprite(tex[name]);
+    s.cullable = false;
+    const bottom = (o.y + o.h) * TILE_PX;
+    s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
+    s.zIndex = bottom;
+    let baseAlpha = 1;
+    if (o.burntTick !== undefined) {
+      // A burnt-out ruin, blackened until rebuilt.
+      baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
+      s.tint = 0x5a4a40;
+    } else if (o.progress !== undefined && o.kind !== 'field') {
+      // Under construction: fades in as the work progresses.
+      baseAlpha = 0.3 + 0.6 * o.progress;
+      s.tint = 0xd8c8a8;
+    } else if (o.stone) {
+      // Stone buildings read as cool grey.
+      s.tint = 0xc8d4dc;
+    }
+    s.alpha = baseAlpha;
+    const openName =
+      o.kind === 'house' ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName) : null;
+    const entry: ObjEntry = {
+      sprite: s,
+      obj: o,
+      x: s.position.x,
+      y: s.position.y,
+      w: s.texture.frame.width,
+      h: s.texture.frame.height,
+      z: bottom,
+      baseAlpha,
+      normal: s.texture,
+      open: openName ? tex[openName] : null,
+      inside: (this.occupancy.get(o.id) ?? 0) > 0,
+      occluding: false,
+    };
+    s.visible = this.view ? overlaps(entry, this.view) : true;
+    this.world.addChild(s);
+    this.entries.set(o.id, entry);
+    if (entry.inside) this.refreshEntry(entry);
+  }
+
+  /** Takes sprites out of the world container and frees them. */
+  private removeSprites(sprites: Sprite[]): void {
+    if (sprites.length <= SINGLE_REMOVE_LIMIT) {
+      for (const s of sprites) s.destroy();
+      return;
+    }
+    // Pixi removes children one at a time by searching the child list, which is quadratic for
+    // many sprites, so rebuild the list in one pass. People share the container, so keep them.
+    const gone = new Set<Container>(sprites);
+    const keep = this.world.children.filter((c) => !gone.has(c));
+    this.world.removeChildren();
+    if (keep.length) this.world.addChild(...keep);
+    for (const s of sprites) s.destroy();
+  }
+
+  /** Rebuilds the tile grid from every entry (called only when entries were added or removed). */
+  private rebuildGrid(): void {
+    this.grid.clear();
+    for (const e of this.entries.values()) {
+      for (let ty = Math.floor(e.y / TILE_PX); ty <= Math.floor((e.y + e.h - 1) / TILE_PX); ty++)
+        for (
+          let tx = Math.floor(e.x / TILE_PX);
+          tx <= Math.floor((e.x + e.w - 1) / TILE_PX);
+          tx++
+        ) {
+          const key = ty * 100000 + tx;
+          const list = this.grid.get(key);
+          if (list) list.push(e);
+          else this.grid.set(key, [e]);
+        }
+    }
+  }
+
+  /** Interior spots for a building holding `count` people, computed once per footprint. */
+  private spotsFor(e: ObjEntry, count: number): Point[] {
+    const key = `${e.obj.id}:${count}`;
+    let pts = this.spots.get(key);
+    if (!pts) {
+      pts = interiorSpots(e.obj, count);
+      this.spots.set(key, pts);
+    }
+    return pts;
+  }
+
+  /** Forgets the cached spots of these buildings (one pass over the cache). */
+  private dropSpots(ids: Set<string>): void {
+    for (const key of this.spots.keys())
+      if (ids.has(key.slice(0, key.lastIndexOf(':')))) this.spots.delete(key);
+  }
 
   private spriteFor(o: MapObject): SpriteName | null {
     const h = hashString(o.id);
