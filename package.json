@@ -24,7 +24,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "check": "turbo run typecheck lint test",
-    "stress": "npm run stress -w @aw/server --"
+    "stress": "npm run stress -w @aw/server --",
+    "bench:render": "turbo run build --filter=@aw/web && node tests/perf/bench-render.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
