@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { formatClock, type WorldEvent } from '@aw/shared';
 import { api } from '../api.ts';
 import { useWorld } from '../worldStore.ts';
@@ -115,31 +115,51 @@ export function EventLog({
           </li>
         )}
         {shown.slice(0, 300).map((e) => (
-          <li key={e.id ?? `${e.tick}-${e.text}`} className={`event imp-${e.importance}`}>
-            <button
-              className="event-time linkish"
-              title="Replay this moment on the map"
-              onClick={() => useWorld.getState().setReplayTarget(e.tick)}
-            >
-              {formatClock(e.tick)}
-            </button>
-            {e.actors[0] ? (
-              <button className="event-text linkish" onClick={() => onPickAgent(e.actors[0]!)}>
-                {e.text}
-              </button>
-            ) : e.objects?.[0] ? (
-              <button className="event-text linkish" onClick={() => onPickObject(e.objects![0]!)}>
-                {e.text}
-              </button>
-            ) : (
-              <span className="event-text">{e.text}</span>
-            )}
-          </li>
+          <EventRow
+            key={e.id ?? `${e.tick}-${e.text}`}
+            event={e}
+            onPickAgent={onPickAgent}
+            onPickObject={onPickObject}
+          />
         ))}
       </ol>
     </section>
   );
 }
+
+/** One timeline entry. Event objects keep their identity, so old rows skip re-rendering. */
+const EventRow = memo(function EventRow({
+  event: e,
+  onPickAgent,
+  onPickObject,
+}: {
+  event: WorldEvent;
+  onPickAgent: (id: string) => void;
+  onPickObject: (id: string) => void;
+}) {
+  return (
+    <li className={`event imp-${e.importance}`}>
+      <button
+        className="event-time linkish"
+        title="Replay this moment on the map"
+        onClick={() => useWorld.getState().setReplayTarget(e.tick)}
+      >
+        {formatClock(e.tick)}
+      </button>
+      {e.actors[0] ? (
+        <button className="event-text linkish" onClick={() => onPickAgent(e.actors[0]!)}>
+          {e.text}
+        </button>
+      ) : e.objects?.[0] ? (
+        <button className="event-text linkish" onClick={() => onPickObject(e.objects![0]!)}>
+          {e.text}
+        </button>
+      ) : (
+        <span className="event-text">{e.text}</span>
+      )}
+    </li>
+  );
+});
 
 /** Live events plus fetched history, newest first, without duplicates. */
 function mergeEvents(live: WorldEvent[], history: WorldEvent[]): WorldEvent[] {
