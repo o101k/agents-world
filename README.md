@@ -149,6 +149,19 @@ Check the **Prices** table in settings so the meter matches your provider's pric
 In a person's inspector you can read their current thought, plan, memories and the people they know,
 and open **Raw AI exchanges** to see the exact prompt and reply behind recent decisions.
 
+**Ask about them**: at the top of every person's inspector (living or dead, also in replay) you can
+ask what they did, who they spent time with, how they felt, or for their life story, over the last
+hour, today, yesterday, the last 3 days, a year of their life or their whole life. Their own brain
+(same provider and model) answers with a short summary written from the village's record of them.
+**All answers and the full record** opens a bigger view: every answer so far, any period back to the
+day they were born or arrived (sliders, or click a day on the strip), and the record itself: what
+happened to them, what they said and heard, what they were thinking at each decision, their diary
+and their memories, filterable and paged back as far as they lived (click a time to see the map at
+that moment). Asking never changes anything in the world, and the person never knows. An answer
+costs about as much as a decision or two and counts toward the spending cap and the person's AI use
+(the inspector shows it as "on your questions"). Mock-brain villagers, and anyone whose AI can't
+answer (not set up, cap reached, rate limit), get a free summary instead, labelled as such.
+
 **The economy**: fields grow wheat or vegetables, trees give wood, the bakery turns wheat into bread
 and the workshop turns wood into planks and tools. The town market (click it, or see the World tab)
 buys and sells everything at prices that follow supply and demand. Villagers can give things to each
