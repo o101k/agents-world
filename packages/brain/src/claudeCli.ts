@@ -304,7 +304,7 @@ export class ClaudePlanProvider implements BrainProvider {
   private async ask(
     opts: { model: string; system: string; user: string; schema: unknown; effort?: EffortLevel },
     signal?: AbortSignal,
-  ): Promise<{ output: unknown; usage: Usage; model: string }> {
+  ): Promise<{ output: unknown; text?: string; usage: Usage; model: string }> {
     const args = [
       '-p',
       '--output-format',
@@ -372,7 +372,12 @@ export class ClaudePlanProvider implements BrainProvider {
     const usage = planUsage(out);
     if (out.stop_reason === 'refusal') throw new RefusalError('The model declined.', usage);
     const model = reportedModel(out, opts.model);
-    return { output: out.structured_output ?? extractJson(out.result ?? ''), usage, model };
+    return {
+      output: out.structured_output ?? extractJson(out.result ?? ''),
+      text: typeof out.result === 'string' && out.result.trim() ? out.result.trim() : undefined,
+      usage,
+      model,
+    };
   }
 
   async decide(

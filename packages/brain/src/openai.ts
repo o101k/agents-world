@@ -160,6 +160,7 @@ export class OpenAIProvider implements BrainProvider {
     output ??= extractJson(msg?.content ?? '');
     return {
       output,
+      text: msg?.content || undefined,
       model,
       usage: costOf(
         model,

@@ -14,6 +14,7 @@ import {
   type BrainProvider,
   type BrainResult,
   type GenerateRequest,
+  type GenerateResult,
   type Usage,
 } from './types.ts';
 
@@ -180,10 +181,104 @@ export class BrainRouter {
     req: GenerateRequest,
     opts: { priority?: number; timeoutMs?: number } = {},
   ): Promise<RoutedGenerate> {
-    void config;
-    void req;
-    void opts;
-    throw new Error('BrainRouter.generate is not built yet');
+    const { priority = 1, timeoutMs = 90_000 } = opts;
+    const provider = this.providers.get(config.provider);
+    // Nothing is sent to the mock brain or to a provider that can't do free-form calls.
+    if (config.provider === 'mock' || !provider?.generate) {
+      return {
+        provider: config.provider,
+        model: config.model,
+        output: null,
+        latencyMs: 0,
+        notSetUp: true,
+      };
+    }
+    let sem = this.limits.get(provider.id);
+    if (!sem) this.limits.set(provider.id, (sem = new PrioritySemaphore(CONCURRENCY[provider.id])));
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve('timeout');
+      }, timeoutMs);
+    });
+    const started = performance.now();
+    const latency = () => Math.round(performance.now() - started);
+    try {
+      const out = await Promise.race([
+        sem.run<GenerateResult | 'timeout'>(
+          // A request that timed out while still queued is dropped, never sent (and never paid for).
+          () =>
+            controller.signal.aborted
+              ? Promise.resolve('timeout')
+              : provider.generate!({ ...req, model: req.model || config.model }, controller.signal),
+          priority,
+        ),
+        timeout,
+      ]);
+      if (out === 'timeout')
+        return {
+          provider: provider.id,
+          model: config.model,
+          output: null,
+          latencyMs: latency(),
+          timedOut: true,
+          error: 'timed out',
+        };
+      return {
+        provider: provider.id,
+        model: out.model,
+        output: out.output,
+        text: out.text,
+        usage: out.usage,
+        latencyMs: latency(),
+      };
+    } catch (err) {
+      const message = (err as Error).message ?? String(err);
+      if (err instanceof RateLimitError)
+        return {
+          provider: provider.id,
+          model: config.model,
+          output: null,
+          latencyMs: latency(),
+          error:
+            `Rate limit${err.details.status ? ` (${err.details.status})` : ''}: ${err.message}`.slice(
+              0,
+              500,
+            ),
+          limit: { message: err.message, ...err.details },
+        };
+      if (err instanceof RefusalError)
+        return {
+          provider: provider.id,
+          model: config.model,
+          output: null,
+          latencyMs: latency(),
+          refused: true,
+          usage: err.usage,
+          error: `Refused: ${message}`.slice(0, 500),
+        };
+      if (err instanceof NoDecisionError)
+        return {
+          provider: provider.id,
+          model: config.model,
+          output: null,
+          latencyMs: latency(),
+          usage: err.usage,
+          error: `Error: ${message}`.slice(0, 500),
+        };
+      return {
+        provider: provider.id,
+        model: config.model,
+        output: null,
+        latencyMs: latency(),
+        error: message.slice(0, 500),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async decide(
