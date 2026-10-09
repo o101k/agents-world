@@ -20,6 +20,7 @@ import {
   type CastPreviewResponse,
   type FamilyNode,
   type LlmCallView,
+  type MapResponse,
   type MarketResponse,
   type ObjectHistoryResponse,
   type VillageResponse,
@@ -279,6 +280,7 @@ export class WorldManager {
       meta: runner.currentMeta(),
       settings: state.settings,
       map: encodeMap(state.map),
+      mapVersion: state.mapVersion,
       tick: state.tick,
       runner: runner.status(),
       agents: state.agents.map(agentView),
@@ -286,6 +288,16 @@ export class WorldManager {
       owners: ownerNames(state),
       conditions: state.conditions.map((c) => ({ ...c })),
       calendar: calendarView(state),
+    };
+  }
+
+  /** The map and its owners only; cheap enough to fetch every time the map changes. */
+  map(id: string): MapResponse {
+    const state = this.requireActive(id).state;
+    return {
+      mapVersion: state.mapVersion,
+      map: encodeMap(state.map),
+      owners: ownerNames(state),
     };
   }
 

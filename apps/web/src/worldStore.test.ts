@@ -19,6 +19,7 @@ const view = {
   runner,
   agents: [],
   resources: { 'berry_bush-1': 3 },
+  mapVersion: 0,
   conditions: [],
   calendar: { year: 1, season: 'spring', progress: 0.02 },
 } as unknown as WorldViewResponse;
@@ -42,6 +43,14 @@ describe('the world store (browser state)', () => {
     useWorld.getState().applyFrame('w1', frame);
     expect(useWorld.getState().tick).toBe(421);
     expect(useWorld.getState().resources['berry_bush-1']).toBe(2);
+  });
+
+  it("takes the map version from the world it loads, not the last world's", () => {
+    useWorld
+      .getState()
+      .applyFrame('w1', { tick: 421, runner, agents: [], resources: {}, mapVersion: 9 });
+    useWorld.getState().load('w2', { ...view, mapVersion: 2 }, []);
+    expect(useWorld.getState().mapVersion).toBe(2);
   });
 
   it('keeps the newest events first', () => {

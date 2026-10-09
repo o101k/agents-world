@@ -3,7 +3,12 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ServerMessage, WorldViewResponse } from '@aw/shared';
+import {
+  decodeMap,
+  type MapResponse,
+  type ServerMessage,
+  type WorldViewResponse,
+} from '@aw/shared';
 import { buildApp, type App } from './app.ts';
 import type { ServerConfig } from './config.ts';
 
@@ -106,6 +111,33 @@ describe('the local helper (real HTTP + WebSocket)', () => {
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.every((f) => f.type === 'frame' && f.worldId === id)).toBe(true);
     await waitFor(() => messages.some((m) => m.type === 'events' && m.events.length > 0));
+    socket.close();
+  });
+
+  it('serves the map and its owners on their own, at the version the frames carry', async () => {
+    const socket = new WebSocket(`ws://${base}/ws`);
+    const messages: ServerMessage[] = [];
+    socket.onmessage = (m) => messages.push(JSON.parse(String(m.data)) as ServerMessage);
+    await waitFor(() => messages.some((m) => m.type === 'hello'));
+
+    const id = await createWorld('Mapped');
+    const view = await runFor(id, 300);
+    const map = await api<MapResponse>('GET', `/api/worlds/${id}/map`);
+    // Pausing sends a frame of the paused world; its map version is the one the map carries.
+    await waitFor(() =>
+      messages.some((m) => m.type === 'frame' && !m.runner.running && m.tick === view.tick),
+    );
+    const paused = messages.find(
+      (m) => m.type === 'frame' && !m.runner.running && m.tick === view.tick,
+    );
+    expect(paused?.type === 'frame' && paused.mapVersion).toBe(map.mapVersion);
+
+    const decoded = decodeMap(map.map);
+    expect(decoded.width).toBe(view.meta.mapWidth);
+    expect(decoded.height).toBe(view.meta.mapHeight);
+    expect(map.map).toEqual(view.map);
+    expect(map.mapVersion).toBe(view.mapVersion);
+    expect(map.owners).toEqual(view.owners);
     socket.close();
   });
 
