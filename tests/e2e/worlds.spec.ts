@@ -388,7 +388,7 @@ test('ask about a villager and read the record', async ({ page }) => {
   });
 
   // The full view: every answer, and the record behind it.
-  await section.getByRole('button', { name: /All answers and the full record/ }).click();
+  await section.getByRole('button', { name: /full record/ }).click();
   const dialog = page.getByRole('dialog', { name: /Ask about/ });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.ask-line').first()).toBeVisible({ timeout: 10_000 });

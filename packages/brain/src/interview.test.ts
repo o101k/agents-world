@@ -199,7 +199,9 @@ describe('mockInterview', () => {
   it('tells the whole life story, with chapters', () => {
     const text = mockInterview(digestFixture(), 'Tell me her life story');
     expect(text).toContain('Born at the mill');
-    expect(text).toContain('- Year 30: opened the bakery.');
+    expect(text).toContain(
+      'Looking back on her life, she wrote: “Year 30: opened the bakery.” “Year 31: married Tom.”',
+    );
   });
 
   it('gives a non-empty answer for an unknown question', () => {

@@ -76,6 +76,13 @@ function sentenceEnd(text: string): string {
   return /[.!?…”"]$/.test(text) ? text : `${text}.`;
 }
 
+/** At most `max` characters, cut at a word, with "…". */
+function clipWords(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max / 2)).trimEnd()}…`;
+}
+
 /** "a (34 times), b (8) and c (5)". */
 function tally(items: { label: string; count: number }[]): string {
   const parts = items.map((it, i) => `${it.label} (${i === 0 ? `${it.count} times` : it.count})`);
@@ -272,10 +279,11 @@ export function mockInterview(digest: PersonDigest, question: string): string {
     : `Nothing went badly wrong for ${her === 'his' ? 'him' : 'her'} in this period, as far as the record shows.`;
 
   const story = (() => {
-    const chapters = digest.chapters.slice(0, 6).map((c) => `- ${c}`);
+    // Their latest life chapters, quoted in their own words.
+    const chapters = digest.chapters.slice(-2).map((c) => `“${clipWords(c, 280)}”`);
     return [
       digest.background,
-      chapters.length ? `${Her} chapters so far:\n${chapters.join('\n')}` : '',
+      chapters.length ? `Looking back on ${her} life, ${she} wrote: ${chapters.join(' ')}` : '',
       eventSentences(
         digest.entries.filter((e) => e.kind === 'event'),
         6,

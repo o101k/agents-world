@@ -94,6 +94,16 @@ describe('answerBlocks', () => {
     ]);
   });
 
+  it('splits a lead line and its bullets, and drops markdown bold', () => {
+    expect(
+      answerBlocks('Key moments:\n- **Day 2**: sowed wheat\n• Day 3: sold it\nThen rest.'),
+    ).toEqual([
+      { kind: 'p', text: 'Key moments:' },
+      { kind: 'ul', items: ['Day 2: sowed wheat', 'Day 3: sold it'] },
+      { kind: 'p', text: 'Then rest.' },
+    ]);
+  });
+
   it('returns nothing for empty text', () => {
     expect(answerBlocks('  \n\n ')).toEqual([]);
   });
@@ -156,10 +166,10 @@ describe('answerSource', () => {
       costUsd: 0.0123,
     };
     expect(answerSource(paid, 'Anthropic (Claude)')).toBe(
-      'Anthropic (Claude) · claude-haiku-4-5 · $0.01 · read 12 of 40 lines',
+      'Anthropic · claude-haiku-4-5 · $0.01 · read 12 of 40 lines',
     );
-    expect(answerSource({ ...paid, plan: true, costUsd: 0 }, 'Claude plan')).toBe(
-      'Claude plan · claude-haiku-4-5 · $0 (plan) · read 12 of 40 lines',
+    expect(answerSource({ ...paid, plan: true, costUsd: 0 }, 'Claude subscription (Pro/Max)')).toBe(
+      'Claude subscription · claude-haiku-4-5 · $0 (plan) · read 12 of 40 lines',
     );
   });
 });

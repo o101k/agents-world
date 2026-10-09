@@ -73,8 +73,19 @@
 }
 .ask-all {
   display: inline-block;
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--accent);
+}
+.ask-section .ask-periods {
+  margin: 8px 0 0;
+}
+.ask-tab-more {
+  border-style: dashed;
+}
+.ask-tab:hover:not(.is-on) {
+  color: var(--text);
+  border-color: var(--muted);
 }
 
 /* Cards */
@@ -222,23 +233,32 @@
 .ask-strip {
   display: flex;
   align-items: flex-end;
-  gap: 1px;
-  height: 30px;
+  gap: 2px;
+  height: 40px;
   margin-top: 10px;
   overflow: hidden;
 }
 .ask-strip-bar {
   flex: 1 1 0;
-  max-width: 14px;
   min-width: 2px;
   padding: 0;
   border: 0;
   border-radius: 2px 2px 0 0;
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
   cursor: pointer;
 }
 .ask-strip-bar.is-on {
   background: var(--accent);
+}
+.ask-strip-bar:hover {
+  filter: brightness(1.3);
+}
+.ask-strip-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 11px;
 }
 
 .ask-columns {

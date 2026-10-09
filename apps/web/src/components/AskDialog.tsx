@@ -273,7 +273,7 @@ export function AskDialog({
           <div className="ask-strip" aria-label="Days of their life">
             {days.map((d) => {
               const selected = d.day >= firstDay && d.day <= lastDay;
-              const height = Math.max(2, Math.round((d.notable / maxNotable) * 28));
+              const height = Math.max(4, Math.round((d.notable / maxNotable) * 38));
               return (
                 <button
                   key={d.day}
@@ -287,6 +287,13 @@ export function AskDialog({
               );
             })}
           </div>
+          {days.length > 0 && (
+            <div className="ask-strip-axis muted" aria-hidden="true">
+              <span>Day {days[0]!.day}</span>
+              <span>Notable things each day · click a day to pick it</span>
+              <span>Day {days[days.length - 1]!.day}</span>
+            </div>
+          )}
         </div>
 
         <div className="ask-columns">

@@ -1,7 +1,13 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { BrainConfig, InterviewView, Sex } from '@aw/shared';
 import { api } from '../api.ts';
-import { periodPresets, pronounsFor, suggestionsFor, type PeriodPresetId } from '../ask.ts';
+import {
+  periodPresets,
+  pronounsFor,
+  shortProvider,
+  suggestionsFor,
+  type PeriodPresetId,
+} from '../ask.ts';
 import { describeBrain } from '../brainLabels.ts';
 import { useSettings } from '../settingsStore.ts';
 import './ask.css';
@@ -119,8 +125,8 @@ export function AskSection({
     brain.provider === 'mock'
       ? 'Free summary from the record (Mock brain).'
       : desc.notSetUp
-        ? `${desc.title} isn't set up, so you'll get the free summary.`
-        : `Answered by ${firstName}'s brain (${desc.title} · ${brain.model || 'default model'}). Each answer costs a little and counts toward the cap.`;
+        ? `${shortProvider(desc.title)} isn't set up, so you'll get the free summary.`
+        : `Answered by ${firstName}'s own brain (${shortProvider(desc.title)}, ${brain.model || 'default model'}). Each answer costs a little and counts toward the cap.`;
 
   return (
     <section className="ask-section">
@@ -145,20 +151,20 @@ export function AskSection({
         </button>
       </div>
 
-      <div className="segmented ask-periods" role="group" aria-label="Period">
+      <div className="ask-tabs ask-periods" role="group" aria-label="Period">
         {shown.map((p) => (
           <button
             key={p.id}
             type="button"
-            className={`seg ${presetId === p.id ? 'is-on' : ''}`}
+            className={`ask-tab ${presetId === p.id ? 'is-on' : ''}`}
             aria-pressed={presetId === p.id}
             onClick={() => setPresetId(p.id)}
           >
             {p.label}
           </button>
         ))}
-        <button type="button" className="seg" onClick={() => setDialogOpen(true)}>
-          Custom…
+        <button type="button" className="ask-tab ask-tab-more" onClick={() => setDialogOpen(true)}>
+          Pick days…
         </button>
       </div>
 
@@ -204,7 +210,9 @@ export function AskSection({
       )}
 
       <button type="button" className="linkish ask-all" onClick={() => setDialogOpen(true)}>
-        All answers and the full record ({interviews.length})
+        {interviews.length
+          ? `${interviews.length === 1 ? 'Your answer' : `All ${interviews.length} answers`} and ${her} full record →`
+          : `${capitalize(her)} full record, day by day →`}
       </button>
 
       {dialogOpen && (
@@ -254,4 +262,8 @@ function toMeta(r: {
     nowTick: r.nowTick,
     daysPerYear: r.daysPerYear,
   };
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

@@ -95,23 +95,47 @@ export function periodLabel(from: number, to: number, lifeFrom: number, lifeTo: 
 
 export type AnswerBlock = { kind: 'p'; text: string } | { kind: 'ul'; items: string[] };
 
-/** Paragraphs split on blank lines; a block of "- " or "* " lines is a bullet list. */
+const BULLET_RE = /^[-*•]\s+/;
+
+/**
+ * Paragraphs split on blank lines; runs of "- ", "* " or "• " lines are bullet lists (also
+ * inside a paragraph, e.g. "Key moments:" followed by bullets). Markdown bold is dropped.
+ */
 export function answerBlocks(text: string): AnswerBlock[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((block) =>
-      block
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0),
-    )
-    .filter((lines) => lines.length > 0)
-    .map((lines): AnswerBlock => {
-      const isList = lines.every((line) => line.startsWith('- ') || line.startsWith('* '));
-      return isList
-        ? { kind: 'ul', items: lines.map((line) => line.slice(2).trim()) }
-        : { kind: 'p', text: lines.join(' ') };
-    });
+  const blocks: AnswerBlock[] = [];
+  for (const block of text.split(/\n\s*\n/)) {
+    const lines = block
+      .split('\n')
+      .map((line) => line.trim().replace(/\*\*(.+?)\*\*/g, '$1'))
+      .filter((line) => line.length > 0);
+    let prose: string[] = [];
+    let items: string[] = [];
+    const flush = () => {
+      if (prose.length) blocks.push({ kind: 'p', text: prose.join(' ') });
+      if (items.length) blocks.push({ kind: 'ul', items });
+      prose = [];
+      items = [];
+    };
+    for (const line of lines) {
+      if (BULLET_RE.test(line)) {
+        if (prose.length) {
+          blocks.push({ kind: 'p', text: prose.join(' ') });
+          prose = [];
+        }
+        items.push(line.replace(BULLET_RE, ''));
+      } else {
+        if (items.length) flush();
+        prose.push(line);
+      }
+    }
+    flush();
+  }
+  return blocks;
+}
+
+/** A provider's name without its aside: "OpenAI-compatible (OpenRouter, …)" → "OpenAI-compatible". */
+export function shortProvider(label: string): string {
+  return label.replace(/\s*\([^)]*\)\s*$/, '') || label;
 }
 
 export const RECORD_KIND_LABELS: Record<RecordKind, string> = {
@@ -151,7 +175,7 @@ export function answerSource(interview: InterviewView, providerLabel?: string): 
     if (interview.costUsd > 0) head += ` · ${formatUsd(interview.costUsd)} spent`;
   } else {
     const model = interview.model || 'default model';
-    head = `${providerLabel ?? interview.provider} · ${model} · ${formatUsd(interview.costUsd)}`;
+    head = `${providerLabel ? shortProvider(providerLabel) : interview.provider} · ${model} · ${formatUsd(interview.costUsd)}`;
     if (interview.plan) head += ' (plan)';
   }
   return `${head} · read ${interview.usedCount} of ${interview.recordCount} lines`;

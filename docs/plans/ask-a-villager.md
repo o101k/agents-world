@@ -11,7 +11,7 @@ workers in parallel worktrees; reviewed and iterated by Opus until `npm run chec
 
 - **An "Ask about Anna" section** at the top of every person's inspector (living or dead, and in
   replay). A question box ("What did Anna do?"), period chips (Last hour, Today, Yesterday,
-  3 days, A year, Whole life, Custom…), suggestion chips, and the latest answer right there.
+  3 days, A year, Whole life, Pick days…), suggestion chips, and the latest answer right there.
 - **A full view** (dialog) with every answer ever given about this person as a conversation,
   a custom range back to the day they were born or arrived (two sliders and a strip with one bar
   per day of their life, taller on eventful days), and **the record**: every line the village
