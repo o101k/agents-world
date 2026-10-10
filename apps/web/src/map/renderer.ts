@@ -66,11 +66,22 @@ export class WorldRenderer {
   private readonly app = new Application();
   private readonly scene = new Container();
   /**
-   * Map objects and people, depth-sorted together. Its own render group (like the ground and
-   * the overlay): moving the camera then doesn't recompute every sprite's transform, and people
-   * moving don't make Pixi rebuild the ground's or the labels' draw lists.
+   * The world above the ground is drawn in three layers, each its own render group: map objects
+   * that fit inside their footprint (and graves), then people, then objects that rise above
+   * their footprint (trees, stalls). Someone can only overlap an object of the first kind from
+   * in front of it (or in its doorway or room) and an object of the second kind from behind it,
+   * so this order is the depth order without sorting people against 8,000 trees. The object
+   * layers never change while people move, so Pixi builds their draw lists once per map; only
+   * the people layer is re-sorted as people cross tile rows. (See docs/DESIGN.md, Rendering.)
    */
-  private readonly world = new Container({ sortableChildren: true, isRenderGroup: true });
+  private readonly under = new Container({ sortableChildren: true, isRenderGroup: true });
+  private readonly people = new Container({ sortableChildren: true, isRenderGroup: true });
+  private readonly over = new Container({ sortableChildren: true, isRenderGroup: true });
+  /** Gravestones: drawn last in the under layer (a grave can lie on a field being cleared). */
+  private readonly graves = new Container({
+    sortableChildren: true,
+    zIndex: Number.MAX_SAFE_INTEGER,
+  });
   private readonly night = new Graphics();
   /** Flames on burning buildings (world space, above objects). */
   private readonly fires = new Graphics();
@@ -142,13 +153,20 @@ export class WorldRenderer {
     ) as Record<SpriteName, Texture>;
     const ground = new GroundLayer(atlas, textures);
     ground.container.isRenderGroup = true;
-    const objects = new ObjectLayer(this.world, textures);
+    const objects = new ObjectLayer(this.under, this.over, textures);
     objects.setResources(this.resources);
-    this.layers = { ground, objects, people: new PeopleLayer(this.world, this.overlay, textures) };
+    this.under.addChild(this.graves);
+    this.layers = {
+      ground,
+      objects,
+      people: new PeopleLayer(this.people, this.graves, this.overlay, textures),
+    };
 
     this.scene.addChild(
       ground.container,
-      this.world,
+      this.under,
+      this.people,
+      this.over,
       this.fires,
       this.night,
       this.hoverBox,
@@ -294,7 +312,6 @@ export class WorldRenderer {
     const start = performance.now();
     layers.ground.setMap(map);
     layers.objects.setMap(map);
-    layers.people.reattach();
     this.viewDirty = true;
 
     if (!keepCamera) this.cam = fitCamera(this.worldSize(), this.screenSize());
@@ -339,7 +356,6 @@ export class WorldRenderer {
       this.viewDirty = false;
       const view = this.viewRect();
       layers.ground.cull(view);
-      layers.objects.cull(view);
     }
     this.drawSelection();
     this.drawEffects(now);

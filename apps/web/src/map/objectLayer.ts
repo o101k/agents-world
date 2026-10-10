@@ -1,6 +1,5 @@
 import { Sprite, type Container, type Texture } from 'pixi.js';
 import type { AgentView, MapObject, Point, WorldMap } from '@aw/shared';
-import type { ViewRect } from './ground.ts';
 import { hashString } from './hash.ts';
 import { interiorSpots } from './layout.ts';
 import { diffObjects, lookKey } from './objectDiff.ts';
@@ -29,6 +28,8 @@ interface ObjEntry {
   open: Texture | null;
   inside: boolean;
   occluding: boolean;
+  /** Drawn taller than its footprint (trees, stalls), so in the layer above people. */
+  tall: boolean;
 }
 
 /** Where a person stands (feet, world pixels) and the depth they are drawn at. */
@@ -38,15 +39,14 @@ export interface Standing {
   z: number;
 }
 
-/** Whether an entry's drawn rectangle touches the view. */
-function overlaps(e: Pick<ObjEntry, 'x' | 'y' | 'w' | 'h'>, v: ViewRect): boolean {
-  return e.x < v.x1 && e.x + e.w > v.x0 && e.y < v.y1 && e.y + e.h > v.y0;
-}
-
 /**
  * The map's objects (trees, bushes, houses, workshops, fields being cleared…) as depth-sorted
- * sprites in the shared world container, where people are drawn too. Also knows who is inside
- * which building (to open it up) and fades whatever stands in front of a person.
+ * sprites in two layers: objects drawn within their footprint go under people, objects drawn
+ * taller than it (trees, stalls) over them (see WorldRenderer). Also knows who is inside which
+ * building (to open it up) and fades whatever tall object stands in front of a person.
+ *
+ * Objects are never culled: the layers are static, so Pixi keeps their draw lists, and hiding
+ * sprites as the camera moves would make it rebuild them.
  *
  * A new map is applied as a diff: objects that look the same keep their sprite, only changed
  * ones are redrawn, and removed ones are dropped.
@@ -60,19 +60,19 @@ export class ObjectLayer {
   private lookKeys = new Map<string, string>();
   private resources: Record<string, number> = {};
   private entries = new Map<string, ObjEntry>();
-  /** Object entries bucketed by the tiles their drawn rectangle touches. */
+  /** Tall object entries bucketed by the tiles their drawn rectangle touches. */
   private grid = new Map<number, ObjEntry[]>();
   private occluding = new Set<ObjEntry>();
   /** Living people inside each building (by building id). */
   private occupancy = new Map<string, number>();
   /** Interior spots by `${id}:${count}`. */
   private spots = new Map<string, Point[]>();
-  /** The last camera view given to cull(); null until then, when everything is visible. */
-  private view: ViewRect | null = null;
 
   constructor(
-    /** The depth-sorted container shared with people. */
-    private readonly world: Container,
+    /** Objects drawn within their footprint (under people). */
+    private readonly under: Container,
+    /** Objects drawn taller than their footprint (over people). */
+    private readonly over: Container,
     private readonly textures: Record<SpriteName, Texture>,
   ) {}
 
@@ -192,7 +192,10 @@ export class ObjectLayer {
     if (e.sprite.alpha !== alpha) e.sprite.alpha = alpha;
   }
 
-  /** Fade whatever is drawn in front of a person (roofs, tree canopies) so nobody is hidden. */
+  /**
+   * Fade whatever is drawn in front of a person (tree canopies, stall awnings) so nobody is
+   * hidden. Only tall objects can be: everything else is drawn under people.
+   */
   updateOccluders(people: Iterable<Standing>): void {
     const next = new Set<ObjEntry>();
     for (const p of people) {
@@ -221,19 +224,6 @@ export class ObjectLayer {
     this.occluding = next;
   }
 
-  /**
-   * Shows only the objects that overlap `view`. Called whenever the camera moves or the map
-   * changes. Sprites are not left to Pixi's culler.
-   */
-  cull(view: ViewRect): void {
-    const v: ViewRect = { x0: view.x0, y0: view.y0, x1: view.x1, y1: view.y1 };
-    this.view = v;
-    for (const e of this.entries.values()) {
-      const visible = overlaps(e, v);
-      if (e.sprite.visible !== visible) e.sprite.visible = visible;
-    }
-  }
-
   /** Creates the sprite and entry for an object (none for objects drawn as ground). */
   private addEntry(o: MapObject): void {
     const name = this.spriteFor(o);
@@ -260,6 +250,8 @@ export class ObjectLayer {
     s.alpha = baseAlpha;
     const openName =
       o.kind === 'house' ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName) : null;
+    // A field being cleared is bare dirt people walk on, whatever its sprite's size.
+    const tall = o.kind !== 'field' && s.texture.frame.height > o.h * TILE_PX;
     const entry: ObjEntry = {
       sprite: s,
       obj: o,
@@ -273,32 +265,36 @@ export class ObjectLayer {
       open: openName ? tex[openName] : null,
       inside: (this.occupancy.get(o.id) ?? 0) > 0,
       occluding: false,
+      tall,
     };
-    s.visible = this.view ? overlaps(entry, this.view) : true;
-    this.world.addChild(s);
+    (tall ? this.over : this.under).addChild(s);
     this.entries.set(o.id, entry);
     if (entry.inside) this.refreshEntry(entry);
   }
 
-  /** Takes sprites out of the world container and frees them. */
+  /** Takes sprites out of their layers and frees them. */
   private removeSprites(sprites: Sprite[]): void {
     if (sprites.length <= SINGLE_REMOVE_LIMIT) {
       for (const s of sprites) s.destroy();
       return;
     }
     // Pixi removes children one at a time by searching the child list, which is quadratic for
-    // many sprites, so rebuild the list in one pass. People share the container, so keep them.
+    // many sprites, so rebuild each layer's list in one pass (keeping graves in the under layer).
     const gone = new Set<Container>(sprites);
-    const keep = this.world.children.filter((c) => !gone.has(c));
-    this.world.removeChildren();
-    if (keep.length) this.world.addChild(...keep);
+    for (const layer of [this.under, this.over]) {
+      const keep = layer.children.filter((c) => !gone.has(c));
+      if (keep.length === layer.children.length) continue;
+      layer.removeChildren();
+      if (keep.length) layer.addChild(...keep);
+    }
     for (const s of sprites) s.destroy();
   }
 
-  /** Rebuilds the tile grid from every entry (called only when entries were added or removed). */
+  /** Rebuilds the tile grid of tall entries (called only when entries were added or removed). */
   private rebuildGrid(): void {
     this.grid.clear();
     for (const e of this.entries.values()) {
+      if (!e.tall) continue;
       for (let ty = Math.floor(e.y / TILE_PX); ty <= Math.floor((e.y + e.h - 1) / TILE_PX); ty++)
         for (
           let tx = Math.floor(e.x / TILE_PX);

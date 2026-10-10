@@ -1,5 +1,5 @@
 import { Container, Graphics, Rectangle, Sprite, Text, Texture } from 'pixi.js';
-import type { AgentView, Point } from '@aw/shared';
+import type { AgentView, Appearance, Point } from '@aw/shared';
 import type { Camera } from './camera.ts';
 import { BUBBLE_TAIL, layoutBubbles, type BubbleRequest } from './layout.ts';
 import type { Standing } from './objectLayer.ts';
@@ -23,7 +23,8 @@ export interface AgentSprite {
   view: AgentView;
   sprite: Sprite;
   frames: Texture[];
-  lookKey: string;
+  /** The look the frames were painted for. */
+  look: Appearance | null;
   label: Text;
   zzz: Text;
   bubble: Container;
@@ -48,7 +49,7 @@ export interface AgentSprite {
 }
 
 /**
- * People: their sprites in the shared depth-sorted world container (tweened between frames),
+ * People: their sprites in the people layer, sorted by tile row (tweened between frames),
  * gravestones for the dead, and their name labels, "z z"/"…" markers and speech bubbles in the
  * screen-space overlay.
  */
@@ -57,8 +58,10 @@ export class PeopleLayer {
   private lastAgentsAt = 0;
 
   constructor(
-    /** The depth-sorted container shared with map objects. */
+    /** The people layer (between the map's flat and tall objects). */
     private readonly world: Container,
+    /** Where gravestones go (on the ground, under people). */
+    private readonly graves: Container,
     /** Screen-space container for labels and bubbles. */
     private readonly overlay: Container,
     private readonly textures: Record<SpriteName, Texture>,
@@ -84,8 +87,7 @@ export class PeopleLayer {
         a = this.createAgentSprite(v, target);
         this.agents.set(v.id, a);
       }
-      const lookKey = JSON.stringify(v.appearance);
-      if (lookKey !== a.lookKey) this.retexture(a, v);
+      if (!a.look || !sameLook(a.look, v.appearance)) this.retexture(a, v);
       const moved = target.x !== a.to.x || target.y !== a.to.y;
       if (moved) {
         const far = Math.abs(target.x - a.shown.x) + Math.abs(target.y - a.shown.y) > TILE_PX * 6;
@@ -108,14 +110,6 @@ export class PeopleLayer {
         a.grave?.destroy();
         this.agents.delete(id);
       }
-    }
-  }
-
-  /** Puts people and graves back into the world container if the map took them out. */
-  reattach(): void {
-    for (const a of this.agents.values()) {
-      if (a.sprite.parent !== this.world) this.world.addChild(a.sprite);
-      if (a.grave && a.grave.parent !== this.world) this.world.addChild(a.grave);
     }
   }
 
@@ -165,7 +159,7 @@ export class PeopleLayer {
         screen.y > -SCREEN_MARGIN &&
         screen.y < size.height + SCREEN_MARGIN;
       // Only changes when someone dies or crosses the edge of the view (a change makes Pixi
-      // rebuild the world's draw list).
+      // rebuild the people layer's draw list).
       a.sprite.visible = visible;
       if (!visible) {
         a.label.visible = false;
@@ -174,10 +168,8 @@ export class PeopleLayer {
         continue;
       }
       a.sprite.position.set(a.shown.x, a.shown.y);
-      // Depth by tile row, so it only changes (and makes Pixi re-sort) when someone crosses a
-      // row. Objects sit on row boundaries, so the order against them is the same as by exact
-      // height. +2 so someone standing in a doorway draws in front of their house; people
-      // inside are drawn just in front of their (open) building.
+      // Depth among people by tile row, so it only changes (and makes Pixi re-sort the people
+      // layer) when someone crosses a row; people inside a building share its depth.
       a.sprite.zIndex = a.indoorZ ?? Math.floor((a.shown.y + 2) / TILE_PX) * TILE_PX + 1;
       if (a.frames.length)
         a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
@@ -280,7 +272,7 @@ export class PeopleLayer {
       view: v,
       sprite,
       frames: [],
-      lookKey: '',
+      look: null,
       label,
       zzz,
       bubble,
@@ -314,7 +306,7 @@ export class PeopleLayer {
           frame: new Rectangle(i * CHARACTER_PX, 0, CHARACTER_PX, CHARACTER_PX),
         }),
     );
-    a.lookKey = JSON.stringify(v.appearance);
+    a.look = v.appearance;
     a.sprite.texture = a.frames[0]!;
   }
 
@@ -327,7 +319,7 @@ export class PeopleLayer {
         a.grave.anchor.set(0.5, 1);
         a.grave.position.set(a.to.x, a.to.y + 1);
         a.grave.zIndex = a.to.y;
-        this.world.addChild(a.grave);
+        this.graves.addChild(a.grave);
       }
       return;
     }
@@ -404,4 +396,15 @@ export class PeopleLayer {
         .fill({ color: 0xfffbe8, alpha: 0.95 });
     }
   }
+}
+
+/** Same colours and hair (compared field by field: this runs for everyone on every update). */
+function sameLook(a: Appearance, b: Appearance): boolean {
+  return (
+    a.skin === b.skin &&
+    a.hair === b.hair &&
+    a.shirt === b.shirt &&
+    a.pants === b.pants &&
+    a.hairStyle === b.hairStyle
+  );
 }
