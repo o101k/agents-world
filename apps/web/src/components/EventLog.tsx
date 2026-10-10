@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { formatClock, type WorldEvent } from '@aw/shared';
 import { api } from '../api.ts';
+import { useThrottledWorld } from '../useThrottledWorld.ts';
 import { useWorld } from '../worldStore.ts';
 
 /** Live timeline of what's happening. Newest first. */
@@ -12,7 +13,8 @@ export function EventLog({
   /** Entries about a place with nobody in them (a fire) open the place. */
   onPickObject: (id: string) => void;
 }) {
-  const events = useWorld((s) => s.events);
+  // Throttled to 4 updates a second: no one can read a timeline changing every frame.
+  const events = useThrottledWorld((s) => s.events);
   const selection = useWorld((s) => s.selection);
   const [importantOnly, setImportantOnly] = useState(false);
   const [selectedOnly, setSelectedOnly] = useState(false);

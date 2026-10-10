@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useThrottledWorld } from '../useThrottledWorld.ts';
 import { useWorld } from '../worldStore.ts';
 import { Portrait } from './Portrait.tsx';
 
@@ -44,7 +45,8 @@ const PersonRow = memo(function PersonRow({
 
 export function PeopleList({ onPick }: { onPick: (id: string) => void }) {
   // In replay, the people as they were then.
-  const live = useWorld((s) => s.agents);
+  // Throttled to 4 updates a second: no one can read this list changing every frame.
+  const live = useThrottledWorld((s) => s.agents);
   const past = useWorld((s) => s.replay?.view?.agents);
   const agents = past ?? live;
   const selection = useWorld((s) => s.selection);
