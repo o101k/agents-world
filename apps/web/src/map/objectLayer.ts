@@ -2,7 +2,7 @@ import { Sprite, type Container, type Texture } from 'pixi.js';
 import type { AgentView, MapObject, Point, WorldMap } from '@aw/shared';
 import { hashString } from './hash.ts';
 import { interiorSpots } from './layout.ts';
-import { diffObjects, lookKey } from './objectDiff.ts';
+import { diffObjects } from './objectDiff.ts';
 import { HOUSE_VARIANTS, TILE_PX, type SpriteName } from './pixelArt.ts';
 
 /** Alpha of a sprite drawn in front of a person (roof, tree canopy) so they stay visible. */
@@ -48,8 +48,10 @@ export interface Standing {
  * Objects are never culled: the layers are static, so Pixi keeps their draw lists, and hiding
  * sprites as the camera moves would make it rebuild them.
  *
- * A new map is applied as a diff: objects that look the same keep their sprite, only changed
- * ones are redrawn, and removed ones are dropped.
+ * A new map is applied as a diff: objects that look the same are left alone, changed ones keep
+ * their sprite and are redrawn in place (texture, place, tint, layer), and removed ones are
+ * dropped. The lookups by id and by door, and the occluder grid, change only for those objects;
+ * they are never rebuilt.
  */
 export class ObjectLayer {
   /** Every map object by id (drawn or not). */
@@ -78,43 +80,59 @@ export class ObjectLayer {
 
   /** Shows the objects of `map`, changing only what differs from the map shown before. */
   setMap(map: WorldMap): void {
-    this.byId = new Map();
-    this.doors = new Map();
-    const keys = new Map<string, string>();
-    for (const o of map.objects) {
-      this.byId.set(o.id, o);
-      keys.set(o.id, lookKey(o));
-      if (o.kind === 'house' && o.door) {
-        const key = `${o.door.x},${o.door.y}`;
-        if (!this.doors.has(key)) this.doors.set(key, o.id);
-      }
-    }
     const diff = diffObjects(this.lookKeys, map.objects);
-    this.lookKeys = keys;
+    this.lookKeys = diff.keys;
 
-    // Changed and removed buildings lose their sprite, their cached spots and their occlusion.
-    const stale = [...diff.changed.map((o) => o.id), ...diff.removed];
-    const gone: Sprite[] = [];
-    for (const id of stale) {
-      const e = this.entries.get(id);
-      if (!e) continue;
-      gone.push(e.sprite);
-      this.entries.delete(id);
-      this.occluding.delete(e);
-    }
-    if (stale.length) this.dropSpots(new Set(stale));
+    // Doors first. A house that changed or was removed gives up its old door, so a door that
+    // another house takes over in this same update is free by the time it is registered.
+    for (const id of diff.removed) this.forgetDoor(this.byId.get(id));
+    for (const o of diff.changed) this.forgetDoor(this.byId.get(o.id));
+    for (const id of diff.removed) this.byId.delete(id);
+    // Every object is a new object, even when it looks the same: object(id) must return the
+    // latest one, including fields that aren't part of the look (name, work done).
+    for (const o of map.objects) this.byId.set(o.id, o);
+    for (const o of diff.added) this.rememberDoor(o);
+    for (const o of diff.changed) this.rememberDoor(o);
+
+    // Changed and removed buildings lose their cached spots (their footprint or door may differ).
+    if (diff.changed.length + diff.removed.length > 0)
+      this.dropSpots(new Set([...diff.changed.map((o) => o.id), ...diff.removed]));
     for (const id of diff.removed) this.occupancy.delete(id);
+
+    // Sprites that are no longer drawn go in one batch: removed objects, and changed ones that
+    // stopped being drawn (a field that has been cleared).
+    const gone: Sprite[] = [];
+    for (const id of diff.removed) {
+      const s = this.dropEntry(id);
+      if (s) gone.push(s);
+    }
+    const redraw: { o: MapObject; name: SpriteName }[] = [];
+    for (const o of diff.changed) {
+      const name = this.spriteFor(o);
+      if (name) {
+        redraw.push({ o, name });
+        continue;
+      }
+      const s = this.dropEntry(o.id);
+      if (s) gone.push(s);
+    }
     this.removeSprites(gone);
 
-    // New and changed objects get a sprite; their occupancy (if any) opens them up at once.
-    for (const o of diff.added) this.addEntry(o);
-    for (const o of diff.changed) this.addEntry(o);
+    // Changed objects are redrawn in place, new ones get a sprite. Their occupancy (if any) opens
+    // them up at once.
+    for (const { o, name } of redraw) {
+      const e = this.entries.get(o.id);
+      if (e) this.updateEntry(e, o, name);
+      else this.addEntry(o, name);
+    }
+    for (const o of diff.added) {
+      const name = this.spriteFor(o);
+      if (name) this.addEntry(o, name);
+    }
     for (const o of diff.same) {
       const e = this.entries.get(o.id);
       if (e) e.obj = o;
     }
-
-    if (diff.added.length + diff.changed.length + diff.removed.length > 0) this.rebuildGrid();
   }
 
   /** The map object with this id (any kind, drawn as a sprite or as ground). */
@@ -205,7 +223,7 @@ export class ObjectLayer {
       const y1 = p.y;
       for (let ty = Math.floor(y0 / TILE_PX); ty <= Math.floor(y1 / TILE_PX); ty++)
         for (let tx = Math.floor(x0 / TILE_PX); tx <= Math.floor(x1 / TILE_PX); tx++) {
-          const list = this.grid.get(ty * 100000 + tx);
+          const list = this.grid.get(cellKey(tx, ty));
           if (!list) continue;
           for (const e of list)
             if (e.z > p.z && e.x < x1 && e.x + e.w > x0 && e.y < y1 && e.y + e.h > y0) next.add(e);
@@ -224,52 +242,100 @@ export class ObjectLayer {
     this.occluding = next;
   }
 
-  /** Creates the sprite and entry for an object (none for objects drawn as ground). */
-  private addEntry(o: MapObject): void {
-    const name = this.spriteFor(o);
-    if (!name) return;
-    const tex = this.textures;
-    const s = new Sprite(tex[name]);
+  /** Creates the sprite and entry for an object drawn with sprite `name`. */
+  private addEntry(o: MapObject, name: SpriteName): void {
+    const s = new Sprite(this.textures[name]);
     s.cullable = false;
-    const bottom = (o.y + o.h) * TILE_PX;
-    s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
-    s.zIndex = bottom;
-    let baseAlpha = 1;
-    if (o.burntTick !== undefined) {
-      // A burnt-out ruin, blackened until rebuilt.
-      baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
-      s.tint = 0x5a4a40;
-    } else if (o.progress !== undefined && o.kind !== 'field') {
-      // Under construction: fades in as the work progresses.
-      baseAlpha = 0.3 + 0.6 * o.progress;
-      s.tint = 0xd8c8a8;
-    } else if (o.stone) {
-      // Stone buildings read as cool grey.
-      s.tint = 0xc8d4dc;
-    }
-    s.alpha = baseAlpha;
-    const openName =
-      o.kind === 'house' ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName) : null;
-    // A field being cleared is bare dirt people walk on, whatever its sprite's size.
-    const tall = o.kind !== 'field' && s.texture.frame.height > o.h * TILE_PX;
-    const entry: ObjEntry = {
+    const e: ObjEntry = {
       sprite: s,
       obj: o,
-      x: s.position.x,
-      y: s.position.y,
-      w: s.texture.frame.width,
-      h: s.texture.frame.height,
-      z: bottom,
-      baseAlpha,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      z: 0,
+      baseAlpha: 1,
       normal: s.texture,
-      open: openName ? tex[openName] : null,
-      inside: (this.occupancy.get(o.id) ?? 0) > 0,
+      open: null,
+      inside: false,
       occluding: false,
-      tall,
+      tall: false,
     };
-    (tall ? this.over : this.under).addChild(s);
-    this.entries.set(o.id, entry);
-    if (entry.inside) this.refreshEntry(entry);
+    this.applyLook(e, o, name);
+    e.inside = (this.occupancy.get(o.id) ?? 0) > 0;
+    this.refreshEntry(e);
+    (e.tall ? this.over : this.under).addChild(s);
+    this.entries.set(o.id, e);
+    if (e.tall) this.gridAdd(e);
+  }
+
+  /**
+   * Redraws a changed object in place: the entry keeps its sprite and gets the new look. If the
+   * object became tall (or stopped being), the sprite moves to the other layer. Its grid cells
+   * are taken out with the old rectangle and put back with the new one. `occluding` is kept,
+   * except when the object stopped being tall: nothing in the grid can fade it any more.
+   */
+  private updateEntry(e: ObjEntry, o: MapObject, name: SpriteName): void {
+    const wasTall = e.tall;
+    if (wasTall) this.gridRemove(e);
+    this.applyLook(e, o, name);
+    if (e.tall !== wasTall) {
+      (wasTall ? this.over : this.under).removeChild(e.sprite);
+      (e.tall ? this.over : this.under).addChild(e.sprite);
+    }
+    if (e.tall) this.gridAdd(e);
+    else {
+      this.occluding.delete(e);
+      e.occluding = false;
+    }
+    e.inside = (this.occupancy.get(o.id) ?? 0) > 0;
+    this.refreshEntry(e);
+  }
+
+  /**
+   * Sets an entry's texture, place, depth, tint and open texture from its object, for both a new
+   * sprite and a changed one, so the two can't drift apart. Position and depth are assigned only
+   * when they differ (a depth change re-sorts the layer). Alpha and the shown texture are left to
+   * refreshEntry.
+   */
+  private applyLook(e: ObjEntry, o: MapObject, name: SpriteName): void {
+    const tex = this.textures;
+    const texture = tex[name];
+    const s = e.sprite;
+    if (s.texture !== texture) s.texture = texture;
+    const bottom = (o.y + o.h) * TILE_PX;
+    const x = o.x * TILE_PX;
+    const y = bottom - texture.frame.height;
+    if (s.position.x !== x || s.position.y !== y) s.position.set(x, y);
+    if (s.zIndex !== bottom) s.zIndex = bottom;
+    const look = tintAndAlpha(o);
+    s.tint = look.tint;
+    const openName =
+      o.kind === 'house' ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName) : null;
+    e.obj = o;
+    e.x = x;
+    e.y = y;
+    e.w = texture.frame.width;
+    e.h = texture.frame.height;
+    e.z = bottom;
+    e.baseAlpha = look.baseAlpha;
+    e.normal = texture;
+    e.open = openName ? tex[openName] : null;
+    // A field being cleared is bare dirt people walk on, whatever its sprite's size.
+    e.tall = o.kind !== 'field' && texture.frame.height > o.h * TILE_PX;
+  }
+
+  /**
+   * Forgets an object's entry and returns its sprite for the caller to remove. Its grid cells go
+   * with it (taken from its current rectangle), and it stops occluding.
+   */
+  private dropEntry(id: string): Sprite | undefined {
+    const e = this.entries.get(id);
+    if (!e) return undefined;
+    this.entries.delete(id);
+    if (e.tall) this.gridRemove(e);
+    this.occluding.delete(e);
+    return e.sprite;
   }
 
   /** Takes sprites out of their layers and frees them. */
@@ -290,22 +356,24 @@ export class ObjectLayer {
     for (const s of sprites) s.destroy();
   }
 
-  /** Rebuilds the tile grid of tall entries (called only when entries were added or removed). */
-  private rebuildGrid(): void {
-    this.grid.clear();
-    for (const e of this.entries.values()) {
-      if (!e.tall) continue;
-      for (let ty = Math.floor(e.y / TILE_PX); ty <= Math.floor((e.y + e.h - 1) / TILE_PX); ty++)
-        for (
-          let tx = Math.floor(e.x / TILE_PX);
-          tx <= Math.floor((e.x + e.w - 1) / TILE_PX);
-          tx++
-        ) {
-          const key = ty * 100000 + tx;
-          const list = this.grid.get(key);
-          if (list) list.push(e);
-          else this.grid.set(key, [e]);
-        }
+  /** Adds a tall entry to the grid, in every tile its drawn rectangle covers. */
+  private gridAdd(e: ObjEntry): void {
+    for (const key of cellKeys(e)) {
+      const list = this.grid.get(key);
+      if (list) list.push(e);
+      else this.grid.set(key, [e]);
+    }
+  }
+
+  /** Takes a tall entry out of the grid, from the cells of its current rectangle. */
+  private gridRemove(e: ObjEntry): void {
+    for (const key of cellKeys(e)) {
+      const list = this.grid.get(key);
+      if (!list) continue;
+      const i = list.indexOf(e);
+      if (i !== -1) list.splice(i, 1);
+      // Empty cells go, so the grid only holds tiles that have a tall object on them.
+      if (list.length === 0) this.grid.delete(key);
     }
   }
 
@@ -326,6 +394,20 @@ export class ObjectLayer {
       if (ids.has(key.slice(0, key.lastIndexOf(':')))) this.spots.delete(key);
   }
 
+  /** Registers a house's door, unless another house already has that tile (the first keeps it). */
+  private rememberDoor(o: MapObject): void {
+    if (o.kind !== 'house' || !o.door) return;
+    const key = doorKey(o.door);
+    if (!this.doors.has(key)) this.doors.set(key, o.id);
+  }
+
+  /** Drops a house's door from the lookup, but only if it is still registered to that house. */
+  private forgetDoor(o: MapObject | undefined): void {
+    if (o?.kind !== 'house' || !o.door) return;
+    const key = doorKey(o.door);
+    if (this.doors.get(key) === o.id) this.doors.delete(key);
+  }
+
   private spriteFor(o: MapObject): SpriteName | null {
     const h = hashString(o.id);
     switch (o.kind) {
@@ -342,4 +424,36 @@ export class ObjectLayer {
         return o.kind;
     }
   }
+}
+
+/** Tint and alpha an object is drawn with before any fading (burnt, under construction, stone). */
+function tintAndAlpha(o: MapObject): { tint: number; baseAlpha: number } {
+  if (o.burntTick !== undefined) {
+    // A burnt-out ruin, blackened until rebuilt.
+    return { tint: 0x5a4a40, baseAlpha: 0.55 + 0.45 * (o.progress ?? 0) };
+  }
+  if (o.progress !== undefined && o.kind !== 'field') {
+    // Under construction: fades in as the work progresses.
+    return { tint: 0xd8c8a8, baseAlpha: 0.3 + 0.6 * o.progress };
+  }
+  // Stone buildings read as cool grey; everything else is drawn in its own colours.
+  return { tint: o.stone ? 0xc8d4dc : 0xffffff, baseAlpha: 1 };
+}
+
+/** Key of a tile in the occluder grid. */
+function cellKey(tx: number, ty: number): number {
+  return ty * 100000 + tx;
+}
+
+/** The tiles an entry's drawn rectangle covers, as grid keys. */
+function cellKeys(e: ObjEntry): number[] {
+  const keys: number[] = [];
+  for (let ty = Math.floor(e.y / TILE_PX); ty <= Math.floor((e.y + e.h - 1) / TILE_PX); ty++)
+    for (let tx = Math.floor(e.x / TILE_PX); tx <= Math.floor((e.x + e.w - 1) / TILE_PX); tx++)
+      keys.push(cellKey(tx, ty));
+  return keys;
+}
+
+function doorKey(p: Point): string {
+  return `${p.x},${p.y}`;
 }

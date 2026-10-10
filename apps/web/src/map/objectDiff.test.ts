@@ -107,4 +107,35 @@ describe('diffObjects', () => {
     const diff = diffObjects(keysOf(objects), next);
     expect(diff.same[0]).toBe(next[0]);
   });
+
+  it('returns the look key of every object of the new map, drawn or not', () => {
+    const next = [
+      ...objects.map((o) => (o.id === 'house_1' ? { ...o, progress: 0.4 } : o)),
+      obj({ id: 'well_1', kind: 'well', x: 6, y: 6, w: 2, h: 2, door: undefined }),
+    ];
+    const diff = diffObjects(keysOf(objects), next);
+    expect(diff.keys).toEqual(keysOf(next));
+    expect(diff.keys.get('house_1')).toBe(lookKey(next[0]!));
+  });
+
+  it('leaves removed ids out of the keys', () => {
+    const next = objects.filter((o) => o.id !== 'tree_1');
+    const diff = diffObjects(keysOf(objects), next);
+    expect(diff.removed).toEqual(['tree_1']);
+    expect(diff.keys.has('tree_1')).toBe(false);
+    expect(diff.keys.size).toBe(next.length);
+  });
+
+  it('gives keys that make the next diff all same when the map is unchanged', () => {
+    const first = diffObjects(new Map(), objects);
+    expect(first.added.length).toBe(objects.length);
+    const second = diffObjects(
+      first.keys,
+      objects.map((o) => ({ ...o })),
+    );
+    expect(second.added).toEqual([]);
+    expect(second.changed).toEqual([]);
+    expect(second.removed).toEqual([]);
+    expect(second.same.map((o) => o.id)).toEqual(['house_1', 'tree_1', 'field_1']);
+  });
 });

@@ -34,22 +34,27 @@ export interface ObjectDiff {
   removed: string[];
   /** Known ids whose look key is unchanged. */
   same: MapObject[];
+  /**
+   * Look key of every object of the new map (id → key), drawn or not. Keep it as the `prev` of
+   * the next diff, so no look key is computed twice.
+   */
+  keys: Map<string, string>;
 }
 
 /**
  * Compares a previous map (id → look key, for every object, drawn or not) with the objects of a
- * new map.
+ * new map. Each object's look key is computed once; the keys come back in `keys`.
  */
 export function diffObjects(prev: Map<string, string>, next: MapObject[]): ObjectDiff {
-  const diff: ObjectDiff = { added: [], changed: [], removed: [], same: [] };
-  const nextIds = new Set<string>();
+  const diff: ObjectDiff = { added: [], changed: [], removed: [], same: [], keys: new Map() };
   for (const o of next) {
-    nextIds.add(o.id);
+    const key = lookKey(o);
+    diff.keys.set(o.id, key);
     const before = prev.get(o.id);
     if (before === undefined) diff.added.push(o);
-    else if (before === lookKey(o)) diff.same.push(o);
+    else if (before === key) diff.same.push(o);
     else diff.changed.push(o);
   }
-  for (const id of prev.keys()) if (!nextIds.has(id)) diff.removed.push(id);
+  for (const id of prev.keys()) if (!diff.keys.has(id)) diff.removed.push(id);
   return diff;
 }
