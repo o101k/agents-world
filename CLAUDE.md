@@ -320,6 +320,14 @@ Newest first. Record every change to an agreed decision here.
   first frame with the map 1,147 → 1,026 → 617 ms; JavaScript per frame on the whole map p95
   43.7 → 6.6 → 2.5 ms; map update 199 → 15 → 8 ms; texture uploads while panning 34 → 34 → 0.8
   per second. Details: [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md).
+- **2026-10-09 — Hide or resize the sidebar and the timeline (owner request).** A ▤ button in the
+  world's top bar, next to ⚙, opens a View menu that shows or hides the sidebar and the timeline,
+  sets the sidebar's width (240–720 px) and the timeline's height (100–600 px), and has **Reset
+  layout**. Everything is done from the menu; panel edges can't be dragged. Clicking someone on
+  the map doesn't reopen a hidden sidebar. The layout is a viewing preference saved in the browser
+  (localStorage key `aw.layout`, `apps/web/src/layoutStore.ts`), the same for every world; panels
+  are capped at 60% of the space around the map, so a size saved on a big screen can't squeeze
+  the map on a smaller one.
 - **2026-10-09 — Faster map rendering (owner request).** Measured first with a new benchmark,
   `npm run bench:render` (`tests/perf/bench-render.mjs`: 150 adults + 100 children on the huge map,
   headless Chromium; its frames per second are meaningless because it draws in software, so

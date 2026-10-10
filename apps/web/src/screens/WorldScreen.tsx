@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   OBJECT_LABELS,
   TILE_NAMES,
@@ -15,6 +15,7 @@ import {
 import { api } from '../api.ts';
 import { AgentInspector } from '../components/AgentInspector.tsx';
 import { EventLog } from '../components/EventLog.tsx';
+import { ViewMenu } from '../components/ViewMenu.tsx';
 import { BrainEditor } from '../components/BrainEditor.tsx';
 import { WorldBrainsDialog } from '../components/WorldBrainsDialog.tsx';
 import { MarketPanel } from '../components/MarketPanel.tsx';
@@ -26,6 +27,7 @@ import { ConditionsBar, WorldEventsDialog } from '../components/WorldEventsDialo
 import { ReplayBar } from '../components/ReplayBar.tsx';
 import { SpendMeter } from '../components/SpendMeter.tsx';
 import { TimeControls } from '../components/TimeControls.tsx';
+import { useLayout } from '../layoutStore.ts';
 import { useSettings } from '../settingsStore.ts';
 import { MapView } from '../map/MapView.tsx';
 import type { MapSelection, WorldRenderer } from '../map/renderer.ts';
@@ -57,6 +59,10 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const [map, setMap] = useState<WorldMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('people');
+  const sidebarOpen = useLayout((s) => s.sidebarOpen);
+  const sidebarWidth = useLayout((s) => s.sidebarWidth);
+  const timelineOpen = useLayout((s) => s.timelineOpen);
+  const timelineHeight = useLayout((s) => s.timelineHeight);
   const selection = useWorld((s) => s.selection);
   const capReached = useWorld((s) => s.runner.capReached);
   const rateLimit = useWorld((s) => s.runner.rateLimit);
@@ -225,6 +231,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         >
           + Spawn
         </button>
+        <ViewMenu />
         <button
           className="btn btn-small btn-ghost"
           onClick={() => openSettings(true)}
@@ -254,7 +261,15 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         />
       )}
 
-      <div className="world-body">
+      <div
+        className="world-body"
+        style={
+          {
+            '--sidebar-width': `${sidebarWidth}px`,
+            '--timeline-height': `${timelineHeight}px`,
+          } as CSSProperties
+        }
+      >
         <main className="map-area">
           {error && <div className="banner banner-error">{error}</div>}
           <div className="map-wrap">
@@ -284,47 +299,49 @@ export function WorldScreen({ worldId }: { worldId: string }) {
             </div>
           </div>
           <ReplayBar worldId={worldId} />
-          <EventLog onPickAgent={pickAgent} onPickObject={pickObject} />
+          {timelineOpen && <EventLog onPickAgent={pickAgent} onPickObject={pickObject} />}
         </main>
 
-        <aside className="sidebar">
-          <div className="tabs" role="tablist">
-            {(['selected', 'people', 'world'] as Tab[]).map((t) => (
-              <button
-                key={t}
-                role="tab"
-                aria-selected={tab === t}
-                className={`tab ${tab === t ? 'is-on' : ''}`}
-                onClick={() => setTab(t)}
-              >
-                {t === 'selected' ? 'Selected' : t === 'people' ? 'People' : 'World'}
-              </button>
-            ))}
-          </div>
-          <div className="tab-body">
-            {tab === 'selected' &&
-              (selection ? (
-                <SelectionDetails
-                  worldId={worldId}
-                  selection={selection}
-                  map={shownMap}
-                  ownersById={pastOwners ?? owners}
-                  onPick={pickAgent}
-                />
-              ) : (
-                <p className="muted">Click a person or anything on the map.</p>
+        {sidebarOpen && (
+          <aside className="sidebar">
+            <div className="tabs" role="tablist">
+              {(['selected', 'people', 'world'] as Tab[]).map((t) => (
+                <button
+                  key={t}
+                  role="tab"
+                  aria-selected={tab === t}
+                  className={`tab ${tab === t ? 'is-on' : ''}`}
+                  onClick={() => setTab(t)}
+                >
+                  {t === 'selected' ? 'Selected' : t === 'people' ? 'People' : 'World'}
+                </button>
               ))}
-            {tab === 'people' && <PeopleList onPick={pickAgent} />}
-            {tab === 'world' && view && (
-              <WorldInfo
-                worldId={worldId}
-                view={view}
-                map={map}
-                onOpenBrains={() => setBrainsOpen(true)}
-              />
-            )}
-          </div>
-        </aside>
+            </div>
+            <div className="tab-body">
+              {tab === 'selected' &&
+                (selection ? (
+                  <SelectionDetails
+                    worldId={worldId}
+                    selection={selection}
+                    map={shownMap}
+                    ownersById={pastOwners ?? owners}
+                    onPick={pickAgent}
+                  />
+                ) : (
+                  <p className="muted">Click a person or anything on the map.</p>
+                ))}
+              {tab === 'people' && <PeopleList onPick={pickAgent} />}
+              {tab === 'world' && view && (
+                <WorldInfo
+                  worldId={worldId}
+                  view={view}
+                  map={map}
+                  onOpenBrains={() => setBrainsOpen(true)}
+                />
+              )}
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );
