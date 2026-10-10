@@ -446,7 +446,8 @@ export class WorldRenderer {
   private screenSize() {
     const r = this.app.renderer;
     if (!r) return { width: 1, height: 1 };
-    return { width: r.width / r.resolution, height: r.height / r.resolution };
+    // `screen` is in CSS pixels whatever the device pixel ratio (renderer.width is already CSS).
+    return { width: r.screen.width, height: r.screen.height };
   }
 
   private worldSize() {
@@ -493,6 +494,9 @@ export class WorldRenderer {
       Math.max(1, this.host.clientHeight),
     );
     this.setCamera(this.cam);
+    // Resizing clears the canvas, and ResizeObserver runs after this frame's animation callbacks,
+    // so draw now rather than leave a blank (black) frame on screen.
+    if (this.ready && this.layers) this.frame(performance.now());
   }
 
   private drawNight(): void {

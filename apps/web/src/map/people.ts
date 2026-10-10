@@ -26,6 +26,12 @@ import {
  */
 const SCREEN_MARGIN = 220;
 
+/** How long after the last update a walker keeps walking between ticks (then they stand still). */
+const WALK_GRACE_MS = 1500;
+
+/** A speech bubble stays up at least this long, so fast talk doesn't blink. */
+const MIN_BUBBLE_MS = 1500;
+
 export interface AgentSprite {
   /** The label's font (the selected one is yellow). Changed only when the selection changes. */
   labelFont: string;
@@ -41,6 +47,10 @@ export interface AgentSprite {
   bubbleBg: Graphics;
   bubbleTail: Graphics;
   bubbleFor: string;
+  /** Until when the last line stays up (MIN_BUBBLE_MS after it appeared). */
+  bubbleUntil: number;
+  /** The live speech last frame, so a repeated line still starts a new hold. */
+  lastLive: string;
   tailKey?: string;
   bubbleW: number;
   bubbleH: number;
@@ -65,6 +75,8 @@ export interface AgentSprite {
 export class PeopleLayer {
   readonly agents = new Map<string, AgentSprite>();
   private lastAgentsAt = 0;
+  /** Each bubble's offset from its speaker's head last frame, so bubbles stay put. */
+  private bubbleOffsets = new Map<string, Point>();
 
   constructor(
     /** The people layer (between the map's flat and tall objects). */
@@ -156,8 +168,11 @@ export class PeopleLayer {
     for (const [id, a] of this.agents) {
       a.shown = this.positionAt(a, now);
       const moving = a.moveDuration > 0 && now - a.moveStart < a.moveDuration;
-      // Keep animating for walkers off screen too, so they walk (not jump) into view.
-      if (a.view.alive && (moving || a.view.activity === 'walking')) busy = true;
+      // Keep animating for walkers off screen too, so they walk (not jump) into view. Between
+      // ticks a walker keeps walking for WALK_GRACE_MS; when the world is paused they stand still.
+      const walking =
+        moving || (a.view.activity === 'walking' && now - this.lastAgentsAt < WALK_GRACE_MS);
+      if (a.view.alive && walking) busy = true;
       // The top of their head on screen.
       const screen = {
         x: (a.shown.x - cam.x) * cam.zoom,
@@ -182,8 +197,7 @@ export class PeopleLayer {
       // Depth among people by tile row, so it only changes (and makes Pixi re-sort the people
       // layer) when someone crosses a row; people inside a building share its depth.
       a.sprite.zIndex = a.indoorZ ?? Math.floor((a.shown.y + 2) / TILE_PX) * TILE_PX + 1;
-      if (a.frames.length)
-        a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
+      if (a.frames.length) a.sprite.texture = this.frameFor(a, walking, now);
       const selected = selectedId === id;
       a.label.visible = showLabels || selected;
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
@@ -208,8 +222,12 @@ export class PeopleLayer {
             h: a.label.height,
           },
         });
-      const req = this.prepareBubble(a, cam.zoom >= 1.5 || selected, screen);
-      if (req) bubbles.push(req);
+      const req = this.prepareBubble(a, cam.zoom >= 1.5 || selected, screen, now);
+      if (req) {
+        bubbles.push(req);
+        // Keep the loop going until a held line has been shown its minimum time.
+        if (now < a.bubbleUntil) busy = true;
+      }
     }
     this.placeBubbles(bubbles, labels);
     return busy;
@@ -286,6 +304,8 @@ export class PeopleLayer {
       bubbleBg,
       bubbleTail,
       bubbleFor: '',
+      bubbleUntil: 0,
+      lastLive: '',
       bubbleW: 0,
       bubbleH: 0,
       from: { ...at },
@@ -349,8 +369,17 @@ export class PeopleLayer {
   }
 
   /** Sizes a person's speech bubble (cached per text); null when they aren't talking. */
-  private prepareBubble(a: AgentSprite, show: boolean, screen: Point): BubbleRequest | null {
-    const speech = a.view.speech ?? '';
+  private prepareBubble(
+    a: AgentSprite,
+    show: boolean,
+    screen: Point,
+    now: number,
+  ): BubbleRequest | null {
+    const live = a.view.speech ?? '';
+    if (live && live !== a.lastLive) a.bubbleUntil = now + MIN_BUBBLE_MS;
+    a.lastLive = live;
+    // A new line shows at once; the last one is held for MIN_BUBBLE_MS so fast talk doesn't blink.
+    const speech = live || (now < a.bubbleUntil ? a.bubbleFor : '');
     if (!speech || !show) {
       a.bubble.visible = false;
       return null;
@@ -380,12 +409,13 @@ export class PeopleLayer {
     requests: BubbleRequest[],
     labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[],
   ): void {
-    if (requests.length === 0) return;
-    const spots = layoutBubbles(requests, labels);
+    const spots = layoutBubbles(requests, labels, this.bubbleOffsets);
+    this.bubbleOffsets.clear();
     for (const r of requests) {
       const a = this.agents.get(r.id);
       const at = spots.get(r.id);
       if (!a || !at) continue;
+      this.bubbleOffsets.set(r.id, { x: at.x - r.anchor.x, y: at.y - r.anchor.y });
       a.bubble.visible = true;
       a.bubble.position.set(at.x, at.y);
       const tipX = Math.round(r.anchor.x - at.x);

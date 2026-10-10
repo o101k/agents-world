@@ -93,4 +93,38 @@ describe('layoutBubbles', () => {
         if (l.owner !== it.id)
           expect(rectsOverlap({ ...one.get(it.id)!, w: it.w, h: it.h }, l.rect)).toBe(false);
   });
+
+  it('keeps a bubble where it was when no other bubble is there, even under a name label', () => {
+    const item = { id: 'a', anchor: { x: 200, y: 300 }, w: 100, h: 30 };
+    const first = layoutBubbles([item]).get('a')!;
+    const previous = new Map([['a', { x: first.x - 200, y: first.y - 300 }]]);
+    const label = { owner: 'b', rect: { x: 180, y: 262, w: 40, h: 14 } };
+    const moved = layoutBubbles([{ ...item, anchor: { x: 202, y: 300 } }], [label], previous);
+    expect(moved.get('a')).toEqual({ x: first.x + 2, y: first.y });
+  });
+
+  it('keeps the leftmost of two bubbles whose previous spots overlap, and no two overlap', () => {
+    const items = [
+      { id: 'a', anchor: { x: 200, y: 300 }, w: 100, h: 30 },
+      { id: 'b', anchor: { x: 210, y: 300 }, w: 100, h: 30 },
+    ];
+    const previous = new Map([
+      ['a', { x: -50, y: -36 }],
+      ['b', { x: -50, y: -36 }],
+    ]);
+    const out = layoutBubbles(items, [], previous);
+    const rects = items.map((it) => ({ ...out.get(it.id)!, w: it.w, h: it.h }));
+    expect(anyOverlap(rects)).toBe(false);
+    expect(out.get('a')).toEqual({ x: 150, y: 264 });
+  });
+
+  it('never takes the spot of a bubble that keeps its own', () => {
+    const kept = { id: 'a', anchor: { x: 200, y: 300 }, w: 100, h: 30 };
+    const fresh = { id: 'b', anchor: { x: 190, y: 300 }, w: 100, h: 30 };
+    const previous = new Map([['a', { x: -50, y: -36 }]]);
+    const out = layoutBubbles([fresh, kept], [], previous);
+    const rects = [kept, fresh].map((it) => ({ ...out.get(it.id)!, w: it.w, h: it.h }));
+    expect(anyOverlap(rects)).toBe(false);
+    expect(out.get('a')).toEqual({ x: 150, y: 264 });
+  });
 });
