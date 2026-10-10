@@ -165,4 +165,135 @@ describe('WorldFile object events', () => {
     file.close();
     spy.mockRestore();
   });
+
+  describe("a person's record (migration 5)", () => {
+    function plainFile(name: string) {
+      const state = createWorldState({ seed: 'record', mapSize: 'small' });
+      const path = join(dir, name);
+      return { path, file: WorldFile.create(path, meta(state), state) };
+    }
+
+    it('backfills who was in each old event when the file is opened', () => {
+      const { path, file } = plainFile('old.sqlite');
+      file.close();
+      const raw = new Database(path);
+      raw.exec(
+        'DROP TABLE event_actors; DROP TABLE interviews; DROP INDEX tick_inputs_agent; DELETE FROM events;',
+      );
+      raw
+        .prepare('INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)')
+        .run(
+          100,
+          'said',
+          JSON.stringify(['a1', 'a2']),
+          JSON.stringify({ text: 'Hi', importance: 2 }),
+        );
+      raw.pragma('user_version = 4');
+      raw.close();
+
+      const reopened = WorldFile.open(path);
+      expect(reopened.agentEvents('a2', 0, 1000).map((e) => e.text)).toEqual(['Hi']);
+      expect(reopened.agentEvents('a3', 0, 1000)).toEqual([]);
+      reopened.close();
+    });
+
+    it("filters a person's events by period and kind, and pages them", () => {
+      const { file } = plainFile('events.sqlite');
+      file.appendWorldEvents([
+        { tick: 10, kind: 'gathered', actors: ['a1'], text: 'one', importance: 1 },
+        { tick: 20, kind: 'said', actors: ['a1', 'a2'], text: 'two', importance: 2 },
+        { tick: 30, kind: 'attacked', actors: ['a1'], text: 'three', importance: 8 },
+        { tick: 40, kind: 'gathered', actors: ['a2'], text: 'other', importance: 1 },
+        { tick: 50, kind: 'gathered', actors: ['a1'], text: 'four', importance: 1 },
+      ]);
+      const texts = (rows: { text: string }[]) => rows.map((r) => r.text);
+      expect(texts(file.agentEvents('a1', 0, 100))).toEqual(['one', 'two', 'three', 'four']);
+      expect(texts(file.agentEvents('a1', 15, 35))).toEqual(['two', 'three']);
+      expect(texts(file.agentEvents('a1', 0, 100, { kinds: ['gathered'] }))).toEqual([
+        'one',
+        'four',
+      ]);
+      expect(texts(file.agentEvents('a1', 0, 100, { excludeKinds: ['gathered'] }))).toEqual([
+        'two',
+        'three',
+      ]);
+      expect(texts(file.agentEvents('a1', 0, 100, { newestFirst: true, limit: 2 }))).toEqual([
+        'four',
+        'three',
+      ]);
+      expect(texts(file.agentEvents('a1', 0, 100, { limit: 2, offset: 2 }))).toEqual([
+        'three',
+        'four',
+      ]);
+      const counts = file.agentEventCounts('a1', 0, 100);
+      expect(counts.find((c) => c.kind === 'attacked')).toEqual({
+        kind: 'attacked',
+        count: 1,
+        maxImportance: 8,
+      });
+      expect(counts.find((c) => c.kind === 'gathered')?.count).toBe(2);
+      file.close();
+    });
+
+    it("returns a person's thoughts in a period, oldest first, with the decision index", () => {
+      const { file } = plainFile('thoughts.sqlite');
+      const decide = (agentId: string, thought: string, goal: string) =>
+        ({ kind: 'decision', agentId, decision: { thought, goal, plan: [] } }) as never;
+      file.appendInputs([
+        [5, decide('a1', 'hungry', '')],
+        [9, decide('a2', 'tired', '')],
+        [12, decide('a1', 'fields', 'sow wheat')],
+        [30, decide('a1', 'late', '')],
+      ]);
+      expect(file.agentDecisions('a1', 0, 20)).toEqual([
+        { tick: 5, thought: 'hungry', goal: '' },
+        { tick: 12, thought: 'fields', goal: 'sow wheat' },
+      ]);
+      file.close();
+    });
+
+    it('round-trips interviews and sums what they cost', () => {
+      const { file } = plainFile('interviews.sqlite');
+      const base = {
+        agentId: 'a1',
+        askedTick: 500,
+        fromTick: 0,
+        toTick: 400,
+        question: 'What did she do?',
+        answer: 'She gathered.',
+        provider: 'mock' as const,
+        model: 'mock',
+        costUsd: 0,
+        plan: false,
+        recordCount: 10,
+        usedCount: 8,
+        createdAt: '2026-10-09T00:00:00.000Z',
+      };
+      const first = file.appendInterview(base);
+      expect(first.id).toBeGreaterThan(0);
+      file.appendInterview({
+        ...base,
+        question: 'And later?',
+        provider: 'anthropic',
+        costUsd: 0.0123456,
+        plan: true,
+        fallback: 'cap_reached',
+        note: 'Spending cap reached.',
+      });
+      file.appendInterview({ ...base, agentId: 'a2', costUsd: 1 });
+      const list = file.listInterviews('a1');
+      expect(list.map((i) => i.question)).toEqual(['What did she do?', 'And later?']);
+      expect(list[1]).toMatchObject({
+        provider: 'anthropic',
+        plan: true,
+        fallback: 'cap_reached',
+        note: 'Spending cap reached.',
+      });
+      expect(list[0]).not.toHaveProperty('fallback');
+      expect(file.listInterviews('a1', 1).map((i) => i.question)).toEqual(['And later?']);
+      expect(file.interviewSpend('a1')).toBe(0.012346);
+      expect(file.interviewSpend('nobody')).toBe(0);
+      file.close();
+    });
+  });
 });

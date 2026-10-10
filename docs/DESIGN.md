@@ -58,7 +58,9 @@ the simulation understands.
   the new rules, so very old stretches of an upgraded world may differ from what happened.
 
 World file (SQLite, WAL, migrations via `PRAGMA user_version`): `meta`, `snapshots` (gzipped JSON,
-pruned to one per day after two days), `tick_inputs`, `events`, `event_objects`, `llm_calls`.
+pruned to one per day after two days), `tick_inputs` (with a partial index on a decision's
+`agentId`), `events`, `event_objects`, `event_actors` (who each event involves, for per-person
+lookups), `llm_calls`, `interviews` (the observer's questions about people and the answers).
 
 **Object history.** An event names the people it involves (`actors`) and the map objects it
 happened to or at (`objects`: a house built or burnt, a bush picked, the market traded at, the
@@ -313,6 +315,42 @@ them up front so the modules could be built in parallel.
 - `pricing.ts`: default Claude prices; editable table; unknown models at a pessimistic $3/$15.
 - `person.ts`: turns an observer's description into a person (AI or offline).
 
+## Asking about a person
+
+Plan: [`docs/plans/ask-a-villager.md`](plans/ask-a-villager.md). The inspector's **Ask about …**
+section and its full view (`AskSection`, `AskDialog`, `AnswerCard`; helpers in `apps/web/src/ask.ts`)
+let the observer ask about one person and a period of their life.
+
+- **The record** (`apps/server/src/worlds/personRecord.ts`): everything the village holds about
+  them in a period, as `RecordEntry` lines: `event` (events they're an actor in, from
+  `event_actors`), `said` (speech to or by them), `diary` (their `reflected` events), `thought`
+  (the thought and goal of each logged decision input, via the partial index on `tick_inputs`)
+  and `memory` (memories of things heard, told or noted, and vivid experiences, from the state,
+  forgotten ones included). `decided` events are left out (the thoughts carry the goals). A
+  person's span runs from `bornTick` (or the world's first snapshot) to now or their death.
+- **The digest** (`buildDigest`): who they are now (profile, family, feelings about others, life
+  chapters, beliefs), the period, routine activity counted by kind, the people they dealt with
+  most, and the record lines chosen to fit a budget by effort (Frugal 9 000 characters, Standard
+  18 000, Deep 36 000): diary first, then the most important events, thoughts, speech and
+  memories, each group **sampled evenly across the period** so a whole-life question still sees
+  early life.
+- **The answer** (`packages/brain/src/interview.ts`): `askAboutPerson` sends the digest and the
+  question (plus the last 3 answers about the same period, for follow-ups) to the person's own
+  brain through `BrainRouter.generate`, which shares the provider's queue, concurrency limit and
+  timeout with decisions and reports a rate limit instead of pausing the world. A third-person
+  summary comes back through an `answer` tool (plain text is accepted too). `mockInterview` is
+  the free summary from the same digest, picked by what the question is about (what they did,
+  people, feelings, wants, trouble, life story). It answers for Mock-brain people and, with a
+  note saying why, whenever their AI can't or mustn't: not set up, spending cap reached (no call
+  is made), rate limit, refusal, error or timeout.
+- **Cost**: a paid answer is added with `runner.addSpend` (spending cap, `planUsd`) and logged
+  in `llm_calls` with `trigger = 'interview'`, so the Brains dialog's per-person and village
+  totals include it; the inspector shows the person's question costs separately
+  (`AgentDetail.askedUsd`). Answers are kept in `interviews`.
+- **Nothing changes in the world**: no tick input, no memory, no state change, so determinism,
+  resume and replay are untouched. The brain reads a digest built for the observer; it never sees
+  the world state, and the digest never enters anyone's decision prompts.
+
 ## Keys, spending and the cap
 
 `SettingsStore` keeps keys in `~/.agents-world/secrets.json` (mode 600) or env vars; URLs, default
@@ -372,6 +410,9 @@ in/out, cost) and the dialog polls it every 3 s; bulk changes are one `set_brain
 | POST   | `/api/worlds/:id/world-event`               | `{ kind, intensity?, hours?, targetId? }`                          |
 | GET    | `/api/worlds/:id/agents/:agentId/story`     | `{ entries }`: their events + diary/chapters, oldest first         |
 | GET    | `/api/worlds/:id/objects/:objectId/history` | `?tick` → a map object's history (`ObjectHistoryResponse`)         |
+| GET    | `/api/worlds/:id/agents/:agentId/interviews` | answers so far, their life span, now, days per year               |
+| POST   | `/api/worlds/:id/agents/:agentId/ask`       | `{ question, fromTick, toTick }` → `{ interview }`                 |
+| GET    | `/api/worlds/:id/agents/:agentId/record`    | `?from&to&kinds&limit&offset` → their record, newest first         |
 | GET    | `/api/worlds/:id/replay`                    | `?tick&mapVersion` → the world then (map only if it differs)       |
 | GET    | `/api/worlds/:id/replay/agents/:agentId`    | `?tick` → a person as they were then                               |
 | DELETE | `/api/worlds/:id`                           | delete permanently                                                 |

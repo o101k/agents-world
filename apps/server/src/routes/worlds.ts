@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import {
+  AskRequest,
   BrainConfigSchema,
   CapRequest,
   CastPreviewRequest,
@@ -11,6 +12,10 @@ import {
   SpawnRequest,
   WorldEventRequest,
   ReplayQuery,
+  RecordQuery,
+  type AskResponse,
+  type InterviewsResponse,
+  type RecordResponse,
   type BrainsResponse,
   type CastPreviewResponse,
   type ObjectHistoryResponse,
@@ -175,6 +180,30 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     async (req): Promise<StoryResponse> => ({
       entries: worlds.story(req.params.id, req.params.agentId),
     }),
+  );
+
+  // Asking about a person: their brain answers from their record. Never changes the world.
+  app.get<AgentParams>(
+    '/api/worlds/:id/agents/:agentId/interviews',
+    async (req): Promise<InterviewsResponse> =>
+      worlds.interviews(req.params.id, req.params.agentId),
+  );
+
+  app.post<AgentParams>(
+    '/api/worlds/:id/agents/:agentId/ask',
+    async (req): Promise<AskResponse> => ({
+      interview: await worlds.ask(
+        req.params.id,
+        req.params.agentId,
+        AskRequest.parse(req.body ?? {}),
+      ),
+    }),
+  );
+
+  app.get<AgentParams>(
+    '/api/worlds/:id/agents/:agentId/record',
+    async (req): Promise<RecordResponse> =>
+      worlds.record(req.params.id, req.params.agentId, RecordQuery.parse(req.query ?? {})),
   );
 
   app.get<{ Params: { id: string; objectId: string } }>(

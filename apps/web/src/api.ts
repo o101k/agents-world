@@ -27,6 +27,11 @@ import type {
   ReplayResponse,
   WorldEventRequest,
   ObjectHistoryResponse,
+  AskRequest,
+  AskResponse,
+  InterviewsResponse,
+  RecordQuery,
+  RecordResponse,
 } from '@aw/shared';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -107,6 +112,15 @@ export const api = {
       'GET',
       `/api/worlds/${id}/objects/${encodeURIComponent(objectId)}/history${tick === undefined ? '' : `?tick=${tick}`}`,
     ),
+  interviews: (id: string, agentId: string) =>
+    request<InterviewsResponse>('GET', `/api/worlds/${id}/agents/${agentId}/interviews`),
+  ask: (id: string, agentId: string, req: AskRequest) =>
+    request<AskResponse>('POST', `/api/worlds/${id}/agents/${agentId}/ask`, req),
+  record: (id: string, agentId: string, q: RecordQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+    return request<RecordResponse>('GET', `/api/worlds/${id}/agents/${agentId}/record?${params}`);
+  },
   providerModels: (provider: string) =>
     request<{ models: string[] }>('GET', `/api/providers/${provider}/models`),
 };
