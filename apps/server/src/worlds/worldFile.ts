@@ -5,7 +5,10 @@ import {
   DEFAULT_SPEED,
   TICKS_PER_DAY,
   type BrainUsage,
+  type InterviewFallback,
+  type InterviewView,
   type LlmCallView,
+  type ProviderId,
   type WorldEvent,
   type WorldMeta,
 } from '@aw/shared';
@@ -86,6 +89,39 @@ const MIGRATIONS: string[] = [
   ) WITHOUT ROWID;
   -- A world that already has a history knows its objects' day-to-day use from now on.
   INSERT INTO meta (key, value) SELECT 'objectHistorySince', value FROM meta WHERE key = 'tick' ON CONFLICT(key) DO NOTHING;
+  `,
+  `
+  -- Which people each event involved, so one person's record is an index lookup, not a scan.
+  CREATE TABLE IF NOT EXISTS event_actors (
+    agent_id TEXT NOT NULL,
+    event_id INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, event_id)
+  ) WITHOUT ROWID;
+  INSERT OR IGNORE INTO event_actors (agent_id, event_id)
+    SELECT j.value, e.id FROM events e, json_each(e.actors) j;
+  -- A person's logged decisions, found without scanning every decision.
+  CREATE INDEX IF NOT EXISTS tick_inputs_agent
+    ON tick_inputs (json_extract(payload, '$.agentId'), tick) WHERE kind = 'decision';
+  -- Questions asked about people and their answers (asking never changes the world).
+  CREATE TABLE IF NOT EXISTS interviews (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id     TEXT NOT NULL,
+    asked_tick   INTEGER NOT NULL,
+    from_tick    INTEGER NOT NULL,
+    to_tick      INTEGER NOT NULL,
+    question     TEXT NOT NULL,
+    answer       TEXT NOT NULL,
+    provider     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    cost_usd     REAL NOT NULL,
+    plan         INTEGER NOT NULL DEFAULT 0,
+    record_count INTEGER NOT NULL,
+    used_count   INTEGER NOT NULL,
+    fallback     TEXT,
+    note         TEXT,
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS interviews_agent ON interviews (agent_id, id);
   `,
 ];
 
@@ -358,9 +394,13 @@ export class WorldFile {
   }
 
   appendEvent(tick: number, kind: string, payload: unknown, actors: string[] = []): void {
-    this.db
+    const info = this.db
       .prepare('INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)')
       .run(tick, kind, JSON.stringify(actors), JSON.stringify(payload));
+    const actorStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO event_actors (agent_id, event_id) VALUES (?, ?)',
+    );
+    for (const actor of actors) actorStmt.run(actor, Number(info.lastInsertRowid));
   }
 
   /** Stores simulation events; returns them with their ids. */
@@ -370,6 +410,9 @@ export class WorldFile {
     );
     const objectStmt = this.db.prepare(
       'INSERT OR IGNORE INTO event_objects (object_id, event_id) VALUES (?, ?)',
+    );
+    const actorStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO event_actors (agent_id, event_id) VALUES (?, ?)',
     );
     return events.map((e) => {
       const info = stmt.run(
@@ -384,8 +427,169 @@ export class WorldFile {
       );
       const id = Number(info.lastInsertRowid);
       for (const objectId of e.objects ?? []) objectStmt.run(objectId, id);
+      for (const actor of e.actors) actorStmt.run(actor, id);
       return { ...e, id };
     });
+  }
+
+  /** A person's events in [fromTick, toTick], oldest first unless `newestFirst`. */
+  agentEvents(
+    agentId: string,
+    fromTick: number,
+    toTick: number,
+    opts: {
+      kinds?: string[];
+      excludeKinds?: string[];
+      limit?: number;
+      offset?: number;
+      newestFirst?: boolean;
+    } = {},
+  ): WorldEvent[] {
+    const params: Record<string, unknown> = {
+      agentId,
+      fromTick,
+      toTick,
+      limit: opts.limit ?? -1,
+      offset: opts.offset ?? 0,
+    };
+    const where = ['a.agent_id = @agentId', 'e.tick >= @fromTick', 'e.tick <= @toTick'];
+    const inList = (list: string[], prefix: string, negate: boolean) => {
+      list.forEach((k, i) => (params[`${prefix}${i}`] = k));
+      const names = list.map((_, i) => `@${prefix}${i}`).join(', ');
+      where.push(`e.kind ${negate ? 'NOT IN' : 'IN'} (${names || 'NULL'})`);
+    };
+    if (opts.kinds) inList(opts.kinds, 'k', false);
+    if (opts.excludeKinds?.length) inList(opts.excludeKinds, 'x', true);
+    const rows = this.db
+      .prepare(
+        `SELECT e.id, e.tick, e.kind, e.actors, e.payload
+         FROM event_actors a JOIN events e ON e.id = a.event_id
+         WHERE ${where.join(' AND ')}
+         ORDER BY e.id ${opts.newestFirst ? 'DESC' : 'ASC'} LIMIT @limit OFFSET @offset`,
+      )
+      .all(params) as EventRow[];
+    return rows.map(toWorldEvent);
+  }
+
+  /** How many of a person's events in the period there are of each kind, and the most important. */
+  agentEventCounts(
+    agentId: string,
+    fromTick: number,
+    toTick: number,
+  ): { kind: string; count: number; maxImportance: number }[] {
+    return this.db
+      .prepare(
+        `SELECT e.kind AS kind, COUNT(*) AS count,
+           MAX(COALESCE(json_extract(e.payload, '$.importance'), 3)) AS maxImportance
+         FROM event_actors a JOIN events e ON e.id = a.event_id
+         WHERE a.agent_id = @agentId AND e.tick >= @fromTick AND e.tick <= @toTick
+         GROUP BY e.kind`,
+      )
+      .all({ agentId, fromTick, toTick }) as {
+      kind: string;
+      count: number;
+      maxImportance: number;
+    }[];
+  }
+
+  /** Events per in-game day of a person's life (day 1 is the first day). */
+  agentEventDays(agentId: string): { day: number; entries: number; notable: number }[] {
+    return this.db
+      .prepare(
+        `SELECT e.tick / ${TICKS_PER_DAY} + 1 AS day, COUNT(*) AS entries,
+           SUM(CASE WHEN COALESCE(json_extract(e.payload, '$.importance'), 3) >= 3 THEN 1 ELSE 0 END) AS notable
+         FROM event_actors a JOIN events e ON e.id = a.event_id
+         WHERE a.agent_id = @agentId GROUP BY day ORDER BY day`,
+      )
+      .all({ agentId }) as { day: number; entries: number; notable: number }[];
+  }
+
+  /** A person's logged thoughts (their decisions) in the period, oldest first. */
+  agentDecisions(
+    agentId: string,
+    fromTick: number,
+    toTick: number,
+  ): { tick: number; thought: string; goal: string }[] {
+    // This WHERE must repeat the partial index's condition exactly so SQLite uses tick_inputs_agent.
+    const rows = this.db
+      .prepare(
+        `SELECT tick, json_extract(payload, '$.decision.thought') AS thought,
+           json_extract(payload, '$.decision.goal') AS goal
+         FROM tick_inputs
+         WHERE kind = 'decision' AND json_extract(payload, '$.agentId') = @agentId
+           AND tick >= @fromTick AND tick <= @toTick
+         ORDER BY tick, id`,
+      )
+      .all({ agentId, fromTick, toTick }) as {
+      tick: number;
+      thought: string | null;
+      goal: string | null;
+    }[];
+    return rows.map((r) => ({ tick: r.tick, thought: r.thought ?? '', goal: r.goal ?? '' }));
+  }
+
+  /** Saves a question and its answer; returns it with its id. */
+  appendInterview(row: Omit<InterviewView, 'id'>): InterviewView {
+    const info = this.db
+      .prepare(
+        `INSERT INTO interviews (agent_id, asked_tick, from_tick, to_tick, question, answer, provider, model,
+          cost_usd, plan, record_count, used_count, fallback, note, created_at)
+         VALUES (@agentId, @askedTick, @fromTick, @toTick, @question, @answer, @provider, @model,
+          @costUsd, @plan, @recordCount, @usedCount, @fallback, @note, @createdAt)`,
+      )
+      .run({
+        agentId: row.agentId,
+        askedTick: row.askedTick,
+        fromTick: row.fromTick,
+        toTick: row.toTick,
+        question: row.question,
+        answer: row.answer,
+        provider: row.provider,
+        model: row.model,
+        costUsd: row.costUsd,
+        plan: row.plan ? 1 : 0,
+        recordCount: row.recordCount,
+        usedCount: row.usedCount,
+        fallback: row.fallback ?? null,
+        note: row.note ?? null,
+        createdAt: row.createdAt,
+      });
+    return { ...row, id: Number(info.lastInsertRowid) };
+  }
+
+  /** The last `limit` questions asked about a person, oldest first. */
+  listInterviews(agentId: string, limit = 100): InterviewView[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM (SELECT * FROM interviews WHERE agent_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
+      )
+      .all(agentId, limit) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      agentId: r.agent_id as string,
+      askedTick: r.asked_tick as number,
+      fromTick: r.from_tick as number,
+      toTick: r.to_tick as number,
+      question: r.question as string,
+      answer: r.answer as string,
+      provider: r.provider as ProviderId,
+      model: r.model as string,
+      costUsd: r.cost_usd as number,
+      plan: Boolean(r.plan),
+      recordCount: r.record_count as number,
+      usedCount: r.used_count as number,
+      ...(r.fallback ? { fallback: r.fallback as InterviewFallback } : {}),
+      ...(r.note ? { note: r.note as string } : {}),
+      createdAt: r.created_at as string,
+    }));
+  }
+
+  /** Total the observer has paid for questions about a person (USD). */
+  interviewSpend(agentId: string): number {
+    const row = this.db
+      .prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM interviews WHERE agent_id = ?')
+      .get(agentId) as { total: number };
+    return Math.round(row.total * 1e6) / 1e6;
   }
 
   queryEvents(opts: {

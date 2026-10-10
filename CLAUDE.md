@@ -310,6 +310,25 @@ Newest first. Record every change to an agreed decision here.
   are capped at 60% of the space around the map, so a size saved on a big screen can't squeeze
   the map on a smaller one.
 
+- **2026-10-09 — Ask about a villager (owner request).** Every person's inspector has an **Ask
+  about …** section: the owner asks a question about a period of their life (last hour … whole
+  life, or any custom range back to their birth or arrival) and the person's **own brain** (same
+  provider and model) answers with a third-person summary written from the village's record of
+  them. A full view keeps every answer and shows the record itself (events, speech, the thought
+  behind every decision, diary, memories), paged back as far as they lived. Decisions: (a) asking
+  never changes the world: no tick input, no memory, the person never knows; (b) `@aw/brain` now
+  also reads a digest about one person built by the helper for the observer (`PersonDigest`); it
+  still never sees the world state, and the digest never enters anyone's decision prompts;
+  (c) a paid answer counts toward the spending cap and that person's AI use (`llm_calls` row with
+  trigger `interview`; the inspector shows "on your questions" separately); (d) Mock-brain people
+  get a free rule-based summary, and anyone whose AI can't answer (not set up, cap reached, rate
+  limit, refusal, error) gets the free summary with a note saying why; a rate limit on a question
+  doesn't pause the world; (e) interview calls share the provider's queue and concurrency limit
+  with decisions (`BrainRouter.generate`); (f) the digest is budgeted by effort (9k/18k/36k
+  characters) and sampled evenly across the period. World file migration 5 adds `event_actors`,
+  a partial index on decisions by person, and `interviews`. Plan:
+  [`docs/plans/ask-a-villager.md`](docs/plans/ask-a-villager.md).
+
 - **2026-10-08 — Opus as the Claude Code advisor (owner request).** `.claude/settings.json` (project
   settings, committed) sets `"advisorModel": "opus"`, so Claude Code sessions in this repo consult
   Opus through the advisor tool.

@@ -1,12 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BrainRouter, draftPerson } from '@aw/brain';
+import { BrainRouter, DEFAULT_QUESTION, askAboutPerson, draftPerson } from '@aw/brain';
 import {
   CastPreviewRequest as CastPreviewRequestSchema,
   CreateWorldRequest,
   DEFAULT_CAP_USD,
   DEFAULT_SPEED,
+  AskRequest as AskRequestSchema,
+  RecordQuery as RecordQuerySchema,
   WORLD_ID_PATTERN,
   WorldEventRequest as WorldEventRequestSchema,
   encodeMap,
@@ -21,7 +23,12 @@ import {
   type FamilyNode,
   type LlmCallView,
   type MarketResponse,
+  type InterviewView,
+  type InterviewsResponse,
   type ObjectHistoryResponse,
+  type RecordQuery,
+  type RecordResponse,
+  type AskRequest,
   type VillageResponse,
   type ReplayResponse,
   type SpawnRequest,
@@ -45,8 +52,10 @@ import {
   type Agent,
   type AgentSpec,
   type TickInput,
+  type WorldState,
   resourceAmount,
 } from '@aw/sim';
+import { buildDigest, clampPeriod, lifeSpan, recordPage } from './personRecord.ts';
 import { Replayer } from './replayer.ts';
 import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
@@ -304,9 +313,9 @@ export class WorldManager {
 
   agent(worldId: string, agentId: string): AgentDetail {
     const state = this.requireActive(worldId).state;
-    const agent = state.agents.find((a) => a.id === agentId);
-    if (!agent) throw new NotFoundError(`No such person ${agentId}`);
-    return agentDetail(state, agent);
+    const agent = this.personIn(state, agentId);
+    const askedUsd = this.file(worldId).interviewSpend(agentId);
+    return { ...agentDetail(state, agent), ...(askedUsd > 0 ? { askedUsd } : {}) };
   }
 
   events(worldId: string, query: Parameters<WorldFile['queryEvents']>[0]) {
@@ -545,6 +554,112 @@ export class WorldManager {
       };
     };
     return node(root, 2, 2);
+  }
+
+  /**
+   * Everything asked about a person so far (oldest first), and the span of their life the
+   * observer can ask about.
+   */
+  interviews(worldId: string, agentId: string): InterviewsResponse {
+    const state = this.requireActive(worldId).state;
+    const agent = this.personIn(state, agentId);
+    const file = this.file(worldId);
+    const span = lifeSpan(file, state, agent);
+    return {
+      interviews: file.listInterviews(agentId),
+      lifeFromTick: span.from,
+      lifeToTick: span.to,
+      nowTick: state.tick,
+      daysPerYear: state.settings.daysPerYear,
+    };
+  }
+
+  /**
+   * The observer asks about a person: their own brain answers from their record for the period
+   * (the free summary when it can't). Never changes the world; a paid answer counts toward the
+   * spending cap and the person's AI use.
+   */
+  async ask(worldId: string, agentId: string, req: AskRequest): Promise<InterviewView> {
+    const parsed = AskRequestSchema.parse(req);
+    const runner = this.requireActive(worldId);
+    runner.persist(); // the record must include everything that has happened so far
+    const state = runner.state;
+    const agent = this.personIn(state, agentId);
+    const file = this.file(worldId);
+    const askedTick = state.tick;
+    const span = lifeSpan(file, state, agent);
+    const period = clampPeriod(span, parsed.fromTick, parsed.toTick);
+    const digest = buildDigest(file, state, agent, period.from, period.to, agent.brain.effort);
+    const question = parsed.question || DEFAULT_QUESTION;
+    // Earlier questions about the same period give the answer some conversation context.
+    const history = file
+      .listInterviews(agentId)
+      .filter((i) => i.fromTick === period.from && i.toTick === period.to)
+      .slice(-3)
+      .map((i) => ({ question: i.question, answer: i.answer }));
+    const meta = runner.currentMeta();
+    const result = await askAboutPerson(this.brains, agent.brain, digest, question, {
+      history,
+      capReached: meta.spentUsd >= meta.capUsd,
+    });
+
+    const usage = result.usage;
+    if (usage && usage.costUsd > 0) runner.addSpend(usage.costUsd, usage.coveredByPlan);
+    // Every call made to their AI is logged (also one that failed and the free summary replaced).
+    if (result.trace || usage || result.error) {
+      const replaced = result.provider === 'mock';
+      file.appendCalls([
+        {
+          tick: askedTick,
+          agentId,
+          provider: replaced ? agent.brain.provider : result.provider,
+          model: replaced ? agent.brain.model : result.model,
+          trigger: 'interview',
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          cachedTokens: usage?.cachedInputTokens ?? 0,
+          costUsd: usage?.costUsd ?? 0,
+          estimated: usage?.estimated ?? false,
+          plan: usage?.coveredByPlan ?? false,
+          latencyMs: result.trace?.latencyMs ?? 0,
+          prompt: result.trace?.prompt ?? null,
+          response: result.trace?.response ?? null,
+          error: result.error ?? null,
+        },
+      ]);
+    }
+
+    return file.appendInterview({
+      agentId,
+      askedTick,
+      fromTick: period.from,
+      toTick: period.to,
+      question,
+      answer: result.answer,
+      provider: result.provider,
+      model: result.model,
+      costUsd: usage?.costUsd ?? 0,
+      plan: usage?.coveredByPlan ?? false,
+      recordCount: digest.total,
+      usedCount: digest.entries.length,
+      ...(result.fallback ? { fallback: result.fallback } : {}),
+      ...(result.note ? { note: result.note } : {}),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  /** A page of a person's record (what the village holds about them) for a period. */
+  record(worldId: string, agentId: string, query: RecordQuery): RecordResponse {
+    const runner = this.requireActive(worldId);
+    runner.persist();
+    const agent = this.personIn(runner.state, agentId);
+    return recordPage(this.file(worldId), runner.state, agent, RecordQuerySchema.parse(query));
+  }
+
+  private personIn(state: WorldState, agentId: string): Agent {
+    const agent = state.agents.find((a) => a.id === agentId);
+    if (!agent) throw new NotFoundError(`No such person ${agentId}`);
+    return agent;
   }
 
   calls(worldId: string, agentId: string, limit = 10): LlmCallView[] {

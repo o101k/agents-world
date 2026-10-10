@@ -147,7 +147,8 @@ export class AnthropicProvider implements BrainProvider {
       else if (block.type === 'text') text += block.text;
     }
     output ??= extractJson(text);
-    return { output, model, usage };
+    const trimmed = text.trim();
+    return { output, text: trimmed || undefined, model, usage };
   }
 
   async listModels(): Promise<string[]> {
