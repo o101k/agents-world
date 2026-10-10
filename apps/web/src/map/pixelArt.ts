@@ -4,6 +4,8 @@
  * asks for sprites by name (see SpriteName) and doesn't care where the pixels come from.
  */
 
+import { PixelBuffer, fillRect, parseColor } from './pixelBuffer.ts';
+
 export const TILE_PX = 16;
 
 type Color = string;
@@ -15,25 +17,22 @@ function noise(x: number, y: number, seed: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+/**
+ * Paints into a PixelBuffer, inside the box (ox, oy, w, h) of it. Pixels go straight into the
+ * buffer's bytes: a canvas would parse a CSS colour and make a call for every pixel.
+ */
 export class Painter {
-  readonly ctx: CanvasRenderingContext2D;
-
   constructor(
-    readonly canvas: HTMLCanvasElement,
+    readonly buf: PixelBuffer,
     readonly ox = 0,
     readonly oy = 0,
-    readonly w = canvas.width,
-    readonly h = canvas.height,
-  ) {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('2D canvas not available');
-    this.ctx = ctx;
-  }
+    readonly w = buf.width,
+    readonly h = buf.height,
+  ) {}
 
   px(x: number, y: number, c: Color): void {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
-    this.ctx.fillStyle = c;
-    this.ctx.fillRect(this.ox + x, this.oy + y, 1, 1);
+    fillRect(this.buf, this.ox + x, this.oy + y, 1, 1, parseColor(c));
   }
 
   rect(x: number, y: number, w: number, h: number, c: Color): void {
@@ -42,8 +41,7 @@ export class Painter {
     const x1 = Math.min(this.w, x + w);
     const y1 = Math.min(this.h, y + h);
     if (x1 <= x0 || y1 <= y0) return;
-    this.ctx.fillStyle = c;
-    this.ctx.fillRect(this.ox + x0, this.oy + y0, x1 - x0, y1 - y0);
+    fillRect(this.buf, this.ox + x0, this.oy + y0, x1 - x0, y1 - y0, parseColor(c));
   }
 
   ellipse(cx: number, cy: number, rx: number, ry: number, c: Color): void {
@@ -791,15 +789,31 @@ export interface AtlasFrame {
   h: number;
 }
 
-/** Paints every sprite into one canvas (shelf-packed) so the GPU can draw the map in few batches. */
+/**
+ * Puts a finished pixel buffer on a new canvas in one call. Painting the buffer first and
+ * copying it over once is much cheaper than drawing on the canvas pixel by pixel.
+ */
+function bufferToCanvas(buf: PixelBuffer): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = buf.width;
+  canvas.height = buf.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas not available');
+  ctx.putImageData(new ImageData(buf.data, buf.width, buf.height), 0, 0);
+  return canvas;
+}
+
+/**
+ * Paints every sprite into one image (shelf-packed) so the GPU can draw the map in few batches.
+ * `pixels` is the same image as bytes, so the ground can copy tiles without reading the canvas.
+ */
 export function buildAtlas(): {
   canvas: HTMLCanvasElement;
   frames: Record<SpriteName, AtlasFrame>;
+  pixels: PixelBuffer;
 } {
   const size = 512;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
+  const pixels = new PixelBuffer(size, size);
   const frames = {} as Record<SpriteName, AtlasFrame>;
   const entries = (Object.entries(SPRITES) as [SpriteName, SpriteDef][]).sort(
     (a, b) => b[1].h - a[1].h,
@@ -815,12 +829,12 @@ export function buildAtlas(): {
       rowH = 0;
     }
     if (y + def.h > size) throw new Error('Sprite atlas is full');
-    def.paint(new Painter(canvas, x, y, def.w, def.h));
+    def.paint(new Painter(pixels, x, y, def.w, def.h));
     frames[name] = { x, y, w: def.w, h: def.h };
     x += def.w + PAD;
     rowH = Math.max(rowH, def.h);
   }
-  return { canvas, frames };
+  return { canvas: bufferToCanvas(pixels), frames, pixels };
 }
 
 // ---------------------------------------------------------------- people
@@ -918,9 +932,7 @@ function paintCharacterFrame(
 
 /** Paints a strip of CHARACTER_FRAMES frames for one person, with a dark outline for contrast. */
 export function characterCanvas(look: CharacterLook): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = CHARACTER_PX * CHARACTER_FRAMES;
-  canvas.height = CHARACTER_PX;
+  const buf = new PixelBuffer(CHARACTER_PX * CHARACTER_FRAMES, CHARACTER_PX);
   const frames: ['down' | 'up' | 'side', number][] = [
     ['down', 0],
     ['down', 1],
@@ -930,17 +942,16 @@ export function characterCanvas(look: CharacterLook): HTMLCanvasElement {
     ['side', 1],
   ];
   frames.forEach(([dir, f], i) =>
-    paintCharacterFrame(new Painter(canvas, i * CHARACTER_PX, 0, 16, 16), look, dir, f),
+    paintCharacterFrame(new Painter(buf, i * CHARACTER_PX, 0, 16, 16), look, dir, f),
   );
-  // Outline pass
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const d = img.data;
-  const w = canvas.width;
+  // Outline pass. Outline pixels are collected first and painted after, so an outline pixel
+  // never counts as filled for its neighbours.
+  const d = buf.data;
+  const w = buf.width;
   const filled = (x: number, y: number) =>
-    x >= 0 && y >= 0 && x < w && y < canvas.height && d[(y * w + x) * 4 + 3]! > 0;
+    x >= 0 && y >= 0 && x < w && y < buf.height && d[(y * w + x) * 4 + 3]! > 0;
   const outline: number[] = [];
-  for (let y = 0; y < canvas.height; y++) {
+  for (let y = 0; y < buf.height; y++) {
     for (let x = 0; x < w; x++) {
       if (filled(x, y)) continue;
       const fx = x % CHARACTER_PX;
@@ -952,7 +963,9 @@ export function characterCanvas(look: CharacterLook): HTMLCanvasElement {
       if (n) outline.push(x, y);
     }
   }
-  ctx.fillStyle = 'rgba(20,14,10,0.85)';
-  for (let i = 0; i < outline.length; i += 2) ctx.fillRect(outline[i]!, outline[i + 1]!, 1, 1);
-  return canvas;
+  const outlineColour = parseColor('rgba(20,14,10,0.85)');
+  for (let i = 0; i < outline.length; i += 2) {
+    fillRect(buf, outline[i]!, outline[i + 1]!, 1, 1, outlineColour);
+  }
+  return bufferToCanvas(buf);
 }

@@ -1,6 +1,7 @@
 import { Container, Sprite, Texture } from 'pixi.js';
 import type { WorldMap } from '@aw/shared';
 import { TILE_PX, type AtlasFrame, type SpriteName } from './pixelArt.ts';
+import { PixelBuffer } from './pixelBuffer.ts';
 import {
   CHUNK,
   changedChunks,
@@ -8,7 +9,7 @@ import {
   chunksAcross,
   chunksDown,
   fieldTiles,
-  tileLayers,
+  paintChunkPixels,
 } from './groundPaint.ts';
 
 export { CHUNK };
@@ -25,12 +26,17 @@ export interface ViewRect {
 export interface Atlas {
   canvas: HTMLCanvasElement;
   frames: Record<SpriteName, AtlasFrame>;
+  /** The same image as `canvas`, as bytes, so chunks can copy tiles without reading the canvas. */
+  pixels: PixelBuffer;
 }
 
 /** One chunk of the ground: its canvas, the sprite that shows it, and where it sits in world pixels. */
 interface GroundChunk {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  /** The chunk's pixels, and an ImageData over the same bytes for putImageData. */
+  pixels: PixelBuffer;
+  image: ImageData;
   sprite: Sprite;
   x0: number;
   y0: number;
@@ -89,8 +95,8 @@ export class GroundLayer {
       canvas.height = r.h * TILE_PX;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Canvas 2D is not available');
-      // Tiles are pixel art: copy them without smoothing.
-      ctx.imageSmoothingEnabled = false;
+      const pixels = new PixelBuffer(canvas.width, canvas.height);
+      const image = new ImageData(pixels.data, pixels.width, pixels.height);
       const sprite = new Sprite(Texture.from(canvas));
       const x0 = r.x0 * TILE_PX;
       const y0 = r.y0 * TILE_PX;
@@ -100,6 +106,8 @@ export class GroundLayer {
       this.chunks.push({
         canvas,
         ctx,
+        pixels,
+        image,
         sprite,
         x0,
         y0,
@@ -111,33 +119,24 @@ export class GroundLayer {
     if (this.view) this.cull(this.view);
   }
 
-  /** Repaints one chunk's canvas from the drawn map and tells Pixi to upload it again. */
+  /**
+   * Repaints one chunk from the drawn map: the pixels are built in memory, then the canvas gets
+   * them in one call. Pixi is told to upload it again.
+   */
   private paintChunk(index: number): void {
     const chunk = this.chunks[index];
     const drawn = this.drawn;
     if (!chunk || !drawn) return;
     const { map, fields } = drawn;
-    const r = chunkRect(map, index);
-    const { ctx, canvas } = chunk;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let ty = 0; ty < r.h; ty++) {
-      for (let tx = 0; tx < r.w; tx++) {
-        for (const name of tileLayers(map, fields, r.x0 + tx, r.y0 + ty)) {
-          const f = this.atlas.frames[name];
-          ctx.drawImage(
-            this.atlas.canvas,
-            f.x,
-            f.y,
-            f.w,
-            f.h,
-            tx * TILE_PX,
-            ty * TILE_PX,
-            f.w,
-            f.h,
-          );
-        }
-      }
-    }
+    paintChunkPixels(
+      chunk.pixels,
+      map,
+      fields,
+      chunkRect(map, index),
+      this.atlas.pixels,
+      this.atlas.frames,
+    );
+    chunk.ctx.putImageData(chunk.image, 0, 0);
     // Pixi uploads a canvas again only when it is told the canvas changed.
     chunk.sprite.texture.source.update();
   }

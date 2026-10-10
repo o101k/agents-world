@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { Tile, type MapObject, type WorldMap } from '@aw/shared';
 import { hash } from './hash.ts';
-import { CHUNK, changedChunks, chunkRect, fieldTiles, tileLayers } from './groundPaint.ts';
+import type { AtlasFrame, SpriteName } from './pixelArt.ts';
+import { PixelBuffer } from './pixelBuffer.ts';
+import {
+  CHUNK,
+  changedChunks,
+  chunkRect,
+  fieldTiles,
+  paintChunkPixels,
+  tileLayers,
+} from './groundPaint.ts';
 
 /** An all-grass map (tile 0) with the given objects. Chunks are CHUNK = 32 tiles square. */
 function makeMap(width: number, height: number, objects: MapObject[] = []): WorldMap {
@@ -167,5 +176,109 @@ describe('tileLayers', () => {
   it('has no sprites off the map', () => {
     expect(tileLayers(makeMap(64, 64), noFields, -1, 0)).toEqual([]);
     expect(tileLayers(makeMap(64, 64), noFields, 64, 0)).toEqual([]);
+  });
+});
+
+/** Writes one pixel's bytes into a buffer (test setup only). */
+function setPixel(buf: PixelBuffer, x: number, y: number, rgba: number[]): void {
+  buf.data.set(rgba, (y * buf.width + x) * 4);
+}
+
+/** A fake atlas of three 16×16 sprites side by side: grass, farmland and crops. */
+function fakeAtlas(): { pixels: PixelBuffer; frames: Record<SpriteName, AtlasFrame> } {
+  const pixels = new PixelBuffer(48, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      // The grass changes across the tile, so a copy shifted by a pixel shows up.
+      setPixel(pixels, x, y, [x * 10, y * 10, 200, 255]);
+      setPixel(pixels, 16 + x, y, [50, 50, 50, 255]);
+      // Crops: every other pixel is see-through, the rest half-transparent red.
+      setPixel(pixels, 32 + x, y, (x + y) % 2 === 0 ? [0, 0, 0, 0] : [255, 0, 0, 128]);
+    }
+  }
+  const grass = { x: 0, y: 0, w: 16, h: 16 };
+  const frames = {
+    grass0: grass,
+    grass1: grass,
+    grass2: grass,
+    grass3: grass,
+    farmland: { x: 16, y: 0, w: 16, h: 16 },
+    crops: { x: 32, y: 0, w: 16, h: 16 },
+  } as Record<SpriteName, AtlasFrame>;
+  return { pixels, frames };
+}
+
+/** The bytes of a w×h block of a buffer at (x0, y0), row by row. */
+function bytesOf(buf: PixelBuffer, x0: number, y0: number, w: number, h: number): number[] {
+  const out: number[] = [];
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const i = (y * buf.width + x) * 4;
+      out.push(...buf.data.slice(i, i + 4));
+    }
+  }
+  return out;
+}
+
+/** The expected bytes of a 16×16 grass tile in the fake atlas. */
+function grassTile(): number[] {
+  const out: number[] = [];
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) out.push(x * 10, y * 10, 200, 255);
+  return out;
+}
+
+/**
+ * The expected bytes of farmland with crops on it: the crops' see-through pixels show the
+ * farmland, and the red ones are half-transparent red over it (128 + 50 × 127/255 ≈ 153, and
+ * 50 × 127/255 ≈ 25 for green and blue).
+ */
+function farmlandWithCropsTile(): number[] {
+  const out: number[] = [];
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      if ((x + y) % 2 === 0) out.push(50, 50, 50, 255);
+      else out.push(153, 25, 25, 255);
+    }
+  }
+  return out;
+}
+
+describe('paintChunkPixels', () => {
+  const { pixels: atlas, frames } = fakeAtlas();
+  // Two tiles: grass, then farmland with a field of crops on it.
+  const map = withTiles(makeMap(2, 1), [
+    [0, 0, Tile.Grass],
+    [1, 0, Tile.Farmland],
+  ]);
+  const fieldAt1 = new Set([1]);
+  const twoTiles = { x0: 0, y0: 0, w: 2, h: 1 };
+
+  it('copies the base tile and blends the overlay over it', () => {
+    const buf = new PixelBuffer(32, 16);
+    paintChunkPixels(buf, map, fieldAt1, twoTiles, atlas, frames);
+    expect(bytesOf(buf, 0, 0, 16, 16)).toEqual(grassTile());
+    expect(bytesOf(buf, 16, 0, 16, 16)).toEqual(farmlandWithCropsTile());
+  });
+
+  it('draws no crops outside a field', () => {
+    const buf = new PixelBuffer(32, 16);
+    paintChunkPixels(buf, map, noFields, twoTiles, atlas, frames);
+    const plainFarmland = Array.from({ length: 16 * 16 }, () => [50, 50, 50, 255]).flat();
+    expect(bytesOf(buf, 16, 0, 16, 16)).toEqual(plainFarmland);
+  });
+
+  it('paints the tiles of the rectangle at the buffer origin', () => {
+    const buf = new PixelBuffer(16, 16);
+    paintChunkPixels(buf, map, fieldAt1, { x0: 1, y0: 0, w: 1, h: 1 }, atlas, frames);
+    expect(bytesOf(buf, 0, 0, 16, 16)).toEqual(farmlandWithCropsTile());
+  });
+
+  it('clears what was in the buffer first', () => {
+    // 9 is not a tile kind, so it has no sprites and must come out transparent.
+    const buf = new PixelBuffer(16, 16);
+    buf.data.fill(7);
+    const blank = withTiles(makeMap(1, 1), [[0, 0, 9]]);
+    paintChunkPixels(buf, blank, noFields, { x0: 0, y0: 0, w: 1, h: 1 }, atlas, frames);
+    expect(bytesOf(buf, 0, 0, 16, 16)).toEqual(new Array(16 * 16 * 4).fill(0));
   });
 });

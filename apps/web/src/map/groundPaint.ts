@@ -1,6 +1,7 @@
 import { Tile, tileAt, type WorldMap } from '@aw/shared';
 import { hash } from './hash.ts';
-import type { SpriteName } from './pixelArt.ts';
+import { TILE_PX, type AtlasFrame, type SpriteName } from './pixelArt.ts';
+import { blit, type PixelBuffer } from './pixelBuffer.ts';
 
 /** Ground is painted and drawn in CHUNK×CHUNK-tile pieces. */
 export const CHUNK = 32;
@@ -74,6 +75,31 @@ export function tileLayers(map: WorldMap, fields: Set<number>, x: number, y: num
       return ['bridge'];
     default:
       return [];
+  }
+}
+
+/**
+ * Paints one chunk of ground into `buf`, which is the chunk's own size in pixels. `rect` says
+ * which tiles the chunk covers. Each tile's sprites are copied from the atlas, bottom layer first,
+ * so overlays blend over what is below. The buffer is cleared first, so the result depends only
+ * on the map. Kept free of canvases so it can be tested in Node.
+ */
+export function paintChunkPixels(
+  buf: PixelBuffer,
+  map: WorldMap,
+  fields: Set<number>,
+  rect: { x0: number; y0: number; w: number; h: number },
+  atlas: PixelBuffer,
+  frames: Record<SpriteName, AtlasFrame>,
+): void {
+  buf.data.fill(0);
+  for (let ty = 0; ty < rect.h; ty++) {
+    for (let tx = 0; tx < rect.w; tx++) {
+      for (const name of tileLayers(map, fields, rect.x0 + tx, rect.y0 + ty)) {
+        const f = frames[name];
+        blit(buf, tx * TILE_PX, ty * TILE_PX, atlas, f.x, f.y, f.w, f.h);
+      }
+    }
   }
 }
 
