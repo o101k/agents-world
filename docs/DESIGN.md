@@ -467,6 +467,11 @@ one and only reads it, and `tests/agentic/.e2e/` is uploaded on failure.
   burning buildings get flickering flames and smoke; ruins are drawn blackened; the sick look pale
   green; winter frosts the land and autumn warms it. It animates only while something moves (or
   burns, or rains). In replay mode it is fed the replayed moment instead of live frames.
+  Screen size comes from `renderer.screen` (CSS pixels; Pixi's `renderer.width` already is, so
+  dividing it by the resolution halved the size on Retina screens), and a resize draws at once so
+  the canvas never shows a blank frame. Walkers keep walking for 1.5 s after their last update, so
+  a paused world stops drawing. Speech bubbles keep their place from frame to frame when nothing
+  else is in the way and stay at least 1.5 s.
 - Speed (measured with `npm run bench:render`): camera input only moves the camera, and all
   per-frame work (people, occluders, culling, drawing) runs once per animation frame. The scene
   is five Pixi render groups, so a change in one never rebuilds another's draw list: ground;

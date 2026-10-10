@@ -302,6 +302,16 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-10 — Map flashing on Retina screens fixed (owner report: "everything is flashing
+  around, colors are flashing and not loading properly, and tooltips are also doing so").** The
+  cause was the screen size: the renderer took `renderer.width / resolution`, but Pixi's width is
+  already in CSS pixels, so on Retina screens (device pixel ratio 2) the map thought it was half
+  its size. Its own culling of ground and people then hid grass and people, names and bubbles
+  outside the top-left of the view. It now reads `renderer.screen`. Also fixed: a resize draws at
+  once (no blank frame), the top bar keeps its height while the world runs, walkers stop 1.5 s
+  after the last update when paused, and speech bubbles stay in place and show for at least
+  1.5 s. Two end-to-end tests now cover Retina drawing and the top bar's height. Details:
+  [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md).
 - **2026-10-10 — Faster map rendering, round 2 (owner request: "check the code and understand
   what could make it faster… go all out").** Profiling round 1 found the rest. (a) The world is
   drawn in three Pixi render groups instead of one depth-sorted container: map objects that fit

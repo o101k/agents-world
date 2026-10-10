@@ -166,3 +166,28 @@ Per part:
   1-level rounding in half-transparent shadows.
 - Checked: `npm run check` (322 tests), Playwright e2e 8/8, names still drawn after switching
   worlds (renderer destroyed and rebuilt; the fonts outlive it).
+
+## Round 3: flashing on Retina screens
+
+The owner reported (2026-10-10) that colours and tooltips flashed and the map did not load
+properly, and that everything should be drawn at a set point so no redraw is visible. Recorded
+frame by frame in headless Chromium at device pixel ratio 2 (the benchmark and CI run at 1, which
+is why they never showed it).
+
+- Cause: the screen size was `renderer.width / renderer.resolution`, but Pixi 8's `renderer.width`
+  is already in CSS pixels. On Retina the map thought it was half size. Round 1's own culling of
+  ground chunks and people used that size, so grass vanished outside the top-left of the view and
+  people, names and bubbles popped in and out. The fit-to-window zoom used it too, which left a
+  dark strip on Retina. Fix: read `renderer.screen`.
+- A resize cleared the canvas and drew a frame later, so each resize showed a black map. Fix: a
+  resize draws at once.
+- The top bar changed height while the world ran (speed readout appearing, "waiting on N minds…",
+  time controls wrapping), so the page jumped and the map was resized often. This also happened on
+  master. Fix: the readout is always laid out (hidden while paused) at a fixed width, and the
+  clock, season, spend and Play/Pause have fixed widths.
+- Walkers kept walking in place while paused. Fix: they stop 1.5 s after the last update, so a
+  paused world is still and drawing stops.
+- Speech bubbles jumped when name labels walked under them. Fix: they keep their place when
+  nothing else is in the way, and a line shows for at least 1.5 s so fast talk doesn't blink.
+- New end-to-end tests: the whole map drawn at device pixel ratio 2, and the top bar's height
+  while the world runs. Both fail on the code before this fix.
