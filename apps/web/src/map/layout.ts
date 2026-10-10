@@ -118,12 +118,20 @@ const BUBBLE_GAP = 3;
  * speaker; if that is taken it slides left or right (still close to the speaker), then moves up
  * a level, and so on. Name labels of other people are avoided when a free spot exists. Returns
  * the top-left corner of every bubble.
+ *
+ * `previous` (each bubble's offset from its speaker last frame) keeps bubbles still as people
+ * move: those bubbles are placed first and keep their offset when it doesn't overlap a bubble
+ * already placed (name labels are ignored then). Bubbles without one are placed after, as above.
  */
 export function layoutBubbles(
   items: BubbleRequest[],
   obstacles: BubbleObstacle[] = [],
+  previous?: Map<string, Point>,
 ): Map<string, Point> {
-  const order = [...items].sort((a, b) => a.anchor.x - b.anchor.x || (a.id < b.id ? -1 : 1));
+  const byX = [...items].sort((a, b) => a.anchor.x - b.anchor.x || (a.id < b.id ? -1 : 1));
+  const order = previous
+    ? [...byX.filter((it) => previous.has(it.id)), ...byX.filter((it) => !previous.has(it.id))]
+    : byX;
   const placed: Rect[] = [];
   const out = new Map<string, Point>();
   const MAX_LEVELS = 10;
@@ -141,7 +149,17 @@ export function layoutBubbles(
       !placed.some((p) => rectsOverlap(r, p, 2)) &&
       (!withObstacles || !foreign.some((o) => rectsOverlap(r, o.rect)));
     let spot: Point | null = null;
-    for (const withObstacles of [true, false]) {
+    const offset = previous?.get(it.id);
+    if (offset) {
+      const r = {
+        x: Math.round(it.anchor.x + offset.x),
+        y: Math.round(it.anchor.y + offset.y),
+        w: it.w,
+        h: it.h,
+      };
+      if (!placed.some((p) => rectsOverlap(r, p, 2))) spot = { x: r.x, y: r.y };
+    }
+    for (const withObstacles of spot ? [] : [true, false]) {
       for (let level = 0; level < MAX_LEVELS && !spot; level++) {
         for (const s of shifts) {
           const r = {

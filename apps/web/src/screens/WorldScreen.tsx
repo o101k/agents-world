@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   OBJECT_LABELS,
   TILE_NAMES,
@@ -87,8 +87,20 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const pastOwners = useWorld((s) => s.replay?.view?.owners);
   const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
-  /** Map version currently shown (to know when to reload). */
-  const loadedVersion = useRef(0);
+  /** Owners' names by object id, updated with each map. */
+  const [owners, setOwners] = useState<Record<string, string[]>>({});
+  /** Map version on screen. */
+  const shownMapVersion = useRef(0);
+  /** A map request is out (never more than one at a time). */
+  const mapBusy = useRef(false);
+  /** False after unmount (App keys this screen by world, so a world change unmounts it too). */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   // State starts fresh per world: App renders this screen with key={worldId}.
   useEffect(() => {
@@ -97,9 +109,10 @@ export function WorldScreen({ worldId }: { worldId: string }) {
       .then(([v, ev]) => {
         if (cancelled) return;
         useWorld.getState().load(worldId, v, ev.events);
-        loadedVersion.current = useWorld.getState().mapVersion;
+        shownMapVersion.current = v.mapVersion;
         setView(v);
         setMap(decodeMap(v.map));
+        setOwners(v.owners);
       })
       .catch((e: Error) => !cancelled && setError(e.message));
     return () => {
@@ -108,24 +121,34 @@ export function WorldScreen({ worldId }: { worldId: string }) {
     };
   }, [worldId]);
 
-  // The map changed on the helper (e.g. a house is being built): reload it in place.
+  // The map changed on the helper (e.g. a house is being built): fetch just the map, in place.
+  // A reply is applied even if the version moved on in flight; the newer one is fetched next.
   const mapVersion = useWorld((s) => s.mapVersion);
+  const syncMap = useCallback((): void => {
+    function fetchMap(): void {
+      const wanted = useWorld.getState().mapVersion;
+      if (!alive.current || mapBusy.current || wanted <= shownMapVersion.current) return;
+      mapBusy.current = true;
+      api
+        .worldMap(worldId)
+        .then((r) => {
+          if (!alive.current || r.mapVersion <= shownMapVersion.current) return;
+          shownMapVersion.current = r.mapVersion;
+          setMap(decodeMap(r.map));
+          setOwners(r.owners);
+        })
+        .catch(() => {})
+        .finally(() => {
+          mapBusy.current = false;
+          // Refetch only if the version moved on meanwhile; a stale store value can't loop.
+          if (useWorld.getState().mapVersion !== wanted) fetchMap();
+        });
+    }
+    fetchMap();
+  }, [worldId]);
   useEffect(() => {
-    if (!view || mapVersion === loadedVersion.current) return;
-    loadedVersion.current = mapVersion;
-    let cancelled = false;
-    api
-      .worldView(worldId)
-      .then((v) => {
-        if (cancelled) return;
-        setMap(decodeMap(v.map));
-        setView(v);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [mapVersion, view, worldId]);
+    if (view) syncMap();
+  }, [view, mapVersion, syncMap]);
 
   // Selecting something on the map shows it.
   useEffect(
@@ -301,7 +324,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                     worldId={worldId}
                     selection={selection}
                     map={shownMap}
-                    ownersById={pastOwners ?? view?.owners ?? {}}
+                    ownersById={pastOwners ?? owners}
                     onPick={pickAgent}
                   />
                 ) : (

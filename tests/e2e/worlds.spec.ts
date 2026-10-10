@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /** Finish the new-world form: step 1 previews the villagers, step 2 (brains) accepts the defaults. */
 async function chooseBrainsAndCreate(page: Page) {
@@ -466,4 +466,107 @@ test('the View menu hides, shows and resizes the sidebar and the timeline', asyn
   await page.getByLabel('Timeline height').fill('600');
   await expect.poll(async () => (await map.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(150);
   await page.getByRole('button', { name: 'Reset layout' }).click();
+});
+
+/** Create a world and make it the active one through the API (no form, so nothing races). */
+async function createActiveWorld(
+  request: APIRequestContext,
+  body: { name: string; seed: string; mapSize?: 'huge' },
+) {
+  const res = await request.post('/api/worlds', { data: body });
+  expect(res.ok()).toBeTruthy();
+  const { world } = (await res.json()) as { world: { id: string } };
+  const activated = await request.post(`/api/worlds/${world.id}/activate`, { data: {} });
+  expect(activated.ok()).toBeTruthy();
+}
+
+test.describe('rendering on a Retina screen', () => {
+  test.use({ deviceScaleFactor: 2, viewport: { width: 1200, height: 800 } });
+
+  test('the whole map is drawn on a Retina screen', async ({ page, request }) => {
+    // A huge map (128 tiles) at the fit zoom fills the view, so every ground chunk in view matters.
+    await createActiveWorld(request, { name: 'Retina map', seed: 'retina', mapSize: 'huge' });
+    await page.goto('/');
+    await expect(page.locator('.topbar-title')).toHaveText('Retina map');
+    await expect(page.locator('[data-testid="map"] canvas')).toBeVisible();
+    await page.waitForTimeout(1000);
+
+    const png = await page.locator('[data-testid="map"]').screenshot();
+    // Count clear-colour pixels in the lower-right quarter, leaving out the zoom buttons' corner.
+    const counts = await page.evaluate(async (b64: string) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const { data } = ctx.getImageData(0, 0, img.width, img.height);
+      const cornerW = 240;
+      const cornerH = 400;
+      let total = 0;
+      let clear = 0;
+      for (let y = Math.floor(img.height / 2); y < img.height; y++) {
+        for (let x = Math.floor(img.width / 2); x < img.width; x++) {
+          if (x >= img.width - cornerW && y >= img.height - cornerH) continue;
+          const i = (y * img.width + x) * 4;
+          total++;
+          if (data[i] === 22 && data[i + 1] === 32 && data[i + 2] === 43) clear++;
+        }
+      }
+      return { total, clear };
+    }, png.toString('base64'));
+    expect(counts.total).toBeGreaterThan(0);
+    expect(counts.clear / counts.total).toBeLessThan(0.01);
+  });
+});
+
+test.describe('the top bar', () => {
+  test.use({ viewport: { width: 1512, height: 900 } });
+
+  // A failed run can leave its world at top speed, which would slow the next test: pause it.
+  test.afterEach(async ({ page }) => {
+    const playPause = page.getByTestId('play-pause');
+    if ((await playPause.textContent({ timeout: 2_000 }).catch(() => ''))?.includes('Pause'))
+      await playPause.click({ timeout: 2_000 }).catch(() => {});
+  });
+
+  test('the top bar keeps its height when the world runs', async ({ page, request }) => {
+    await createActiveWorld(request, { name: 'Header test world', seed: 'header' });
+    await page.goto('/');
+    await expect(page.locator('.topbar-title')).toHaveText('Header test world');
+    // Wait until the world screen has settled (it re-renders once the first state arrives).
+    await expect(page.locator('.topbar-clock')).toContainText('Day 1, 07:00');
+    await expect(page.locator('[data-testid="map"] canvas')).toBeVisible();
+
+    // Record every height the top bar takes while the world runs.
+    await page.evaluate(() => {
+      const bar = document.querySelector('header.topbar') as HTMLElement;
+      const round = () => Math.round(bar.getBoundingClientRect().height);
+      const heights = new Set<number>([round()]);
+      (window as unknown as { __heights: Set<number> }).__heights = heights;
+      // A bar that was swapped out measures 0; only the bar on screen counts.
+      new ResizeObserver(() => bar.isConnected && heights.add(round())).observe(bar);
+    });
+
+    // The button follows the server's state over the socket, which can lag while the page is busy,
+    // so press it again only while it still reads the old state (the presses are idempotent).
+    const playPause = page.getByTestId('play-pause');
+    const setRunning = (text: RegExp) =>
+      expect(async () => {
+        if (!text.test((await playPause.textContent()) ?? '')) await playPause.click();
+        await expect(playPause).toHaveText(text, { timeout: 2_000 });
+      }).toPass({ timeout: 15_000 });
+    await setRunning(/Pause/);
+    await page.getByRole('group', { name: 'Speed' }).getByRole('button', { name: 'Max' }).click();
+    await page.waitForTimeout(3000);
+    await setRunning(/Play/);
+    await page.waitForTimeout(300);
+
+    const heights = await page.evaluate(() => [
+      ...(window as unknown as { __heights: Set<number> }).__heights,
+    ]);
+    expect(heights).toHaveLength(1);
+  });
 });

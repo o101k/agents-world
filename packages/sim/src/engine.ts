@@ -1260,8 +1260,10 @@ function pickExploreTarget(ctx: Ctx, agent: Agent): Point | null {
 
 function finishGather(ctx: Ctx, agent: Agent, objectId: string): void {
   const { state } = ctx;
-  const o = mapCache(state.map).byId.get(objectId)!;
+  const o = mapCache(state.map).byId.get(objectId);
   agent.action = null;
+  // Cleared away for a new building or field while someone was gathering there.
+  if (!o) return fail(ctx, agent, 'What I was gathering from is gone.');
   let item: ItemName;
   let got: number;
   const tools = useTools(ctx, agent);
@@ -1510,6 +1512,8 @@ function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived
 function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
   const { state } = ctx;
   agent.action = null;
+  if (!mapCache(state.map).byId.has(treeId))
+    return fail(ctx, agent, 'The tree I was chopping is gone.');
   const r = (state.resources[treeId] ??= {
     amount: TREE_WOOD,
     max: TREE_WOOD,

@@ -101,6 +101,7 @@ export const useWorld = create<WorldRuntime>((set, get) => ({
       agents: view.agents,
       resources: view.resources,
       resourceChanges: view.resources,
+      mapVersion: view.mapVersion,
       events,
       selection: null,
       followId: null,

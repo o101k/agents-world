@@ -43,6 +43,7 @@ npm test             # Vitest unit and integration tests
 npm run test:e2e     # Playwright end-to-end (in this container: PW_CHROMIUM_PATH=/opt/pw-browsers/chromium)
 npm run test:agentic # Tester Army e2e, AI-driven (AI steps need ANTHROPIC_API_KEY or OPENROUTER_API_KEY; skipped without)
 npm run stress       # headless big-village stress test (args: adults children days mapSize)
+npm run bench:render # map rendering benchmark in headless Chromium (250 people, huge map; --json, --shots)
 ```
 
 Data lives in `~/.agents-world/` (override with `AGENTS_WORLD_HOME`). Port override: `AW_PORT`.
@@ -301,6 +302,34 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-10 — Map flashing on Retina screens fixed (owner report: "everything is flashing
+  around, colors are flashing and not loading properly, and tooltips are also doing so").** The
+  cause was the screen size: the renderer took `renderer.width / resolution`, but Pixi's width is
+  already in CSS pixels, so on Retina screens (device pixel ratio 2) the map thought it was half
+  its size. Its own culling of ground and people then hid grass and people, names and bubbles
+  outside the top-left of the view. It now reads `renderer.screen`. Also fixed: a resize draws at
+  once (no blank frame), the top bar keeps its height while the world runs, walkers stop 1.5 s
+  after the last update when paused, and speech bubbles stay in place and show for at least
+  1.5 s. Two end-to-end tests now cover Retina drawing and the top bar's height. Details:
+  [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md).
+- **2026-10-10 — Faster map rendering, round 2 (owner request: "check the code and understand
+  what could make it faster… go all out").** Profiling round 1 found the rest. (a) The world is
+  drawn in three Pixi render groups instead of one depth-sorted container: map objects that fit
+  inside their footprint (and graves), then people, then objects drawn taller than their footprint
+  (trees, stalls). People can only overlap the first kind from in front and the second from
+  behind, so this is the depth order without sorting 250 people among 8,000 trees (the only
+  inexactness: a tree trunk's bottom pixel covers the 1 px above the head of someone right below
+  it). The object layers are static and no longer culled; only tall objects can hide a person, so
+  only they fade. Fixed on the way: a field being cleared was drawn over the person working it.
+  (b) Changed map objects are redrawn in place (same sprite), so a building's progress doesn't
+  make Pixi rebuild a layer. (c) Names, "z z"/"…" and speech are `BitmapText` from four installed
+  fonts (`fonts.ts`; no kerning, no mipmaps) instead of a canvas texture each. (d) Sprites and
+  ground chunks are painted into byte arrays (`pixelBuffer.ts`) and put on their canvas once; an
+  unreadable colour paints magenta. (e) The people list and timeline follow live updates at most
+  4 times a second (`useThrottledWorld`). Medians of three bench runs, master → round 1 → round 2:
+  first frame with the map 1,147 → 1,026 → 617 ms; JavaScript per frame on the whole map p95
+  43.7 → 6.6 → 2.5 ms; map update 199 → 15 → 8 ms; texture uploads while panning 34 → 34 → 0.8
+  per second. Details: [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md).
 - **2026-10-09 — Hide or resize the sidebar and the timeline (owner request).** A ▤ button in the
   world's top bar, next to ⚙, opens a View menu that shows or hides the sidebar and the timeline,
   sets the sidebar's width (240–720 px) and the timeline's height (100–600 px), and has **Reset
@@ -309,7 +338,25 @@ Newest first. Record every change to an agreed decision here.
   (localStorage key `aw.layout`, `apps/web/src/layoutStore.ts`), the same for every world; panels
   are capped at 60% of the space around the map, so a size saved on a big screen can't squeeze
   the map on a smaller one.
-
+- **2026-10-09 — Faster map rendering (owner request).** Measured first with a new benchmark,
+  `npm run bench:render` (`tests/perf/bench-render.mjs`: 150 adults + 100 children on the huge map,
+  headless Chromium; its frames per second are meaningless because it draws in software, so
+  compare JavaScript time per frame and per map update). The renderer is split into layers
+  (`ground.ts`, `objectLayer.ts`, `people.ts`; `renderer.ts` keeps scene, camera, input, effects).
+  Map changes no longer rebuild the scene: ground chunks are painted onto canvases and only
+  changed chunks repainted; map objects are diffed by id and look; the page fetches only the map
+  (`GET /api/worlds/:id/map`), one request at a time. Per frame: camera input only moves the
+  camera and the work runs once per animation frame; ground, world and overlay are separate Pixi
+  render groups; people's depth is their tile row (exact against objects, which sit on row
+  boundaries; two walkers in one row may overlap in either order); each layer culls itself
+  (Pixi's culler and pointer events are off); people off screen skip labels and bubbles. The
+  people list and timeline re-render only changed rows. Screenshots at the same tick and camera
+  match the old renderer (walking-frame timing aside). Plan and measurements:
+  [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md); ground, objects, lists and
+  map fetch were built by parallel workers, then reviewed and integrated.
+- **2026-10-09 — Crash fix:** clearing land for a field or building no longer crashes the helper when
+  someone is gathering from or chopping a bush or tree that the clearing removed; they fail the
+  action and remember why.
 - **2026-10-09 — Ask about a villager (owner request).** Every person's inspector has an **Ask
   about …** section: the owner asks a question about a period of their life (last hour … whole
   life, or any custom range back to their birth or arrival) and the person's **own brain** (same

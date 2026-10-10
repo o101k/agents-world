@@ -1,15 +1,4 @@
-import {
-  Application,
-  Container,
-  CullerPlugin,
-  Graphics,
-  Rectangle,
-  Sprite,
-  Text,
-  Texture,
-  TextureStyle,
-  extensions,
-} from 'pixi.js';
+import { Application, Container, Graphics, Rectangle, Texture, TextureStyle } from 'pixi.js';
 import {
   Tile,
   objectContains,
@@ -18,7 +7,6 @@ import {
   type ActiveCondition,
   type AgentView,
   type Season,
-  type MapObject,
   type Point,
   type WorldMap,
 } from '@aw/shared';
@@ -32,91 +20,20 @@ import {
   zoomAt,
   type Camera,
 } from './camera.ts';
-import {
-  CHARACTER_FRAMES,
-  CHARACTER_PX,
-  HOUSE_VARIANTS,
-  TILE_PX,
-  buildAtlas,
-  characterCanvas,
-  type SpriteName,
-} from './pixelArt.ts';
-import { BUBBLE_TAIL, interiorSpots, layoutBubbles, type BubbleRequest } from './layout.ts';
+import { GroundLayer, type ViewRect } from './ground.ts';
+import { hash } from './hash.ts';
+import { ObjectLayer } from './objectLayer.ts';
+import { PeopleLayer } from './people.ts';
+import { TILE_PX, buildAtlas, type SpriteName } from './pixelArt.ts';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
-extensions.add(CullerPlugin);
 
-const CHUNK = 32;
 const DRAG_THRESHOLD = 4;
-/** Alpha of a sprite drawn in front of a person (roof, tree canopy) so they stay visible. */
-const OCCLUDER_ALPHA = 0.4;
-/** Alpha of a building without a cutaway sprite while someone is inside. */
-const SEE_THROUGH_ALPHA = 0.45;
 
 export type MapSelection =
   | { kind: 'agent'; id: string }
   | { kind: 'object'; id: string; tile: Point }
   | { kind: 'tile'; tile: Point; tileType: Tile };
-
-function hash(x: number, y: number): number {
-  let h = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0;
-  h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
-  return (h ^ (h >>> 13)) >>> 0;
-}
-
-function hashString(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
-/** A map object's sprite plus what's needed to fade it and swap it for its open version. */
-interface ObjEntry {
-  sprite: Sprite;
-  obj: MapObject;
-  /** Drawn rectangle in world pixels. */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  z: number;
-  /** Alpha before any fading (burnt or under construction). */
-  baseAlpha: number;
-  normal: Texture;
-  open: Texture | null;
-  inside: boolean;
-  occluding: boolean;
-}
-
-interface AgentSprite {
-  /** Current label colour (to avoid restyling every frame). */
-  labelFill?: string;
-  view: AgentView;
-  sprite: Sprite;
-  frames: Texture[];
-  lookKey: string;
-  label: Text;
-  zzz: Text;
-  bubble: Container;
-  bubbleText: Text;
-  bubbleBg: Graphics;
-  bubbleTail: Graphics;
-  bubbleFor: string;
-  tailKey?: string;
-  bubbleW: number;
-  bubbleH: number;
-  /** Set while inside a building: draw just in front of it. */
-  indoorZ?: number;
-  /** Displayed position in world pixels (bottom-centre of the feet). */
-  from: Point;
-  to: Point;
-  shown: Point;
-  moveStart: number;
-  moveDuration: number;
-  grave: Sprite | null;
-  /** Smaller for children. */
-  baseScale: number;
-}
 
 /** Night darkness (0–1) and tint for an in-game time. */
 export function nightLevel(tick: number): number {
@@ -128,9 +45,18 @@ export function nightLevel(tick: number): number {
   return 0;
 }
 
+/** What the layers need once the Pixi app and the sprite atlas exist. */
+interface Layers {
+  ground: GroundLayer;
+  objects: ObjectLayer;
+  people: PeopleLayer;
+}
+
 /**
  * Draws a world with PixiJS and handles camera input (drag to pan, wheel/pinch to zoom, click to
  * select). Renders on demand; animates only while something is moving or being followed.
+ * The ground, the map's objects and the people are drawn by their own layers (ground.ts,
+ * objectLayer.ts, people.ts); this class owns the scene, the camera, input and effects.
  */
 export class WorldRenderer {
   onSelect: ((sel: MapSelection | null) => void) | null = null;
@@ -139,8 +65,23 @@ export class WorldRenderer {
 
   private readonly app = new Application();
   private readonly scene = new Container();
-  private readonly ground = new Container();
-  private readonly objects = new Container({ sortableChildren: true });
+  /**
+   * The world above the ground is drawn in three layers, each its own render group: map objects
+   * that fit inside their footprint (and graves), then people, then objects that rise above
+   * their footprint (trees, stalls). Someone can only overlap an object of the first kind from
+   * in front of it (or in its doorway or room) and an object of the second kind from behind it,
+   * so this order is the depth order without sorting people against 8,000 trees. The object
+   * layers never change while people move, so Pixi builds their draw lists once per map; only
+   * the people layer is re-sorted as people cross tile rows. (See docs/DESIGN.md, Rendering.)
+   */
+  private readonly under = new Container({ sortableChildren: true, isRenderGroup: true });
+  private readonly people = new Container({ sortableChildren: true, isRenderGroup: true });
+  private readonly over = new Container({ sortableChildren: true, isRenderGroup: true });
+  /** Gravestones: drawn last in the under layer (a grave can lie on a field being cleared). */
+  private readonly graves = new Container({
+    sortableChildren: true,
+    zIndex: Number.MAX_SAFE_INTEGER,
+  });
   private readonly night = new Graphics();
   /** Flames on burning buildings (world space, above objects). */
   private readonly fires = new Graphics();
@@ -150,30 +91,30 @@ export class WorldRenderer {
   private season: Season = 'spring';
   private readonly hoverBox = new Graphics();
   private readonly selectBox = new Graphics();
-  private readonly overlay = new Container();
-  private textures: Record<SpriteName, Texture> | null = null;
+  /** Screen-space labels and speech bubbles. */
+  private readonly overlay = new Container({ isRenderGroup: true });
+  private layers: Layers | null = null;
   private map: WorldMap | null = null;
-  private objectSprites = new Map<string, Sprite>();
-  private objectEntries = new Map<string, ObjEntry>();
-  /** Object entries bucketed by the tiles their drawn rectangle touches. */
-  private objectGrid = new Map<number, ObjEntry[]>();
-  private occluding = new Set<ObjEntry>();
-  /** Living people inside each building (by building id). */
-  private occupancy = new Map<string, number>();
-  private agents = new Map<string, AgentSprite>();
+  /** Resource amounts by object id, kept until the layers exist. */
   private resources: Record<string, number> = {};
   private tick = 0;
   private cam: Camera = { x: 0, y: 0, zoom: 2 };
   private host: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private renderQueued = false;
+  /** The camera moved or the map changed since the last cull. */
+  private viewDirty = true;
+  /** What the night/season/weather tint was last drawn for. */
+  private tintKey = '';
+  /** What the selection outline was last drawn for. */
+  private selectionKey = '';
+  private effectsDrawn = false;
   private animating = false;
   private ready = false;
   private destroyed = false;
   private selected: MapSelection | null = null;
   private hovered: Point | null = null;
   private followId: string | null = null;
-  private lastAgentsAt = 0;
   private drag: { id: number; sx: number; sy: number; cam: Camera; moved: boolean } | null = null;
   private readonly cleanup: (() => void)[] = [];
 
@@ -188,6 +129,9 @@ export class WorldRenderer {
       resolution: window.devicePixelRatio || 1,
       autoStart: false,
       preference: 'webgl',
+      // Input is handled with DOM listeners (bindInput): skip Pixi's per-move hit-testing.
+      eventMode: 'none',
+      eventFeatures: { move: false, globalMove: false, click: false, wheel: false },
     });
     if (this.destroyed) {
       this.app.destroy(true, { children: true });
@@ -201,16 +145,28 @@ export class WorldRenderer {
 
     const atlas = buildAtlas();
     const base = Texture.from(atlas.canvas);
-    this.textures = Object.fromEntries(
+    const textures = Object.fromEntries(
       Object.entries(atlas.frames).map(([name, f]) => [
         name,
         new Texture({ source: base.source, frame: new Rectangle(f.x, f.y, f.w, f.h) }),
       ]),
     ) as Record<SpriteName, Texture>;
+    const ground = new GroundLayer(atlas, textures);
+    ground.container.isRenderGroup = true;
+    const objects = new ObjectLayer(this.under, this.over, textures);
+    objects.setResources(this.resources);
+    this.under.addChild(this.graves);
+    this.layers = {
+      ground,
+      objects,
+      people: new PeopleLayer(this.people, this.graves, this.overlay, textures),
+    };
 
     this.scene.addChild(
-      this.ground,
-      this.objects,
+      ground.container,
+      this.under,
+      this.people,
+      this.over,
       this.fires,
       this.night,
       this.hoverBox,
@@ -222,7 +178,7 @@ export class WorldRenderer {
     this.resizeObserver.observe(host);
     this.bindInput(this.app.canvas);
     this.ready = true;
-    if (this.map) this.buildScene();
+    if (this.map) this.buildScene(false);
   }
 
   /** Show a map. `keepCamera` for live updates (e.g. a house going up) so the view doesn't jump. */
@@ -254,10 +210,7 @@ export class WorldRenderer {
     this.conditions = conditions;
     this.drawNight();
     if (this.hasMotion()) this.startAnimating();
-    else {
-      this.fires.clear();
-      this.rain.clear();
-    }
+    else this.drawEffects(performance.now());
     this.requestRender();
   }
 
@@ -272,146 +225,16 @@ export class WorldRenderer {
 
   setResources(changes: Record<string, number>): void {
     Object.assign(this.resources, changes);
-    const tex = this.textures;
-    if (!tex) return;
-    for (const id of Object.keys(changes)) {
-      const s = this.objectSprites.get(id);
-      if (s && id.startsWith('berry_bush'))
-        s.texture = (changes[id] ?? 0) >= 1 ? tex.berry_bush : tex.berry_bush_empty;
-    }
+    if (!this.layers) return;
+    this.layers.objects.setResources(changes);
     this.requestRender();
   }
 
   setAgents(views: AgentView[]): void {
-    if (!this.ready || !this.textures) return;
-    const now = performance.now();
-    const interval = this.lastAgentsAt ? Math.min(1000, Math.max(50, now - this.lastAgentsAt)) : 0;
-    this.lastAgentsAt = now;
-    const seen = new Set<string>();
-    const spots = this.indoorPlacement(views);
-    for (const v of views) {
-      seen.add(v.id);
-      let a = this.agents.get(v.id);
-      const spot = spots.get(v.id);
-      const target = spot
-        ? { x: spot.x, y: spot.y }
-        : { x: (v.x + 0.5) * TILE_PX, y: (v.y + 1) * TILE_PX - 1 };
-      if (!a) {
-        a = this.createAgentSprite(v, target);
-        this.agents.set(v.id, a);
-      }
-      const lookKey = JSON.stringify(v.appearance);
-      if (lookKey !== a.lookKey) this.retexture(a, v);
-      const moved = target.x !== a.to.x || target.y !== a.to.y;
-      if (moved) {
-        const far = Math.abs(target.x - a.shown.x) + Math.abs(target.y - a.shown.y) > TILE_PX * 6;
-        a.from = far || interval === 0 ? { ...target } : { ...a.shown };
-        a.to = target;
-        a.moveStart = now;
-        a.moveDuration = far ? 0 : interval;
-      }
-      if (a.label.text !== v.name) a.label.text = v.name; // e.g. a baby was named
-      a.view = v;
-      a.indoorZ = spot?.z;
-      this.styleAgent(a);
-    }
-    for (const [id, a] of this.agents) {
-      if (!seen.has(id)) {
-        a.sprite.destroy();
-        a.label.destroy();
-        a.zzz.destroy();
-        a.bubble.destroy({ children: true });
-        a.grave?.destroy();
-        this.agents.delete(id);
-      }
-    }
+    const layers = this.layers;
+    if (!this.ready || !layers) return;
+    layers.people.setAgents(views, layers.objects.placeIndoors(views));
     this.startAnimating();
-  }
-
-  /**
-   * People inside a building stand on distinct spots in its room (sorted by id, so nobody
-   * shuffles between updates). Also records which buildings are occupied and opens them up.
-   */
-  private indoorPlacement(views: AgentView[]): Map<string, Point & { z: number }> {
-    const out = new Map<string, Point & { z: number }>();
-    const groups = new Map<string, AgentView[]>();
-    for (const v of views) {
-      if (!v.alive || !v.indoors) continue;
-      let id = v.indoorsId;
-      if (!id || !this.objectEntries.has(id)) {
-        // Older frames: find the home whose door this person is standing on.
-        id = this.map?.objects.find(
-          (o) => o.kind === 'house' && o.door && o.door.x === v.x && o.door.y === v.y,
-        )?.id;
-      }
-      if (!id || !this.objectEntries.has(id)) continue;
-      const list = groups.get(id);
-      if (list) list.push(v);
-      else groups.set(id, [v]);
-    }
-    this.occupancy = new Map();
-    for (const [id, list] of groups) {
-      const e = this.objectEntries.get(id)!;
-      list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const pts = interiorSpots(e.obj, list.length);
-      list.forEach((v, i) => out.set(v.id, { ...pts[i]!, z: e.z + 1 }));
-      this.occupancy.set(id, list.length);
-    }
-    this.applyOccupancy();
-    return out;
-  }
-
-  /** Occupied houses show their cutaway; other buildings turn see-through. */
-  private applyOccupancy(): void {
-    for (const e of this.objectEntries.values()) {
-      const inside = (this.occupancy.get(e.obj.id) ?? 0) > 0;
-      if (inside !== e.inside) {
-        e.inside = inside;
-        this.refreshEntry(e);
-      }
-    }
-  }
-
-  private refreshEntry(e: ObjEntry): void {
-    const tex = e.inside && e.open ? e.open : e.normal;
-    if (e.sprite.texture !== tex) e.sprite.texture = tex;
-    let alpha = e.baseAlpha;
-    if (e.inside && !e.open) alpha = Math.min(alpha, SEE_THROUGH_ALPHA);
-    if (e.occluding) alpha = Math.min(alpha, OCCLUDER_ALPHA);
-    if (e.sprite.alpha !== alpha) e.sprite.alpha = alpha;
-  }
-
-  /** Fade whatever is drawn in front of a person (roofs, tree canopies) so nobody is hidden. */
-  private updateOccluders(): void {
-    const next = new Set<ObjEntry>();
-    for (const a of this.agents.values()) {
-      if (!a.view.alive) continue;
-      const z = a.sprite.zIndex;
-      const px = a.shown.x;
-      const py = a.shown.y;
-      const x0 = px - 7;
-      const x1 = px + 7;
-      const y0 = py - 16;
-      const y1 = py;
-      for (let ty = Math.floor(y0 / TILE_PX); ty <= Math.floor(y1 / TILE_PX); ty++)
-        for (let tx = Math.floor(x0 / TILE_PX); tx <= Math.floor(x1 / TILE_PX); tx++) {
-          const list = this.objectGrid.get(ty * 100000 + tx);
-          if (!list) continue;
-          for (const e of list)
-            if (e.z > z && e.x < x1 && e.x + e.w > x0 && e.y < y1 && e.y + e.h > y0) next.add(e);
-        }
-    }
-    for (const e of this.occluding)
-      if (!next.has(e)) {
-        e.occluding = false;
-        this.refreshEntry(e);
-      }
-    for (const e of next)
-      if (!e.occluding) {
-        e.occluding = true;
-        this.refreshEntry(e);
-      }
-    this.occluding = next;
   }
 
   setFollow(id: string | null): void {
@@ -425,7 +248,7 @@ export class WorldRenderer {
     this.drawSelection();
     if (focus && sel) {
       if (sel.kind === 'agent') {
-        const a = this.agents.get(sel.id);
+        const a = this.layers?.people.agents.get(sel.id);
         if (a)
           this.setCamera(
             centerOn(a.to.x, a.to.y - 8, Math.max(this.cam.zoom, 3), this.screenSize()),
@@ -475,296 +298,28 @@ export class WorldRenderer {
     if (!this.ready) return; // init() finishes the teardown
     this.resizeObserver?.disconnect();
     for (const fn of this.cleanup) fn();
-    for (const a of this.agents.values()) for (const t of a.frames) t.destroy(true);
+    this.layers?.people.destroy();
     this.app.destroy(true, { children: true, texture: true, textureSource: true });
   }
 
   // ------------------------------------------------------------------ scene
 
-  private buildScene(keepCamera = false): void {
+  /** Builds the scene, timed as 'aw:setMap' in the browser's performance timeline. */
+  private buildScene(keepCamera: boolean): void {
     const map = this.map;
-    const tex = this.textures;
-    if (!map || !tex) return;
-    this.ground.removeChildren().forEach((c) => c.destroy({ children: true }));
-    for (const s of this.objectSprites.values()) s.destroy();
-    this.objectSprites.clear();
-    this.objectEntries.clear();
-    this.objectGrid.clear();
-    this.occluding.clear();
-
-    const fieldTiles = new Set<number>();
-    for (const o of map.objects) {
-      if (o.kind !== 'field') continue;
-      for (let y = o.y; y < o.y + o.h; y++)
-        for (let x = o.x; x < o.x + o.w; x++) fieldTiles.add(y * map.width + x);
-    }
-    const isWet = (x: number, y: number) => {
-      const t = tileAt(map, x, y);
-      return t === undefined || t === Tile.Water || t === Tile.Bridge;
-    };
-
-    for (let cy = 0; cy < map.height; cy += CHUNK) {
-      for (let cx = 0; cx < map.width; cx += CHUNK) {
-        const chunk = new Container({ cullable: true, cullableChildren: false });
-        const cw = Math.min(CHUNK, map.width - cx);
-        const ch = Math.min(CHUNK, map.height - cy);
-        chunk.cullArea = new Rectangle(cx * TILE_PX, cy * TILE_PX, cw * TILE_PX, ch * TILE_PX);
-        for (let y = cy; y < cy + ch; y++) {
-          for (let x = cx; x < cx + cw; x++) {
-            const t = map.tiles[y * map.width + x] as Tile;
-            const h = hash(x, y);
-            const put = (name: SpriteName) => {
-              const s = new Sprite(tex[name]);
-              s.position.set(x * TILE_PX, y * TILE_PX);
-              chunk.addChild(s);
-            };
-            switch (t) {
-              case Tile.Grass: {
-                const r = h % 100;
-                put(r < 45 ? 'grass0' : r < 80 ? 'grass1' : r < 92 ? 'grass2' : 'grass3');
-                break;
-              }
-              case Tile.Water:
-                put(h % 2 ? 'water0' : 'water1');
-                if (!isWet(x, y - 1)) put('foam_n');
-                if (!isWet(x + 1, y)) put('foam_e');
-                if (!isWet(x, y + 1)) put('foam_s');
-                if (!isWet(x - 1, y)) put('foam_w');
-                break;
-              case Tile.Sand:
-                put(h % 2 ? 'sand0' : 'sand1');
-                break;
-              case Tile.Path:
-                put(h % 2 ? 'path0' : 'path1');
-                break;
-              case Tile.Farmland:
-                put('farmland');
-                if (fieldTiles.has(y * map.width + x)) put('crops');
-                break;
-              case Tile.Bridge:
-                put('bridge');
-                break;
-            }
-          }
-        }
-        // The ground never changes between map reloads: draw each chunk once into a texture
-        // (one sprite instead of ~1,000 per chunk; matters on big maps).
-        chunk.cacheAsTexture({ scaleMode: 'nearest', resolution: 1 });
-        this.ground.addChild(chunk);
-      }
-    }
-
-    for (const o of map.objects) {
-      const name = this.spriteFor(o);
-      if (!name) continue;
-      const s = new Sprite(tex[name]);
-      s.cullable = true;
-      const bottom = (o.y + o.h) * TILE_PX;
-      s.position.set(o.x * TILE_PX, bottom - s.texture.frame.height);
-      s.zIndex = bottom;
-      let baseAlpha = 1;
-      if (o.burntTick !== undefined) {
-        // A burnt-out ruin, blackened until rebuilt.
-        baseAlpha = 0.55 + 0.45 * (o.progress ?? 0);
-        s.tint = 0x5a4a40;
-      } else if (o.progress !== undefined && o.kind !== 'field') {
-        // Under construction: fades in as the work progresses.
-        baseAlpha = 0.3 + 0.6 * o.progress;
-        s.tint = 0xd8c8a8;
-      } else if (o.stone) {
-        // Stone buildings read as cool grey.
-        s.tint = 0xc8d4dc;
-      }
-      s.alpha = baseAlpha;
-      this.objects.addChild(s);
-      this.objectSprites.set(o.id, s);
-      const openName =
-        o.kind === 'house'
-          ? (`house_open${hashString(o.id) % HOUSE_VARIANTS}` as SpriteName)
-          : null;
-      const entry: ObjEntry = {
-        sprite: s,
-        obj: o,
-        x: s.position.x,
-        y: s.position.y,
-        w: s.texture.frame.width,
-        h: s.texture.frame.height,
-        z: bottom,
-        baseAlpha,
-        normal: s.texture,
-        open: openName ? tex[openName] : null,
-        inside: false,
-        occluding: false,
-      };
-      this.objectEntries.set(o.id, entry);
-      // Bucket by tile (only things that can stand in front of someone: tall or wide sprites).
-      for (
-        let ty = Math.floor(entry.y / TILE_PX);
-        ty <= Math.floor((entry.y + entry.h - 1) / TILE_PX);
-        ty++
-      )
-        for (
-          let tx = Math.floor(entry.x / TILE_PX);
-          tx <= Math.floor((entry.x + entry.w - 1) / TILE_PX);
-          tx++
-        ) {
-          const key = ty * 100000 + tx;
-          const list = this.objectGrid.get(key);
-          if (list) list.push(entry);
-          else this.objectGrid.set(key, [entry]);
-        }
-    }
-    this.setResources({ ...this.resources });
-    this.applyOccupancy();
-    for (const a of this.agents.values()) {
-      this.objects.addChild(a.sprite);
-      if (a.grave) this.objects.addChild(a.grave);
-    }
+    const layers = this.layers;
+    if (!map || !layers) return;
+    const start = performance.now();
+    layers.ground.setMap(map);
+    layers.objects.setMap(map);
+    this.viewDirty = true;
 
     if (!keepCamera) this.cam = fitCamera(this.worldSize(), this.screenSize());
     this.drawNight();
     this.drawSelection();
     this.drawHover();
     this.applyCamera();
-  }
-
-  private spriteFor(o: MapObject): SpriteName | null {
-    const h = hashString(o.id);
-    switch (o.kind) {
-      case 'tree':
-        return h % 5 === 0 ? 'pine' : (`tree${h % 3}` as SpriteName);
-      case 'house':
-        return `house${h % HOUSE_VARIANTS}` as SpriteName;
-      case 'field':
-        // Finished fields are drawn as ground tiles; one still being cleared is bare dirt.
-        return o.progress !== undefined ? 'plot' : null;
-      case 'berry_bush':
-        return (this.resources[o.id] ?? 1) >= 1 ? 'berry_bush' : 'berry_bush_empty';
-      default:
-        return o.kind;
-    }
-  }
-
-  // ------------------------------------------------------------------ people
-
-  private createAgentSprite(v: AgentView, at: Point): AgentSprite {
-    const sprite = new Sprite();
-    sprite.anchor.set(0.5, 1);
-    sprite.cullable = true;
-    this.objects.addChild(sprite);
-    const label = new Text({
-      text: v.name,
-      style: {
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-        fontSize: 11,
-        fontWeight: '600',
-        fill: '#ffffff',
-        stroke: { color: '#0b0f14', width: 3 },
-      },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
-    });
-    label.anchor.set(0.5, 1);
-    const zzz = new Text({
-      text: 'z z',
-      style: {
-        fontFamily: 'ui-monospace, monospace',
-        fontSize: 10,
-        fontWeight: '700',
-        fill: '#cfe3ff',
-        stroke: { color: '#0b0f14', width: 3 },
-      },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
-    });
-    zzz.anchor.set(0, 1);
-    const bubble = new Container();
-    const bubbleBg = new Graphics();
-    const bubbleTail = new Graphics();
-    const bubbleText = new Text({
-      text: '',
-      style: {
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-        fontSize: 12,
-        fill: '#1a1a1a',
-        wordWrap: true,
-        wordWrapWidth: 200,
-        lineHeight: 15,
-      },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
-    });
-    bubble.addChild(bubbleBg, bubbleTail, bubbleText);
-    bubble.visible = false;
-    this.overlay.addChild(bubble, label, zzz);
-    const a: AgentSprite = {
-      view: v,
-      sprite,
-      frames: [],
-      lookKey: '',
-      label,
-      zzz,
-      bubble,
-      bubbleText,
-      bubbleBg,
-      bubbleTail,
-      bubbleFor: '',
-      bubbleW: 0,
-      bubbleH: 0,
-      from: { ...at },
-      to: { ...at },
-      shown: { ...at },
-      moveStart: 0,
-      moveDuration: 0,
-      grave: null,
-      baseScale: 1,
-    };
-    this.retexture(a, v);
-    return a;
-  }
-
-  private retexture(a: AgentSprite, v: AgentView): void {
-    for (const t of a.frames) t.destroy(true);
-    const canvas = characterCanvas(v.appearance);
-    const base = Texture.from(canvas);
-    a.frames = Array.from(
-      { length: CHARACTER_FRAMES },
-      (_, i) =>
-        new Texture({
-          source: base.source,
-          frame: new Rectangle(i * CHARACTER_PX, 0, CHARACTER_PX, CHARACTER_PX),
-        }),
-    );
-    a.lookKey = JSON.stringify(v.appearance);
-    a.sprite.texture = a.frames[0]!;
-  }
-
-  private styleAgent(a: AgentSprite): void {
-    const v = a.view;
-    if (!v.alive) {
-      a.sprite.visible = false;
-      if (!a.grave && this.textures) {
-        a.grave = new Sprite(this.textures.grave);
-        a.grave.anchor.set(0.5, 1);
-        a.grave.position.set(a.to.x, a.to.y + 1);
-        a.grave.zIndex = a.to.y;
-        this.objects.addChild(a.grave);
-      }
-      return;
-    }
-    a.sprite.visible = true; // nobody is ever hidden: people indoors are drawn in the open room
-    a.baseScale =
-      v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
-    const sleeping = v.activity === 'sleeping';
-    // The sick look pale and greenish.
-    a.sprite.tint = v.sick ? 0xb8e0a0 : 0xffffff;
-    a.sprite.rotation = sleeping ? -Math.PI / 2 : 0;
-    a.sprite.anchor.set(sleeping ? 0.5 : 0.5, sleeping ? 0.6 : 1);
-  }
-
-  private frameFor(a: AgentSprite, moving: boolean, now: number): Texture {
-    const step = moving ? Math.floor(now / 160) % 2 : 0;
-    const dir = a.view.facing;
-    const base = dir === 'up' ? 2 : dir === 'down' ? 0 : 4;
-    a.sprite.scale.set(dir === 'left' ? -a.baseScale : a.baseScale, a.baseScale);
-    return a.frames[base + step] ?? a.frames[0]!;
+    performance.measure('aw:setMap', { start });
   }
 
   private startAnimating(): void {
@@ -772,88 +327,69 @@ export class WorldRenderer {
     this.animating = true;
     const loop = () => {
       if (this.destroyed) return;
-      const busy = this.animate(performance.now());
-      this.app.render();
+      const busy = this.frame(performance.now());
       if (busy || this.followId || this.hasMotion()) requestAnimationFrame(loop);
       else this.animating = false;
     };
     requestAnimationFrame(loop);
   }
 
-  /** Move sprites toward their targets; returns true while anything is still moving. */
-  private animate(now: number): boolean {
-    let busy = false;
-    const showLabels = this.cam.zoom >= 2;
-    const bubbles: BubbleRequest[] = [];
-    const labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[] = [];
-    for (const [id, a] of this.agents) {
-      const t = a.moveDuration > 0 ? Math.min(1, (now - a.moveStart) / a.moveDuration) : 1;
-      a.shown = { x: a.from.x + (a.to.x - a.from.x) * t, y: a.from.y + (a.to.y - a.from.y) * t };
-      const moving = t < 1;
-      if (moving) busy = true;
-      if (a.view.alive) {
-        a.sprite.position.set(a.shown.x, a.shown.y);
-        // +2 so someone standing in a doorway draws in front of their house; people inside
-        // are drawn just in front of their (open) building.
-        a.sprite.zIndex = a.indoorZ ?? a.shown.y + 2;
-        if (a.frames.length)
-          a.sprite.texture = this.frameFor(a, moving || a.view.activity === 'walking', now);
-        if (a.view.activity === 'walking') busy = true;
-      }
-      const selected = this.selected?.kind === 'agent' && this.selected.id === id;
-      const visible = a.view.alive;
-      const screen = this.toScreen(a.shown.x, a.shown.y - 17);
-      a.label.visible = visible && (showLabels || selected);
-      a.label.position.set(Math.round(screen.x), Math.round(screen.y));
-      // Only touch text styles when they change (restyling re-renders the text).
-      const fill = selected ? '#ffd84a' : '#ffffff';
-      if (a.labelFill !== fill) {
-        a.labelFill = fill;
-        a.label.style.fill = fill;
-      }
-      const thinking = a.view.activity === 'thinking';
-      a.zzz.visible =
-        visible && (a.view.activity === 'sleeping' || thinking) && this.cam.zoom >= 1.5;
-      const marker = thinking ? '…' : 'z z';
-      if (a.zzz.text !== marker) a.zzz.text = marker;
-      a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
-      if (a.label.visible)
-        labels.push({
-          owner: id,
-          rect: {
-            x: screen.x - a.label.width / 2,
-            y: screen.y - a.label.height,
-            w: a.label.width,
-            h: a.label.height,
-          },
-        });
-      const req = this.prepareBubble(a, visible && (this.cam.zoom >= 1.5 || selected), screen);
-      if (req) bubbles.push(req);
-    }
-    this.placeBubbles(bubbles, labels);
-    this.updateOccluders();
+  /** Updates everything for one animation frame and draws it; true while anything moves. */
+  private frame(now: number): boolean {
+    const layers = this.layers;
+    if (!layers) return false;
     if (this.followId) {
-      const a = this.agents.get(this.followId);
+      // Follow the person where they will be drawn this frame.
+      const a = layers.people.agents.get(this.followId);
       if (a) {
-        const { width, height } = this.screenSize();
-        const target = centerOn(a.shown.x, a.shown.y - 8, this.cam.zoom, { width, height });
+        const p = layers.people.positionAt(a, now);
+        const target = centerOn(p.x, p.y - 8, this.cam.zoom, this.screenSize());
         this.cam = clampCamera(target, this.worldSize(), this.screenSize());
         this.applyTransform();
+        this.viewDirty = true;
       }
+    }
+    const selectedId = this.selected?.kind === 'agent' ? this.selected.id : null;
+    const busy = layers.people.animate(now, this.cam, this.screenSize(), selectedId);
+    layers.objects.updateOccluders(layers.people.standing());
+    if (this.viewDirty) {
+      this.viewDirty = false;
+      const view = this.viewRect();
+      layers.ground.cull(view);
     }
     this.drawSelection();
     this.drawEffects(now);
+    this.app.render();
     return busy;
+  }
+
+  /** The part of the world on screen, in world pixels. */
+  private viewRect(): ViewRect {
+    const { width, height } = this.screenSize();
+    return {
+      x0: this.cam.x,
+      y0: this.cam.y,
+      x1: this.cam.x + width / this.cam.zoom,
+      y1: this.cam.y + height / this.cam.zoom,
+    };
   }
 
   /** Flickering flames on burning buildings and rain streaks in a storm. */
   private drawEffects(now: number): void {
+    if (!this.map || !this.layers || this.conditions.length === 0) {
+      if (this.effectsDrawn) {
+        this.fires.clear();
+        this.rain.clear();
+        this.effectsDrawn = false;
+      }
+      return;
+    }
     const f = this.fires.clear();
     const r = this.rain.clear();
-    if (!this.map || this.conditions.length === 0) return;
+    this.effectsDrawn = true;
     for (const c of this.conditions) {
       if (c.kind !== 'fire' || !c.targetId) continue;
-      const o = this.map.objects.find((x) => x.id === c.targetId);
+      const o = this.layers.objects.object(c.targetId);
       if (!o) continue;
       const left = o.x * TILE_PX;
       const width = o.w * TILE_PX;
@@ -898,65 +434,6 @@ export class WorldRenderer {
     }
   }
 
-  /** Sizes a person's speech bubble (cached per text); null when they aren't talking. */
-  private prepareBubble(a: AgentSprite, show: boolean, screen: Point): BubbleRequest | null {
-    const speech = a.view.speech ?? '';
-    if (!speech || !show) {
-      a.bubble.visible = false;
-      return null;
-    }
-    if (a.bubbleFor !== speech) {
-      a.bubbleFor = speech;
-      a.bubbleText.text = speech.length > 140 ? `${speech.slice(0, 137)}…` : speech;
-      const w = Math.ceil(a.bubbleText.width + 12);
-      const h = Math.ceil(a.bubbleText.height + 8);
-      a.bubbleW = w;
-      a.bubbleH = h;
-      a.bubbleText.position.set(6, 4);
-      a.bubbleBg
-        .clear()
-        .roundRect(0, 0, w, h, 6)
-        .fill({ color: 0xfffbe8, alpha: 0.95 })
-        .stroke({ width: 1, color: 0x1a1a1a, alpha: 0.6 });
-      a.tailKey = undefined;
-    }
-    // The tail points at the head: just above the name label when it's showing.
-    const tipY = a.label.visible ? screen.y - a.label.height - 1 : screen.y + 2;
-    return { id: a.view.id, anchor: { x: screen.x, y: tipY }, w: a.bubbleW, h: a.bubbleH };
-  }
-
-  /** Lays out every visible bubble together so none overlap, then draws each tail to its speaker. */
-  private placeBubbles(
-    requests: BubbleRequest[],
-    labels: { owner: string; rect: { x: number; y: number; w: number; h: number } }[],
-  ): void {
-    if (requests.length === 0) return;
-    const spots = layoutBubbles(requests, labels);
-    for (const r of requests) {
-      const a = this.agents.get(r.id);
-      const at = spots.get(r.id);
-      if (!a || !at) continue;
-      a.bubble.visible = true;
-      a.bubble.position.set(at.x, at.y);
-      const tipX = Math.round(r.anchor.x - at.x);
-      const tipY = Math.round(r.anchor.y - at.y);
-      const baseX = Math.min(Math.max(tipX, 10), r.w - 10);
-      const key = `${tipX},${tipY},${baseX}`;
-      if (a.tailKey === key) continue;
-      a.tailKey = key;
-      a.bubbleTail
-        .clear()
-        .moveTo(baseX - 5, r.h - 0.5)
-        .lineTo(tipX, Math.max(tipY, r.h + BUBBLE_TAIL * 0.5))
-        .lineTo(baseX + 5, r.h - 0.5)
-        .fill({ color: 0xfffbe8, alpha: 0.95 });
-    }
-  }
-
-  private toScreen(wx: number, wy: number): Point {
-    return { x: (wx - this.cam.x) * this.cam.zoom, y: (wy - this.cam.y) * this.cam.zoom };
-  }
-
   private breakFollow(): void {
     if (this.followId) {
       this.followId = null;
@@ -969,7 +446,8 @@ export class WorldRenderer {
   private screenSize() {
     const r = this.app.renderer;
     if (!r) return { width: 1, height: 1 };
-    return { width: r.width / r.resolution, height: r.height / r.resolution };
+    // `screen` is in CSS pixels whatever the device pixel ratio (renderer.width is already CSS).
+    return { width: r.screen.width, height: r.screen.height };
   }
 
   private worldSize() {
@@ -989,11 +467,14 @@ export class WorldRenderer {
     );
   }
 
+  /**
+   * Moves the view. The per-person work and drawing happen once in the next animation frame,
+   * however many pan or zoom events arrive before it.
+   */
   private applyCamera(): void {
     this.applyTransform();
-    this.drawSelection();
+    this.viewDirty = true;
     this.drawHover();
-    this.animate(performance.now());
     this.requestRender();
   }
 
@@ -1002,10 +483,7 @@ export class WorldRenderer {
     this.renderQueued = true;
     requestAnimationFrame(() => {
       this.renderQueued = false;
-      if (!this.destroyed) {
-        this.animate(performance.now());
-        this.app.render();
-      }
+      if (!this.destroyed) this.frame(performance.now());
     });
   }
 
@@ -1016,13 +494,21 @@ export class WorldRenderer {
       Math.max(1, this.host.clientHeight),
     );
     this.setCamera(this.cam);
+    // Resizing clears the canvas, and ResizeObserver runs after this frame's animation callbacks,
+    // so draw now rather than leave a blank (black) frame on screen.
+    if (this.ready && this.layers) this.frame(performance.now());
   }
 
   private drawNight(): void {
-    const g = this.night.clear();
-    if (!this.map) return;
     const { width, height } = this.worldSize();
     const level = nightLevel(this.tick);
+    const key = this.map
+      ? `${level}|${this.season}|${this.level('storm')}|${this.level('drought')}|${width}|${height}`
+      : '';
+    if (key === this.tintKey) return; // the clock is set on every update; redraw only on change
+    this.tintKey = key;
+    const g = this.night.clear();
+    if (!this.map) return;
     if (level > 0) g.rect(0, 0, width, height).fill({ color: 0x0b1640, alpha: 0.5 * level });
     if (this.season === 'winter')
       g.rect(0, 0, width, height).fill({ color: 0xdfe8f5, alpha: 0.28 });
@@ -1036,20 +522,31 @@ export class WorldRenderer {
       g.rect(0, 0, width, height).fill({ color: 0xe0a848, alpha: 0.14 + 0.2 * drought });
   }
 
+  /** The selection outline; redrawn only when what it outlines moves or the zoom changes. */
   private drawSelection(): void {
-    const g = this.selectBox.clear();
     const sel = this.selected;
-    if (!sel || !this.map) return;
     const width = 2 / this.cam.zoom;
-    if (sel.kind === 'agent') {
-      const a = this.agents.get(sel.id);
-      if (!a) return;
-      const p = a.view.alive ? a.shown : a.to;
-      g.ellipse(p.x, p.y, 7, 3).stroke({ width, color: 0xffd84a });
+    if (!sel || !this.map || !this.layers) {
+      if (this.selectionKey) this.selectBox.clear();
+      this.selectionKey = '';
       return;
     }
-    const obj = sel.kind === 'object' ? this.map.objects.find((o) => o.id === sel.id) : undefined;
+    if (sel.kind === 'agent') {
+      const a = this.layers.people.agents.get(sel.id);
+      const p = a ? (a.view.alive ? a.shown : a.to) : null;
+      const key = p ? `a|${sel.id}|${p.x}|${p.y}|${width}` : 'a';
+      if (key === this.selectionKey) return;
+      this.selectionKey = key;
+      const g = this.selectBox.clear();
+      if (p) g.ellipse(p.x, p.y, 7, 3).stroke({ width, color: 0xffd84a });
+      return;
+    }
+    const obj = sel.kind === 'object' ? this.layers.objects.object(sel.id) : undefined;
     const r = obj ?? { x: sel.tile.x, y: sel.tile.y, w: 1, h: 1 };
+    const key = `o|${sel.kind}|${r.x}|${r.y}|${r.w}|${r.h}|${width}`;
+    if (key === this.selectionKey) return;
+    this.selectionKey = key;
+    const g = this.selectBox.clear();
     g.rect(r.x * TILE_PX, r.y * TILE_PX, r.w * TILE_PX, r.h * TILE_PX).stroke({
       width,
       color: 0xffd84a,
@@ -1071,18 +568,10 @@ export class WorldRenderer {
 
   private pick(sx: number, sy: number): MapSelection | null {
     const map = this.map;
-    if (!map) return null;
-    // People first: hit-test their drawn sprite (about 12×16 px above the feet).
-    const w = screenToWorld(this.cam, sx, sy);
-    let best: { id: string; d: number } | null = null;
-    for (const [id, a] of this.agents) {
-      const p = a.view.alive ? a.shown : a.to;
-      if (Math.abs(w.x - p.x) <= 7 && w.y <= p.y + 2 && w.y >= p.y - 16) {
-        const d = Math.abs(w.x - p.x) + Math.abs(w.y - (p.y - 8));
-        if (!best || d < best.d) best = { id, d };
-      }
-    }
-    if (best) return { kind: 'agent', id: best.id };
+    if (!map || !this.layers) return null;
+    // People first: hit-test their drawn sprite.
+    const person = this.layers.people.pick(screenToWorld(this.cam, sx, sy));
+    if (person) return { kind: 'agent', id: person };
     const tile = screenToTile(this.cam, sx, sy, TILE_PX);
     const tileType = tileAt(map, tile.x, tile.y);
     if (tileType === undefined) return null;

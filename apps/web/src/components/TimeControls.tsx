@@ -33,7 +33,7 @@ export function TimeControls({ worldId }: { worldId: string }) {
         <span aria-hidden>{night ? '☾' : '☀'}</span> {formatClock(tick)}
       </div>
       <button
-        className={`btn ${runner.running ? '' : 'btn-primary'}`}
+        className={`btn play-pause ${runner.running ? '' : 'btn-primary'}`}
         onClick={() => control({ running: !runner.running })}
         title={runner.running ? 'Pause (Space)' : 'Play (Space)'}
         data-testid="play-pause"
@@ -52,13 +52,15 @@ export function TimeControls({ worldId }: { worldId: string }) {
           </button>
         ))}
       </div>
-      {runner.running && (
-        <div className="muted small speed-actual" title="Measured speed">
-          {runner.thinking > 0
-            ? `waiting on ${runner.thinking} mind${runner.thinking > 1 ? 's' : ''}…`
-            : `${runner.actualSpeed} min/s`}
-        </div>
-      )}
+      <div
+        className={`muted small speed-actual ${runner.running ? '' : 'is-hidden'}`}
+        title="Measured speed"
+        aria-hidden={!runner.running}
+      >
+        {runner.thinking > 0
+          ? `waiting on ${runner.thinking} mind${runner.thinking > 1 ? 's' : ''}…`
+          : `${runner.actualSpeed} min/s`}
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type {
   AgentResponse,
   FamilyNode,
+  MapResponse,
   MarketResponse,
   VillageResponse,
   BrainConfig,
@@ -59,6 +60,7 @@ export const api = {
   activateWorld: (id: string) => request<WorldResponse>('POST', `/api/worlds/${id}/activate`),
   deleteWorld: (id: string) => request<void>('DELETE', `/api/worlds/${id}`),
   worldView: (id: string) => request<WorldViewResponse>('GET', `/api/worlds/${id}/view`),
+  worldMap: (id: string) => request<MapResponse>('GET', `/api/worlds/${id}/map`),
   control: (id: string, req: ControlRequest) =>
     request<{ runner: RunnerStatus }>('POST', `/api/worlds/${id}/control`, req),
   events: (id: string, q: EventsQuery = {}) => {

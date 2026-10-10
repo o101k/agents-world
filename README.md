@@ -234,6 +234,21 @@ npm run stress -- 120 60 8 huge   # adults, children, days, map size
 Runs a big village headless with the free Mock brain and prints the simulation speed, survival,
 and the sizes of snapshots and per-frame updates.
 
+## Map rendering benchmark
+
+```bash
+npm run bench:render                          # 150 adults + 100 children, huge map, 60×
+npm run bench:render -- --json out.json --shots shots/   # save results and two screenshots
+```
+
+Builds the UI, starts its own helper on a throwaway data folder, lives 6 in-game hours, then opens
+the map in headless Chromium and measures loading, playing, panning and zooming: JavaScript time
+per frame, map update time, draw calls and texture uploads. Headless Chromium draws in software,
+so its frames per second are far below a Mac's; compare the JavaScript and update times between
+versions. The world pauses at the same tick every run, so the screenshots can be compared too.
+Set `PW_CHROMIUM_PATH` if Playwright has no Chromium of its own, and give runs at the same time
+different ports (`--port`, default 4811).
+
 ## Development
 
 ```bash
@@ -335,6 +350,7 @@ apps/server       the local helper: saves worlds, runs the simulation, serves th
 apps/web          the browser UI: React panels + PixiJS map
 tests/e2e         Playwright tests
 tests/agentic     AI-driven browser tests (Tester Army e2e)
+tests/perf        the map rendering benchmark
 turbo.json        task pipeline (Turborepo): what runs, in what order, what is cached
 docs/DESIGN.md    design doc
 ```

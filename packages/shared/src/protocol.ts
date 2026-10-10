@@ -175,6 +175,8 @@ export interface WorldViewResponse {
   meta: WorldMeta;
   settings: WorldSettings;
   map: WireMap;
+  /** Version of `map` (frames carry the current one; a newer one means fetch the map again). */
+  mapVersion: number;
   tick: number;
   runner: RunnerStatus;
   agents: AgentView[];
@@ -184,6 +186,14 @@ export interface WorldViewResponse {
   owners: Record<string, string[]>;
   conditions: ActiveCondition[];
   calendar: CalendarView;
+}
+
+/** Just the map (fetched when the frames say it changed), with the owners it needs. */
+export interface MapResponse {
+  mapVersion: number;
+  map: WireMap;
+  /** Owners' names by object id. */
+  owners: Record<string, string[]>;
 }
 
 /** The village beyond the town market: stalls, pens, owned fields, jobs, meetings and rules. */
