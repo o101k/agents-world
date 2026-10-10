@@ -315,9 +315,9 @@ Newest first. Record every change to an agreed decision here.
   boundaries; two walkers in one row may overlap in either order); each layer culls itself
   (Pixi's culler and pointer events are off); people off screen skip labels and bubbles. The
   people list and timeline re-render only changed rows. Screenshots at the same tick and camera
-  match the old renderer (walking-frame timing aside). Planned in
-  `/mnt/project-files/plans/faster-rendering.md`; ground, objects, lists and map fetch built by
-  Haiku workers in parallel, reviewed and integrated by Opus.
+  match the old renderer (walking-frame timing aside). Plan and measurements:
+  [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md); ground, objects, lists and
+  map fetch were built by parallel workers, then reviewed and integrated.
 - **2026-10-09 — Crash fix:** clearing land for a field or building no longer crashes the helper when
   someone is gathering from or chopping a bush or tree that the clearing removed; they fail the
   action and remember why.
