@@ -1,6 +1,15 @@
-import { Container, Graphics, Rectangle, Sprite, Text, Texture } from 'pixi.js';
+import { BitmapText, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js';
 import type { AgentView, Appearance, Point } from '@aw/shared';
 import type { Camera } from './camera.ts';
+import {
+  BUBBLE_FONT,
+  LABEL_FONT,
+  LABEL_SELECTED_FONT,
+  MARKER_FONT,
+  OUTLINE_COLOR,
+  OUTLINE_WIDTH,
+  ensureMapFonts,
+} from './fonts.ts';
 import { BUBBLE_TAIL, layoutBubbles, type BubbleRequest } from './layout.ts';
 import type { Standing } from './objectLayer.ts';
 import {
@@ -18,17 +27,17 @@ import {
 const SCREEN_MARGIN = 220;
 
 export interface AgentSprite {
-  /** Current label colour (to avoid restyling every frame). */
-  labelFill?: string;
+  /** The label's font (the selected one is yellow). Changed only when the selection changes. */
+  labelFont: string;
   view: AgentView;
   sprite: Sprite;
   frames: Texture[];
   /** The look the frames were painted for. */
   look: Appearance | null;
-  label: Text;
-  zzz: Text;
+  label: BitmapText;
+  zzz: BitmapText;
   bubble: Container;
-  bubbleText: Text;
+  bubbleText: BitmapText;
   bubbleBg: Graphics;
   bubbleTail: Graphics;
   bubbleFor: string;
@@ -65,7 +74,9 @@ export class PeopleLayer {
     /** Screen-space container for labels and bubbles. */
     private readonly overlay: Container,
     private readonly textures: Record<SpriteName, Texture>,
-  ) {}
+  ) {
+    ensureMapFonts();
+  }
 
   /**
    * The latest people. `spots` gives the feet position and depth of everyone indoors (they
@@ -176,11 +187,11 @@ export class PeopleLayer {
       const selected = selectedId === id;
       a.label.visible = showLabels || selected;
       a.label.position.set(Math.round(screen.x), Math.round(screen.y));
-      // Only touch text styles when they change (restyling re-renders the text).
-      const fill = selected ? '#ffd84a' : '#ffffff';
-      if (a.labelFill !== fill) {
-        a.labelFill = fill;
-        a.label.style.fill = fill;
+      // Only switch fonts when the selection changes (a change re-lays out the name).
+      const font = selected ? LABEL_SELECTED_FONT : LABEL_FONT;
+      if (a.labelFont !== font) {
+        a.labelFont = font;
+        a.label.style.fontFamily = font;
       }
       const thinking = a.view.activity === 'thinking';
       a.zzz.visible = (a.view.activity === 'sleeping' || thinking) && cam.zoom >= 1.5;
@@ -226,44 +237,38 @@ export class PeopleLayer {
     const sprite = new Sprite();
     sprite.anchor.set(0.5, 1);
     this.world.addChild(sprite);
-    const label = new Text({
+    // Bitmap text (see fonts.ts): the outline is baked into the font, and the same stroke here
+    // makes the bounds and anchoring include it, as they did for the old canvas text.
+    const label = new BitmapText({
       text: v.name,
       style: {
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        fontFamily: LABEL_FONT,
         fontSize: 11,
-        fontWeight: '600',
-        fill: '#ffffff',
-        stroke: { color: '#0b0f14', width: 3 },
+        stroke: { color: OUTLINE_COLOR, width: OUTLINE_WIDTH },
       },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
     });
     label.anchor.set(0.5, 1);
-    const zzz = new Text({
+    const zzz = new BitmapText({
       text: 'z z',
       style: {
-        fontFamily: 'ui-monospace, monospace',
+        fontFamily: MARKER_FONT,
         fontSize: 10,
-        fontWeight: '700',
-        fill: '#cfe3ff',
-        stroke: { color: '#0b0f14', width: 3 },
+        stroke: { color: OUTLINE_COLOR, width: OUTLINE_WIDTH },
       },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
     });
     zzz.anchor.set(0, 1);
     const bubble = new Container();
     const bubbleBg = new Graphics();
     const bubbleTail = new Graphics();
-    const bubbleText = new Text({
+    const bubbleText = new BitmapText({
       text: '',
       style: {
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        fontFamily: BUBBLE_FONT,
         fontSize: 12,
-        fill: '#1a1a1a',
         wordWrap: true,
         wordWrapWidth: 200,
         lineHeight: 15,
       },
-      resolution: Math.max(2, window.devicePixelRatio || 1),
     });
     bubble.addChild(bubbleBg, bubbleTail, bubbleText);
     bubble.visible = false;
@@ -273,6 +278,7 @@ export class PeopleLayer {
       sprite,
       frames: [],
       look: null,
+      labelFont: LABEL_FONT,
       label,
       zzz,
       bubble,
