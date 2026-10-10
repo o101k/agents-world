@@ -401,3 +401,69 @@ test('ask about a villager and read the record', async ({ page }) => {
   await expect(dialog).toBeHidden();
   await expect(section).toBeVisible();
 });
+
+test('the View menu hides, shows and resizes the sidebar and the timeline', async ({ page }) => {
+  await page.goto('/');
+  const back = page.getByRole('button', { name: '← Worlds' });
+  if (await back.isVisible()) await back.click();
+  await createWorld(page, 'Layout Town', 'layout');
+  await expect(page.locator('.topbar-title')).toHaveText('Layout Town');
+
+  const sidebar = page.locator('.sidebar');
+  const timeline = page.locator('.event-log');
+  const map = page.locator('[data-testid="map"]');
+  const widthOf = async (loc: typeof sidebar) => (await loc.boundingBox())?.width ?? 0;
+  const heightOf = async (loc: typeof sidebar) => (await loc.boundingBox())?.height ?? 0;
+
+  // Select something first: clicking the map closes a menu and opens the Selected tab.
+  const box = (await map.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('.selection-title, .inspector')).toBeVisible();
+
+  // Defaults.
+  await expect.poll(() => widthOf(sidebar)).toBeCloseTo(340, -1);
+  await expect.poll(() => heightOf(timeline)).toBeCloseTo(210, -1);
+
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  const mapWidth = await widthOf(map);
+  await page.getByLabel('Show sidebar').uncheck();
+  await expect(sidebar).toBeHidden();
+  await expect.poll(() => widthOf(map)).toBeGreaterThan(mapWidth);
+  await page.getByLabel('Show sidebar').check();
+  await expect(sidebar).toBeVisible();
+
+  await page.getByLabel('Show timeline').uncheck();
+  await expect(timeline).toBeHidden();
+  await page.getByLabel('Show timeline').check();
+  await expect(timeline).toBeVisible();
+
+  await page.getByLabel('Sidebar width').fill('500');
+  await page.getByLabel('Timeline height').fill('300');
+  await expect.poll(() => widthOf(sidebar)).toBeCloseTo(500, -1);
+  await expect.poll(() => heightOf(timeline)).toBeCloseTo(300, -1);
+
+  // Escape closes the menu.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('group', { name: 'Layout' })).toBeHidden();
+  // Closing the menu keeps the selection (Escape must not also clear it).
+  await expect(page.locator('.selection-title, .inspector')).toBeVisible();
+
+  // The layout is remembered after a reload.
+  await page.reload();
+  await expect(page.locator('.topbar-title')).toHaveText('Layout Town');
+  await expect.poll(() => widthOf(sidebar)).toBeCloseTo(500, -1);
+  await expect.poll(() => heightOf(timeline)).toBeCloseTo(300, -1);
+
+  // Reset puts the defaults back.
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await page.getByRole('button', { name: 'Reset layout' }).click();
+  await expect.poll(() => widthOf(sidebar)).toBeCloseTo(340, -1);
+  await expect.poll(() => heightOf(timeline)).toBeCloseTo(210, -1);
+
+  // On a small window the map keeps room even at the largest timeline.
+  // The menu is still open after Reset.
+  await page.setViewportSize({ width: 1000, height: 600 });
+  await page.getByLabel('Timeline height').fill('600');
+  await expect.poll(async () => (await map.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(150);
+  await page.getByRole('button', { name: 'Reset layout' }).click();
+});

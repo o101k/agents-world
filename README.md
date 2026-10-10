@@ -53,6 +53,9 @@ browser. Leave the terminal window open while you play; press **Ctrl+C** in it t
   village choose the **Huge** map and generate up to 150 adults and 100 children.
 - **World screen**: drag or two-finger scroll to pan; pinch or ⌘+scroll to zoom; arrow keys/WASD
   pan, `+`/`−` zoom, `F` fits the map. **← Worlds** goes back.
+- **▤ View** (top bar, next to ⚙): show or hide the sidebar and the timeline, and set the
+  sidebar's width and the timeline's height. **Reset layout** puts them back. This browser
+  remembers the layout, and it's the same in every world.
 - **Time**: ▶ Play / ❚❚ Pause (or Space) and a speed picker (1× = one in-game minute per second, up
   to Max). The world keeps running while the helper runs, even with the browser closed. The top
   bar shows the **season** and year: a year lasts as long as a year of age (the aging slider), so
