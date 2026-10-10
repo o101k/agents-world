@@ -230,7 +230,8 @@ the map in headless Chromium and measures loading, playing, panning and zooming:
 per frame, map update time, draw calls and texture uploads. Headless Chromium draws in software,
 so its frames per second are far below a Mac's; compare the JavaScript and update times between
 versions. The world pauses at the same tick every run, so the screenshots can be compared too.
-Set `PW_CHROMIUM_PATH` if Playwright has no Chromium of its own.
+Set `PW_CHROMIUM_PATH` if Playwright has no Chromium of its own, and give runs at the same time
+different ports (`--port`, default 4811).
 
 ## Development
 

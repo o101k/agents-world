@@ -3,7 +3,7 @@
  * Map rendering benchmark: a big generated village in headless Chromium.
  *   npm run bench:render -- [--adults 150] [--children 100] [--map huge] [--speed 60]
  *     [--warm 360] [--json out.json] [--shots dir [--shots-only]] [--profile out.cpuprofile]
- *     [--profile-load out.cpuprofile] [--trace out.json]
+ *     [--profile-load out.cpuprofile] [--trace out.json] [--port 4811]
  * Starts its own helper on a throwaway data folder, creates the world, runs it `--warm` in-game
  * minutes, then opens the page and measures loading, playing, panning and zooming.
  * PW_CHROMIUM_PATH points at a Chromium if Playwright has none of its own.

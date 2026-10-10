@@ -302,6 +302,24 @@ teacher and a closer relationship).
 
 Newest first. Record every change to an agreed decision here.
 
+- **2026-10-10 — Faster map rendering, round 2 (owner request: "check the code and understand
+  what could make it faster… go all out").** Profiling round 1 found the rest. (a) The world is
+  drawn in three Pixi render groups instead of one depth-sorted container: map objects that fit
+  inside their footprint (and graves), then people, then objects drawn taller than their footprint
+  (trees, stalls). People can only overlap the first kind from in front and the second from
+  behind, so this is the depth order without sorting 250 people among 8,000 trees (the only
+  inexactness: a tree trunk's bottom pixel covers the 1 px above the head of someone right below
+  it). The object layers are static and no longer culled; only tall objects can hide a person, so
+  only they fade. Fixed on the way: a field being cleared was drawn over the person working it.
+  (b) Changed map objects are redrawn in place (same sprite), so a building's progress doesn't
+  make Pixi rebuild a layer. (c) Names, "z z"/"…" and speech are `BitmapText` from four installed
+  fonts (`fonts.ts`; no kerning, no mipmaps) instead of a canvas texture each. (d) Sprites and
+  ground chunks are painted into byte arrays (`pixelBuffer.ts`) and put on their canvas once; an
+  unreadable colour paints magenta. (e) The people list and timeline follow live updates at most
+  4 times a second (`useThrottledWorld`). Medians of three bench runs, master → round 1 → round 2:
+  first frame with the map 1,147 → 1,026 → 617 ms; JavaScript per frame on the whole map p95
+  43.7 → 6.6 → 2.5 ms; map update 199 → 15 → 8 ms; texture uploads while panning 34 → 34 → 0.8
+  per second. Details: [`docs/plans/faster-rendering.md`](docs/plans/faster-rendering.md).
 - **2026-10-09 — Faster map rendering (owner request).** Measured first with a new benchmark,
   `npm run bench:render` (`tests/perf/bench-render.mjs`: 150 adults + 100 children on the huge map,
   headless Chromium; its frames per second are meaningless because it draws in software, so
