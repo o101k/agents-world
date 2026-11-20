@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import {
   MAP_SIZES,
   STAGE_LABELS,
@@ -13,6 +13,7 @@ import {
 } from '@aw/shared';
 import { BrainsModal, type BrainsModalRow } from '../components/BrainsModal.tsx';
 import { CastEditor, STARTER_CAST } from '../components/CastEditor.tsx';
+import { useDialog } from '../components/useDialog.ts';
 import { api } from '../api.ts';
 import { defaultBrainFor } from '../brainLabels.ts';
 import { formatDate } from '../format.ts';
@@ -27,9 +28,18 @@ const SIZE_LABELS: Record<MapSize, string> = {
 };
 
 export function WorldsScreen() {
-  const { worlds, activeWorldId, setShowWorldsScreen } = useApp();
+  const worlds = useApp((s) => s.worlds);
+  const activeWorldId = useApp((s) => s.activeWorldId);
+  const setShowWorldsScreen = useApp((s) => s.setShowWorldsScreen);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WorldMeta | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+
+  useDialog(deleteDialogRef, () => setConfirmDelete(null), {
+    open: confirmDelete !== null,
+    disabled: deleting,
+  });
 
   const openWorld = async (id: string) => {
     setError(null);
@@ -37,17 +47,20 @@ export function WorldsScreen() {
       await api.activateWorld(id);
       setShowWorldsScreen(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
   const deleteWorld = async (world: WorldMeta) => {
+    if (deleting) return;
+    setDeleting(true);
     setError(null);
     try {
       await api.deleteWorld(world.id);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
+      setDeleting(false);
       setConfirmDelete(null);
     }
   };
@@ -56,21 +69,35 @@ export function WorldsScreen() {
     <div className="worlds-screen">
       <header className="worlds-header">
         <div className="row-between">
-          <h1>Agents World</h1>
-          <button className="btn" onClick={() => useSettings.getState().setOpen(true)}>
+          <div>
+            <h1>Agents World</h1>
+            <p className="muted worlds-subtitle">
+              Each world is a separate village, saved on this computer. Only the open world runs; it
+              keeps living while the helper is running, even with this tab closed.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => useSettings.getState().setOpen(true)}
+          >
             ⚙ AI settings
           </button>
         </div>
-        <p className="muted">
-          Each world is a separate village, saved on this computer. Only the open world runs; it
-          keeps living while the helper is running, even with this tab closed.
-        </p>
       </header>
 
-      {error && <div className="banner banner-error">{error}</div>}
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
 
       <div className="worlds-layout">
-        <CreateWorldForm onCreated={(id) => void openWorld(id)} onError={setError} />
+        <CreateWorldForm
+          onCreated={(id) => void openWorld(id)}
+          onError={setError}
+          onClearError={() => setError(null)}
+        />
 
         <section className="panel worlds-list" aria-label="Saved worlds">
           <h2>Your worlds</h2>
@@ -97,10 +124,20 @@ export function WorldsScreen() {
                     <div className="world-card-meta muted">Created {formatDate(w.createdAt)}</div>
                   </div>
                   <div className="world-card-actions">
-                    <button className="btn btn-primary" onClick={() => void openWorld(w.id)}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      aria-label={`Open ${w.name}`}
+                      onClick={() => void openWorld(w.id)}
+                    >
                       Open
                     </button>
-                    <button className="btn btn-danger-ghost" onClick={() => setConfirmDelete(w)}>
+                    <button
+                      type="button"
+                      className="btn btn-danger-ghost"
+                      aria-label={`Delete ${w.name}`}
+                      onClick={() => setConfirmDelete(w)}
+                    >
                       Delete
                     </button>
                   </div>
@@ -112,8 +149,10 @@ export function WorldsScreen() {
       </div>
 
       {confirmDelete && (
-        <div className="modal-backdrop" onClick={() => setConfirmDelete(null)}>
+        <div className="modal-backdrop" onClick={() => !deleting && setConfirmDelete(null)}>
           <div
+            ref={deleteDialogRef}
+            tabIndex={-1}
             className="modal panel"
             role="dialog"
             aria-modal="true"
@@ -126,11 +165,22 @@ export function WorldsScreen() {
               be undone.
             </p>
             <div className="modal-actions">
-              <button className="btn" autoFocus onClick={() => setConfirmDelete(null)}>
+              <button
+                type="button"
+                className="btn"
+                autoFocus
+                disabled={deleting}
+                onClick={() => setConfirmDelete(null)}
+              >
                 Cancel
               </button>
-              <button className="btn btn-danger" onClick={() => void deleteWorld(confirmDelete)}>
-                Delete world
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={deleting}
+                onClick={() => void deleteWorld(confirmDelete)}
+              >
+                {deleting ? 'Deleting…' : 'Delete world'}
               </button>
             </div>
           </div>
@@ -181,9 +231,11 @@ async function loadProviders() {
 function CreateWorldForm({
   onCreated,
   onError,
+  onClearError,
 }: {
   onCreated: (id: string) => void;
   onError: (e: string) => void;
+  onClearError: () => void;
 }) {
   const [name, setName] = useState('');
   const [seed, setSeed] = useState('');
@@ -191,16 +243,22 @@ function CreateWorldForm({
   const [mode, setMode] = useState<CastMode>('sample');
   const [people, setPeople] = useState<PersonInput[]>(STARTER_CAST);
   const [adults, setAdults] = useState(10);
+  const [adultsDraft, setAdultsDraft] = useState<string | null>(null);
   const [children, setChildren] = useState(5);
+  const [childrenDraft, setChildrenDraft] = useState<string | null>(null);
   const [useAi, setUseAi] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<BrainsDraft | null>(null);
   const [choosing, setChoosing] = useState(false);
   const providers = useSettings((s) => s.settings?.providers);
 
+  const customHasPeople = mode !== 'custom' || people.some((p) => p.name.trim());
+
   // Step 1: work out who the villagers will be, then let the owner pick their brains.
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!name.trim() || !customHasPeople) return;
+    onClearError();
     setBusy(true);
     try {
       const cast: CastOption =
@@ -225,7 +283,7 @@ function CreateWorldForm({
       }
       setChoosing(true);
     } catch (err) {
-      onError((err as Error).message);
+      onError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -234,7 +292,7 @@ function CreateWorldForm({
   // Step 2: create the world with the villagers and brains that were previewed.
   const create = async (d: BrainsDraft) => {
     const { world } = await api.createWorld({
-      name,
+      name: name.trim(),
       seed: d.seed,
       mapSize,
       cast: d.cast,
@@ -319,19 +377,33 @@ function CreateWorldForm({
             <label>
               Adults
               <input
-                value={adults}
+                value={adultsDraft ?? String(adults)}
                 inputMode="numeric"
-                onChange={(e) => setAdults(Math.max(1, Math.min(150, Number(e.target.value) || 1)))}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setAdultsDraft(raw);
+                  const n = Number.parseInt(raw, 10);
+                  if (raw.trim() !== '' && Number.isFinite(n)) {
+                    setAdults(Math.max(1, Math.min(150, n)));
+                  }
+                }}
+                onBlur={() => setAdultsDraft(null)}
               />
             </label>
             <label>
               Children
               <input
-                value={children}
+                value={childrenDraft ?? String(children)}
                 inputMode="numeric"
-                onChange={(e) =>
-                  setChildren(Math.max(0, Math.min(100, Number(e.target.value) || 0)))
-                }
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setChildrenDraft(raw);
+                  const n = Number.parseInt(raw, 10);
+                  if (raw.trim() !== '' && Number.isFinite(n)) {
+                    setChildren(Math.max(0, Math.min(100, n)));
+                  }
+                }}
+                onBlur={() => setChildrenDraft(null)}
               />
             </label>
             <label className="check">
@@ -341,11 +413,18 @@ function CreateWorldForm({
           </div>
         )}
         {mode === 'custom' && <CastEditor people={people} onChange={setPeople} />}
+        {!customHasPeople && (
+          <p className="warn small">Add at least one person with a first name to continue.</p>
+        )}
         <p className="muted small">
           Next you’ll choose which AI each villager thinks with (or the free Mock brain). You can
           change it any time from the world’s 🧠 Brains button.
         </p>
-        <button className="btn btn-primary" type="submit" disabled={busy || !name.trim()}>
+        <button
+          className="btn btn-primary"
+          type="submit"
+          disabled={busy || !name.trim() || !customHasPeople}
+        >
           {busy ? 'Loading…' : 'Next: choose brains'}
         </button>
       </form>

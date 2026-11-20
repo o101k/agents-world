@@ -1,19 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ModelPrice, ProviderStatus } from '@aw/shared';
 import { api } from '../api.ts';
 import { PLAN_MODELS } from '../planModels.ts';
 import { useSettings } from '../settingsStore.ts';
+import { useDialog } from './useDialog.ts';
 
 /** API keys, endpoints and the price table. Keys go to the local helper only and are never shown again. */
 export function SettingsDialog() {
-  const { settings, open, setOpen, load, set } = useSettings();
+  const settings = useSettings((s) => s.settings);
+  const loading = useSettings((s) => s.loading);
+  const error = useSettings((s) => s.error);
+  const open = useSettings((s) => s.open);
+  const setOpen = useSettings((s) => s.setOpen);
+  const load = useSettings((s) => s.load);
+  const set = useSettings((s) => s.set);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
+
+  useDialog(dialogRef, () => setOpen(false), { open });
+
   if (!open) return null;
   return (
-    <div className="modal-backdrop" onClick={() => setOpen(false)}>
+    <div className="modal-backdrop is-global" onClick={() => setOpen(false)}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel settings"
         role="dialog"
         aria-modal="true"
@@ -22,15 +36,30 @@ export function SettingsDialog() {
       >
         <div className="modal-head">
           <h2 id="settings-title">Settings</h2>
-          <button className="btn btn-ghost" onClick={() => setOpen(false)} aria-label="Close">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setOpen(false)}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
         <p className="muted small">
-          Use your Claude subscription, or API keys. Keys are stored only on this computer (
-          {settings?.dataDir}/secrets.json) and are never sent to the browser. Environment variables
-          (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENAI_COMPATIBLE_API_KEY) also work.
+          Use your Claude subscription, or API keys. Keys are stored only on this computer
+          {settings?.dataDir ? ` (${settings.dataDir}/secrets.json)` : ''} and are never sent to the
+          browser. Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+          OPENAI_COMPATIBLE_API_KEY) also work.
         </p>
+        {error && (
+          <div className="banner banner-error" role="alert">
+            {error}{' '}
+            <button type="button" className="btn btn-small" onClick={() => void load()}>
+              Retry
+            </button>
+          </div>
+        )}
+        {loading && !settings && <p className="muted">Loading settings…</p>}
         {settings?.providers
           .filter((p) => p.kind === 'plan')
           .map((p) => (
@@ -56,11 +85,20 @@ function PlanCard({
   onSaved: (s: Awaited<ReturnType<typeof api.settings>>) => void;
 }) {
   const [model, setModel] = useState(provider.defaultModel);
-  const [cliPath, setCliPath] = useState('');
+  const [cliPath, setCliPath] = useState(provider.cliPath ?? '');
+  const [howOpen, setHowOpen] = useState(!provider.configured);
   const [status, setStatus] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setModel(provider.defaultModel);
+  }, [provider.defaultModel]);
+
   const act = async (fn: () => ReturnType<typeof api.settings>, done: string) => {
     setBusy(true);
+    setIsError(false);
     setStatus('Checking Claude Code…');
     try {
       const next = await fn();
@@ -68,6 +106,7 @@ function PlanCard({
       const plan = next.providers.find((p) => p.id === provider.id);
       setStatus(plan?.configured ? done : null);
     } catch (e) {
+      setIsError(true);
       setStatus((e as Error).message);
     } finally {
       setBusy(false);
@@ -83,7 +122,11 @@ function PlanCard({
         </span>
       </div>
       <p className={`small ${provider.configured ? 'muted' : 'warn'}`}>{provider.message}</p>
-      <details className="plan-howto" open={!provider.configured}>
+      <details
+        className="plan-howto"
+        open={howOpen}
+        onToggle={(e) => setHowOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
         <summary>How to use your Claude subscription</summary>
         <ol>
           <li>
@@ -144,6 +187,7 @@ function PlanCard({
       </div>
       <div className="provider-actions">
         <button
+          type="button"
           className="btn btn-primary btn-small"
           disabled={busy}
           onClick={() =>
@@ -151,7 +195,7 @@ function PlanCard({
               () =>
                 api.updateProvider(provider.id, {
                   defaultModel: model,
-                  ...(cliPath.trim() ? { cliPath: cliPath.trim() } : {}),
+                  cliPath: cliPath.trim(),
                 }),
               'Saved.',
             )
@@ -160,13 +204,21 @@ function PlanCard({
           Save
         </button>
         <button
+          type="button"
           className="btn btn-small"
           disabled={busy}
           onClick={() => void act(api.checkClaudePlan, 'Ready.')}
         >
           Check
         </button>
-        {status && <span className="muted small">{status}</span>}
+        {status && (
+          <span
+            className={`${isError ? 'warn' : 'muted'} small`}
+            role={isError ? 'alert' : undefined}
+          >
+            {status}
+          </span>
+        )}
       </div>
     </section>
   );
@@ -183,16 +235,25 @@ function ProviderCard({
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl ?? '');
   const [model, setModel] = useState(provider.defaultModel);
   const [status, setStatus] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setBaseUrl(provider.baseUrl ?? '');
+    setModel(provider.defaultModel);
+  }, [provider.baseUrl, provider.defaultModel]);
 
   const save = async (update: Parameters<typeof api.updateProvider>[1]) => {
     setBusy(true);
     setStatus(null);
+    setIsError(false);
     try {
       onSaved(await api.updateProvider(provider.id, update));
       setKey('');
       setStatus('Saved.');
     } catch (e) {
+      setIsError(true);
       setStatus((e as Error).message);
     } finally {
       setBusy(false);
@@ -200,11 +261,13 @@ function ProviderCard({
   };
   const test = async () => {
     setBusy(true);
+    setIsError(false);
     setStatus('Testing…');
     try {
       const { models } = await api.providerModels(provider.id);
       setStatus(`Connected — ${models.length} models available.`);
     } catch (e) {
+      setIsError(true);
       setStatus((e as Error).message);
     } finally {
       setBusy(false);
@@ -261,6 +324,7 @@ function ProviderCard({
       </div>
       <div className="provider-actions">
         <button
+          type="button"
           className="btn btn-primary btn-small"
           disabled={busy}
           onClick={() =>
@@ -274,6 +338,7 @@ function ProviderCard({
           Save
         </button>
         <button
+          type="button"
           className="btn btn-small"
           disabled={busy || !provider.configured}
           onClick={() => void test()}
@@ -282,6 +347,7 @@ function ProviderCard({
         </button>
         {provider.keySource === 'settings' && (
           <button
+            type="button"
             className="btn btn-small btn-danger-ghost"
             disabled={busy}
             onClick={() => void save({ apiKey: '' })}
@@ -289,7 +355,14 @@ function ProviderCard({
             Remove key
           </button>
         )}
-        {status && <span className="muted small">{status}</span>}
+        {status && (
+          <span
+            className={`${isError ? 'warn' : 'muted'} small`}
+            role={isError ? 'alert' : undefined}
+          >
+            {status}
+          </span>
+        )}
       </div>
     </section>
   );
@@ -305,22 +378,57 @@ function PriceTable({
   const [model, setModel] = useState('');
   const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const add = async () => {
-    const i = Number(input);
-    const o = Number(output);
-    if (!model.trim() || !Number.isFinite(i) || !Number.isFinite(o)) return;
-    onSaved(await api.updatePrices({ [model.trim()]: { input: i, output: o } }));
-    setModel('');
-    setInput('');
-    setOutput('');
+    const trimmedModel = model.trim();
+    const trimmedIn = input.trim();
+    const trimmedOut = output.trim();
+    const i = trimmedIn === '' ? Number.NaN : Number(trimmedIn);
+    const o = trimmedOut === '' ? Number.NaN : Number(trimmedOut);
+    if (!trimmedModel || !Number.isFinite(i) || !Number.isFinite(o) || i < 0 || o < 0) {
+      setError('Enter a model id and non-negative input and output prices.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(await api.updatePrices({ [trimmedModel]: { input: i, output: o } }));
+      setModel('');
+      setInput('');
+      setOutput('');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const resetPrice = async (m: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(await api.updatePrices({ [m]: null }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="provider-card">
       <strong>Prices (USD per million tokens)</strong>
       <p className="muted small">
         Used for the spending meter and cap. Models not listed are costed at a pessimistic $3 / $15
-        so they can't slip past your cap — add your models here for accurate numbers.
+        so they can’t slip past your cap — add your models here for accurate numbers.
       </p>
+      {error && (
+        <p className="warn small" role="alert">
+          {error}
+        </p>
+      )}
       <table className="price-table">
         <thead>
           <tr>
@@ -340,8 +448,11 @@ function PriceTable({
               <td>${p.output}</td>
               <td>
                 <button
+                  type="button"
                   className="btn btn-small btn-danger-ghost"
-                  onClick={() => void api.updatePrices({ [m]: null }).then(onSaved)}
+                  disabled={busy}
+                  aria-label={`Reset price for ${m}`}
+                  onClick={() => void resetPrice(m)}
                 >
                   Reset
                 </button>
@@ -351,14 +462,18 @@ function PriceTable({
           <tr>
             <td>
               <input
+                aria-label="Model id"
                 value={model}
+                disabled={busy}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="model id"
               />
             </td>
             <td>
               <input
+                aria-label="Input price per million tokens"
                 value={input}
+                disabled={busy}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="0.15"
                 inputMode="decimal"
@@ -366,14 +481,21 @@ function PriceTable({
             </td>
             <td>
               <input
+                aria-label="Output price per million tokens"
                 value={output}
+                disabled={busy}
                 onChange={(e) => setOutput(e.target.value)}
                 placeholder="0.60"
                 inputMode="decimal"
               />
             </td>
             <td>
-              <button className="btn btn-small" onClick={() => void add()}>
+              <button
+                type="button"
+                className="btn btn-small"
+                disabled={busy}
+                onClick={() => void add()}
+              >
                 Add
               </button>
             </td>

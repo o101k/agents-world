@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatClock, type ObjectHistoryResponse, type WorldEvent } from '@aw/shared';
 import { api } from '../api.ts';
 import { usageLine } from '../objectHistory.ts';
+import { useThrottledWorld } from '../useThrottledWorld.ts';
 import { useWorld } from '../worldStore.ts';
 
 /**
@@ -19,31 +20,41 @@ export function ObjectHistory({
   atTick?: number;
   onPick: (id: string) => void;
 }) {
-  // While live, refetch when a new event names this object.
-  const liveEventId = useWorld((s) =>
-    atTick === undefined ? s.events.find((e) => e.objects?.includes(objectId))?.id : undefined,
+  // While live, refetch when a new event names this object (throttled so we don't scan per frame).
+  const events = useThrottledWorld((s) => s.events, 400);
+  const liveEventId = useMemo(
+    () =>
+      atTick === undefined ? events.find((e) => e.objects?.includes(objectId))?.id : undefined,
+    [events, atTick, objectId],
   );
   const [data, setData] = useState<ObjectHistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setError(null);
     api
-      .objectHistory(worldId, objectId, atTick)
+      .objectHistory(worldId, objectId, atTick, ctrl.signal)
       .then((r) => {
-        if (cancelled) return;
+        if (ctrl.signal.aborted) return;
         setData(r);
         setError(null);
       })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
+      .catch((e: unknown) => {
+        if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [worldId, objectId, atTick, liveEventId]);
 
-  if (error) return <p className="warn">{error}</p>;
+  if (error)
+    return (
+      <p className="warn" role="alert">
+        {error}
+      </p>
+    );
   if (!data) return <p className="muted small">Loading…</p>;
 
   const usage = usageLine(data.uses, data.regulars);
@@ -55,7 +66,7 @@ export function ObjectHistory({
           {data.residents.map((r, i) => (
             <span key={r.id}>
               {i > 0 && ', '}
-              <button className="linkish inline" onClick={() => onPick(r.id)}>
+              <button type="button" className="linkish" onClick={() => onPick(r.id)}>
                 {r.name}
               </button>
             </span>
@@ -115,6 +126,7 @@ function HistoryRow({
   return (
     <li className={`event imp-${event?.importance ?? 3}`}>
       <button
+        type="button"
         className="event-time linkish"
         title="Replay this moment on the map"
         onClick={() => useWorld.getState().setReplayTarget(when)}
@@ -122,7 +134,7 @@ function HistoryRow({
         {formatClock(when)}
       </button>
       {actor ? (
-        <button className="event-text linkish" onClick={() => onPick(actor)}>
+        <button type="button" className="event-text linkish" onClick={() => onPick(actor)}>
           {body}
         </button>
       ) : (

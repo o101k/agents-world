@@ -211,36 +211,71 @@ export interface ObjectHistoryRows {
 }
 
 export class WorldFile {
+  private readonly stmts = new Map<string, Database.Statement>();
+  private cachedFirstSnapshotTick: number | null = null;
+  private cachedObjectHistorySince: number | null = null;
+  private foundingIds: Set<string> | null = null;
+
   private constructor(
     readonly path: string,
     private readonly db: Database.Database,
   ) {}
 
+  private stmt(sql: string): Database.Statement {
+    let s = this.stmts.get(sql);
+    if (!s) {
+      s = this.db.prepare(sql);
+      this.stmts.set(sql, s);
+    }
+    return s;
+  }
+
   static create(path: string, meta: WorldMeta, state: WorldState): WorldFile {
     const file = WorldFile.open(path, { create: true });
-    file.db.transaction(() => {
-      file.writeMeta(meta);
-      file.saveSnapshot(state);
-      file.appendEvent(state.tick, 'world_created', {
-        name: meta.name,
-        seed: meta.seed,
-        text: `The world "${meta.name}" was created.`,
-        importance: 3,
-      });
-    })();
-    return file;
+    try {
+      file.db.transaction(() => {
+        file.writeMeta(meta);
+        file.saveSnapshot(state);
+        file.appendEvent(state.tick, 'world_created', {
+          name: meta.name,
+          seed: meta.seed,
+          text: `The world "${meta.name}" was created.`,
+          importance: 3,
+        });
+      })();
+      return file;
+    } catch (err) {
+      file.close();
+      throw err;
+    }
   }
 
   static open(path: string, { create = false, readonly = false } = {}): WorldFile {
     const db = new Database(path, { fileMustExist: !create, readonly });
-    if (!readonly) {
-      db.pragma('journal_mode = WAL');
-      db.pragma('synchronous = NORMAL');
-      db.pragma('foreign_keys = ON');
+    try {
+      db.pragma('busy_timeout = 5000');
+      if (!readonly) {
+        db.pragma('journal_mode = WAL');
+        db.pragma('synchronous = NORMAL');
+        db.pragma('foreign_keys = ON');
+      }
+      const file = new WorldFile(path, db);
+      if (!readonly) file.migrate();
+      return file;
+    } catch (err) {
+      if (db.open) db.close();
+      throw err;
     }
-    const file = new WorldFile(path, db);
-    if (!readonly) file.migrate();
-    return file;
+  }
+
+  /** Lightweight read-only meta lookup that opens and immediately closes the file. */
+  static readMetaOnly(path: string): WorldMeta {
+    const file = WorldFile.open(path, { readonly: true });
+    try {
+      return file.readMeta();
+    } finally {
+      file.close();
+    }
   }
 
   private migrate(): void {
@@ -274,7 +309,7 @@ export class WorldFile {
     const events = this.db
       .prepare("SELECT id, payload FROM events WHERE kind IN ('built', 'fire')")
       .all() as { id: number; payload: string }[];
-    const insert = this.db.prepare(
+    const insert = this.stmt(
       'INSERT OR IGNORE INTO event_objects (object_id, event_id) VALUES (?, ?)',
     );
     this.db.transaction(() => {
@@ -288,7 +323,7 @@ export class WorldFile {
   }
 
   readMeta(): WorldMeta {
-    const rows = this.db.prepare('SELECT key, value FROM meta').all() as {
+    const rows = this.stmt('SELECT key, value FROM meta').all() as {
       key: string;
       value: string;
     }[];
@@ -305,7 +340,7 @@ export class WorldFile {
   }
 
   writeMeta(meta: Partial<WorldMeta>): void {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     );
     this.db.transaction(() => {
@@ -315,19 +350,19 @@ export class WorldFile {
 
   saveSnapshot(state: WorldState): void {
     const blob = gzipSync(JSON.stringify(serializeWorldState(state)));
-    this.db
-      .prepare('INSERT OR REPLACE INTO snapshots (tick, created_at, state) VALUES (?, ?, ?)')
-      .run(state.tick, new Date().toISOString(), blob);
-    this.db
-      .prepare(
-        `DELETE FROM snapshots WHERE tick < ? AND tick % ${TICKS_PER_DAY} != 0
+    this.stmt('INSERT OR REPLACE INTO snapshots (tick, created_at, state) VALUES (?, ?, ?)').run(
+      state.tick,
+      new Date().toISOString(),
+      blob,
+    );
+    this.stmt(
+      `DELETE FROM snapshots WHERE tick < ? AND tick % ${TICKS_PER_DAY} != 0
          AND tick != (SELECT MIN(tick) FROM snapshots)`,
-      )
-      .run(state.tick - SNAPSHOT_KEEP_TICKS);
+    ).run(state.tick - SNAPSHOT_KEEP_TICKS);
   }
 
   loadLatestSnapshot(): WorldState {
-    const row = this.db.prepare('SELECT state FROM snapshots ORDER BY tick DESC LIMIT 1').get() as
+    const row = this.stmt('SELECT state FROM snapshots ORDER BY tick DESC LIMIT 1').get() as
       { state: Buffer } | undefined;
     if (!row) throw new Error(`World file ${this.path} has no snapshot`);
     return deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')));
@@ -335,36 +370,36 @@ export class WorldFile {
 
   /** The latest snapshot at or before `tick` (for replaying the past). */
   loadSnapshotAtOrBefore(tick: number): WorldState {
-    const row = this.db
-      .prepare('SELECT state FROM snapshots WHERE tick <= ? ORDER BY tick DESC LIMIT 1')
-      .get(tick) as { state: Buffer } | undefined;
+    const row = this.stmt(
+      'SELECT state FROM snapshots WHERE tick <= ? ORDER BY tick DESC LIMIT 1',
+    ).get(tick) as { state: Buffer } | undefined;
     if (!row) throw new Error(`World file ${this.path} has no snapshot before tick ${tick}`);
     return deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')));
   }
 
   /** Tick of the latest snapshot at or before `tick` (-1 if none). */
   snapshotTickAtOrBefore(tick: number): number {
-    const row = this.db
-      .prepare('SELECT MAX(tick) AS t FROM snapshots WHERE tick <= ?')
-      .get(tick) as { t: number | null };
+    const row = this.stmt('SELECT MAX(tick) AS t FROM snapshots WHERE tick <= ?').get(tick) as {
+      t: number | null;
+    };
     return row.t ?? -1;
   }
 
   /** The first tick the world's history can be replayed from. */
   firstSnapshotTick(): number {
-    const row = this.db.prepare('SELECT MIN(tick) AS t FROM snapshots').get() as {
+    if (this.cachedFirstSnapshotTick !== null) return this.cachedFirstSnapshotTick;
+    const row = this.stmt('SELECT MIN(tick) AS t FROM snapshots').get() as {
       t: number | null;
     };
+    if (row.t !== null) this.cachedFirstSnapshotTick = row.t;
     return row.t ?? 0;
   }
 
   /** Logged inputs for ticks in (from, to], grouped by tick. */
   readInputsBetween(from: number, to: number): Map<number, TickInput[]> {
-    const rows = this.db
-      .prepare(
-        'SELECT tick, payload FROM tick_inputs WHERE tick > ? AND tick <= ? ORDER BY tick, id',
-      )
-      .all(from, to) as { tick: number; payload: string }[];
+    const rows = this.stmt(
+      'SELECT tick, payload FROM tick_inputs WHERE tick > ? AND tick <= ? ORDER BY tick, id',
+    ).all(from, to) as { tick: number; payload: string }[];
     const out = new Map<number, TickInput[]>();
     for (const r of rows) {
       const list = out.get(r.tick) ?? [];
@@ -375,15 +410,15 @@ export class WorldFile {
   }
 
   appendInputs(rows: [tick: number, input: TickInput][]): void {
-    const stmt = this.db.prepare('INSERT INTO tick_inputs (tick, kind, payload) VALUES (?, ?, ?)');
+    const stmt = this.stmt('INSERT INTO tick_inputs (tick, kind, payload) VALUES (?, ?, ?)');
     for (const [tick, input] of rows) stmt.run(tick, input.kind, JSON.stringify(input));
   }
 
   /** All logged inputs after `tick`, grouped by tick, in the order they were logged. */
   readInputsAfter(tick: number): Map<number, TickInput[]> {
-    const rows = this.db
-      .prepare('SELECT tick, payload FROM tick_inputs WHERE tick > ? ORDER BY tick, id')
-      .all(tick) as { tick: number; payload: string }[];
+    const rows = this.stmt(
+      'SELECT tick, payload FROM tick_inputs WHERE tick > ? ORDER BY tick, id',
+    ).all(tick) as { tick: number; payload: string }[];
     const out = new Map<number, TickInput[]>();
     for (const r of rows) {
       const list = out.get(r.tick) ?? [];
@@ -394,10 +429,10 @@ export class WorldFile {
   }
 
   appendEvent(tick: number, kind: string, payload: unknown, actors: string[] = []): void {
-    const info = this.db
-      .prepare('INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)')
-      .run(tick, kind, JSON.stringify(actors), JSON.stringify(payload));
-    const actorStmt = this.db.prepare(
+    const info = this.stmt(
+      'INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)',
+    ).run(tick, kind, JSON.stringify(actors), JSON.stringify(payload));
+    const actorStmt = this.stmt(
       'INSERT OR IGNORE INTO event_actors (agent_id, event_id) VALUES (?, ?)',
     );
     for (const actor of actors) actorStmt.run(actor, Number(info.lastInsertRowid));
@@ -405,13 +440,11 @@ export class WorldFile {
 
   /** Stores simulation events; returns them with their ids. */
   appendWorldEvents(events: WorldEvent[]): WorldEvent[] {
-    const stmt = this.db.prepare(
-      'INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)',
-    );
-    const objectStmt = this.db.prepare(
+    const stmt = this.stmt('INSERT INTO events (tick, kind, actors, payload) VALUES (?, ?, ?, ?)');
+    const objectStmt = this.stmt(
       'INSERT OR IGNORE INTO event_objects (object_id, event_id) VALUES (?, ?)',
     );
-    const actorStmt = this.db.prepare(
+    const actorStmt = this.stmt(
       'INSERT OR IGNORE INTO event_actors (agent_id, event_id) VALUES (?, ?)',
     );
     return events.map((e) => {
@@ -477,15 +510,13 @@ export class WorldFile {
     fromTick: number,
     toTick: number,
   ): { kind: string; count: number; maxImportance: number }[] {
-    return this.db
-      .prepare(
-        `SELECT e.kind AS kind, COUNT(*) AS count,
+    return this.stmt(
+      `SELECT e.kind AS kind, COUNT(*) AS count,
            MAX(COALESCE(json_extract(e.payload, '$.importance'), 3)) AS maxImportance
          FROM event_actors a JOIN events e ON e.id = a.event_id
          WHERE a.agent_id = @agentId AND e.tick >= @fromTick AND e.tick <= @toTick
          GROUP BY e.kind`,
-      )
-      .all({ agentId, fromTick, toTick }) as {
+    ).all({ agentId, fromTick, toTick }) as {
       kind: string;
       count: number;
       maxImportance: number;
@@ -494,14 +525,12 @@ export class WorldFile {
 
   /** Events per in-game day of a person's life (day 1 is the first day). */
   agentEventDays(agentId: string): { day: number; entries: number; notable: number }[] {
-    return this.db
-      .prepare(
-        `SELECT e.tick / ${TICKS_PER_DAY} + 1 AS day, COUNT(*) AS entries,
+    return this.stmt(
+      `SELECT e.tick / ${TICKS_PER_DAY} + 1 AS day, COUNT(*) AS entries,
            SUM(CASE WHEN COALESCE(json_extract(e.payload, '$.importance'), 3) >= 3 THEN 1 ELSE 0 END) AS notable
          FROM event_actors a JOIN events e ON e.id = a.event_id
          WHERE a.agent_id = @agentId GROUP BY day ORDER BY day`,
-      )
-      .all({ agentId }) as { day: number; entries: number; notable: number }[];
+    ).all({ agentId }) as { day: number; entries: number; notable: number }[];
   }
 
   /** A person's logged thoughts (their decisions) in the period, oldest first. */
@@ -511,16 +540,14 @@ export class WorldFile {
     toTick: number,
   ): { tick: number; thought: string; goal: string }[] {
     // This WHERE must repeat the partial index's condition exactly so SQLite uses tick_inputs_agent.
-    const rows = this.db
-      .prepare(
-        `SELECT tick, json_extract(payload, '$.decision.thought') AS thought,
+    const rows = this.stmt(
+      `SELECT tick, json_extract(payload, '$.decision.thought') AS thought,
            json_extract(payload, '$.decision.goal') AS goal
          FROM tick_inputs
          WHERE kind = 'decision' AND json_extract(payload, '$.agentId') = @agentId
            AND tick >= @fromTick AND tick <= @toTick
          ORDER BY tick, id`,
-      )
-      .all({ agentId, fromTick, toTick }) as {
+    ).all({ agentId, fromTick, toTick }) as {
       tick: number;
       thought: string | null;
       goal: string | null;
@@ -530,40 +557,36 @@ export class WorldFile {
 
   /** Saves a question and its answer; returns it with its id. */
   appendInterview(row: Omit<InterviewView, 'id'>): InterviewView {
-    const info = this.db
-      .prepare(
-        `INSERT INTO interviews (agent_id, asked_tick, from_tick, to_tick, question, answer, provider, model,
+    const info = this.stmt(
+      `INSERT INTO interviews (agent_id, asked_tick, from_tick, to_tick, question, answer, provider, model,
           cost_usd, plan, record_count, used_count, fallback, note, created_at)
          VALUES (@agentId, @askedTick, @fromTick, @toTick, @question, @answer, @provider, @model,
           @costUsd, @plan, @recordCount, @usedCount, @fallback, @note, @createdAt)`,
-      )
-      .run({
-        agentId: row.agentId,
-        askedTick: row.askedTick,
-        fromTick: row.fromTick,
-        toTick: row.toTick,
-        question: row.question,
-        answer: row.answer,
-        provider: row.provider,
-        model: row.model,
-        costUsd: row.costUsd,
-        plan: row.plan ? 1 : 0,
-        recordCount: row.recordCount,
-        usedCount: row.usedCount,
-        fallback: row.fallback ?? null,
-        note: row.note ?? null,
-        createdAt: row.createdAt,
-      });
+    ).run({
+      agentId: row.agentId,
+      askedTick: row.askedTick,
+      fromTick: row.fromTick,
+      toTick: row.toTick,
+      question: row.question,
+      answer: row.answer,
+      provider: row.provider,
+      model: row.model,
+      costUsd: row.costUsd,
+      plan: row.plan ? 1 : 0,
+      recordCount: row.recordCount,
+      usedCount: row.usedCount,
+      fallback: row.fallback ?? null,
+      note: row.note ?? null,
+      createdAt: row.createdAt,
+    });
     return { ...row, id: Number(info.lastInsertRowid) };
   }
 
   /** The last `limit` questions asked about a person, oldest first. */
   listInterviews(agentId: string, limit = 100): InterviewView[] {
-    const rows = this.db
-      .prepare(
-        'SELECT * FROM (SELECT * FROM interviews WHERE agent_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
-      )
-      .all(agentId, limit) as Record<string, unknown>[];
+    const rows = this.stmt(
+      'SELECT * FROM (SELECT * FROM interviews WHERE agent_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
+    ).all(agentId, limit) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: r.id as number,
       agentId: r.agent_id as string,
@@ -586,9 +609,9 @@ export class WorldFile {
 
   /** Total the observer has paid for questions about a person (USD). */
   interviewSpend(agentId: string): number {
-    const row = this.db
-      .prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM interviews WHERE agent_id = ?')
-      .get(agentId) as { total: number };
+    const row = this.stmt(
+      'SELECT COALESCE(SUM(cost_usd), 0) AS total FROM interviews WHERE agent_id = ?',
+    ).get(agentId) as { total: number };
     return Math.round(row.total * 1e6) / 1e6;
   }
 
@@ -604,11 +627,11 @@ export class WorldFile {
     /** Life story: this person's important events and their own diary. */
     story?: boolean;
   }): WorldEvent[] {
-    const where = ["json_extract(payload, '$.importance') >= @minImportance"];
+    const where = ["COALESCE(json_extract(payload, '$.importance'), 3) >= @minImportance"];
     if (opts.beforeId !== undefined) where.push('id < @beforeId');
     if (opts.atOrBeforeTick !== undefined) where.push('tick <= @atOrBeforeTick');
     if (opts.agentId)
-      where.push('EXISTS (SELECT 1 FROM json_each(events.actors) WHERE value = @agentId)');
+      where.push('id IN (SELECT event_id FROM event_actors WHERE agent_id = @agentId)');
     if (opts.story)
       where[0] = `(${where[0]} OR (kind = 'reflected' AND json_extract(actors, '$[0]') = @agentId))`;
     const words = (opts.q ?? '').split(/\s+/).filter(Boolean).slice(0, 6);
@@ -648,28 +671,22 @@ export class WorldFile {
     const importance = "COALESCE(json_extract(e.payload, '$.importance'), 3)";
     const from = `FROM event_objects o JOIN events e ON e.id = o.event_id
       WHERE o.object_id = @objectId AND (@atOrBeforeTick IS NULL OR e.tick <= @atOrBeforeTick)`;
-    const milestones = this.db
-      .prepare(
-        `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} >= 3
+    const milestones = this.stmt(
+      `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} >= 3
          ORDER BY e.id DESC LIMIT 200`,
-      )
-      .all(params) as EventRow[];
-    const recent = this.db
-      .prepare(
-        `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} < 3
+    ).all(params) as EventRow[];
+    const recent = this.stmt(
+      `SELECT e.id, e.tick, e.kind, e.actors, e.payload ${from} AND ${importance} < 3
          ORDER BY e.id DESC LIMIT 20`,
-      )
-      .all(params) as EventRow[];
-    const uses = this.db
-      .prepare(`SELECT COUNT(*) AS n ${from} AND ${importance} < 3`)
-      .get(params) as { n: number };
-    const regulars = this.db
-      .prepare(
-        `SELECT json_extract(e.actors, '$[0]') AS agentId, COUNT(*) AS count ${from}
+    ).all(params) as EventRow[];
+    const uses = this.stmt(`SELECT COUNT(*) AS n ${from} AND ${importance} < 3`).get(params) as {
+      n: number;
+    };
+    const regulars = this.stmt(
+      `SELECT json_extract(e.actors, '$[0]') AS agentId, COUNT(*) AS count ${from}
          AND ${importance} < 3 AND json_extract(e.actors, '$[0]') IS NOT NULL
          GROUP BY agentId ORDER BY count DESC, MIN(e.id) LIMIT 5`,
-      )
-      .all(params) as { agentId: string; count: number }[];
+    ).all(params) as { agentId: string; count: number }[];
     return {
       milestones: milestones.reverse().map(toWorldEvent),
       recent: recent.map(toWorldEvent),
@@ -678,12 +695,10 @@ export class WorldFile {
     };
   }
 
-  private foundingIds: Set<string> | null = null;
-
   /** Ids of the map objects that were there when the world was created (its first snapshot). */
   foundingObjectIds(): Set<string> {
     if (!this.foundingIds) {
-      const row = this.db.prepare('SELECT state FROM snapshots ORDER BY tick ASC LIMIT 1').get() as
+      const row = this.stmt('SELECT state FROM snapshots ORDER BY tick ASC LIMIT 1').get() as
         { state: Buffer } | undefined;
       const state = row
         ? deserializeWorldState(JSON.parse(gunzipSync(row.state).toString('utf8')))
@@ -695,21 +710,23 @@ export class WorldFile {
 
   /** The tick from which object history is complete for day-to-day use (0 if always). */
   objectHistorySince(): number {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'objectHistorySince'").get() as
+    if (this.cachedObjectHistorySince !== null) return this.cachedObjectHistorySince;
+    const row = this.stmt("SELECT value FROM meta WHERE key = 'objectHistorySince'").get() as
       { value: string } | undefined;
-    return row ? (JSON.parse(row.value) as number) : 0;
+    this.cachedObjectHistorySince = row ? (JSON.parse(row.value) as number) : 0;
+    return this.cachedObjectHistorySince;
   }
 
   appendCalls(calls: CallRecord[]): void {
-    const insert = this.db.prepare(
+    const insert = this.stmt(
       `INSERT INTO llm_calls (tick, agent_id, provider, model, trigger, input_tokens, output_tokens, cached_tokens,
         cost_usd, estimated, plan, latency_ms, prompt, response, error)
        VALUES (@tick, @agentId, @provider, @model, @trigger, @inputTokens, @outputTokens, @cachedTokens,
         @costUsd, @estimated, @plan, @latencyMs, @prompt, @response, @error)`,
     );
-    const prune = this.db.prepare(
+    const prune = this.stmt(
       `UPDATE llm_calls SET prompt = NULL, response = NULL
-       WHERE agent_id = ? AND prompt IS NOT NULL AND id <= (
+       WHERE agent_id = ? AND (prompt IS NOT NULL OR response IS NOT NULL) AND id <= (
          SELECT id FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT 1 OFFSET ${KEEP_CALL_TEXT})`,
     );
     const agents = new Set<string>();
@@ -721,12 +738,10 @@ export class WorldFile {
   }
 
   listCalls(agentId: string, limit: number): LlmCallView[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, tick, provider, model, trigger, input_tokens, output_tokens, cost_usd, plan, latency_ms, prompt, response, error
+    const rows = this.stmt(
+      `SELECT id, tick, provider, model, trigger, input_tokens, output_tokens, cost_usd, plan, latency_ms, prompt, response, error
          FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT ?`,
-      )
-      .all(agentId, limit) as Record<string, unknown>[];
+    ).all(agentId, limit) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: r.id as number,
       tick: r.tick as number,
@@ -750,14 +765,12 @@ export class WorldFile {
    * dollar so sums of many small prices don't show float noise.
    */
   usageByAgent(): Map<string, BrainUsage> {
-    const rows = this.db
-      .prepare(
-        `SELECT agent_id, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens,
+    const rows = this.stmt(
+      `SELECT agent_id, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens,
           SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd,
           SUM(CASE WHEN plan = 1 THEN cost_usd ELSE 0 END) AS plan_usd
          FROM llm_calls GROUP BY agent_id`,
-      )
-      .all() as {
+    ).all() as {
       agent_id: string;
       calls: number;
       input_tokens: number;
@@ -784,6 +797,7 @@ export class WorldFile {
   }
 
   close(): void {
+    this.stmts.clear();
     if (this.db.open) this.db.close();
   }
 }

@@ -4,20 +4,28 @@ import { api } from '../api.ts';
 import { useWorld } from '../worldStore.ts';
 
 /** The village's shared life (leader, purse, rules, meetings, stalls, pens, fields, work), refreshed each in-game hour. */
-export function useVillage(worldId: string): VillageResponse | null {
+export function useVillage(worldId: string): {
+  data: VillageResponse | null;
+  error: string | null;
+} {
   const [village, setVillage] = useState<VillageResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const hour = useWorld((s) => Math.floor(s.tick / 60));
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     api
-      .village(worldId)
-      .then((v) => !cancelled && setVillage(v))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+      .village(worldId, ac.signal)
+      .then((v) => {
+        if (ac.signal.aborted) return;
+        setVillage(v);
+        setError(null);
+      })
+      .catch((e: Error) => {
+        if (!ac.signal.aborted) setError(e.message);
+      });
+    return () => ac.abort();
   }, [worldId, hour]);
-  return village;
+  return { data: village, error };
 }
 
 const itemLabel = (item: string) => ITEM_LABELS[item as ItemName] ?? item;
@@ -25,8 +33,16 @@ const dayOf = (tick: number) => `day ${tickToClock(tick).day}`;
 
 /** Everything the village has built up together, as the observer sees it. */
 export function VillagePanel({ worldId }: { worldId: string }) {
-  const village = useVillage(worldId);
-  if (!village) return <p className="muted small">Loading village…</p>;
+  const { data: village, error } = useVillage(worldId);
+  if (!village) {
+    return error ? (
+      <p className="warn small" role="alert">
+        {error}
+      </p>
+    ) : (
+      <p className="muted small">Loading village…</p>
+    );
+  }
   return (
     <div className="village">
       <p>

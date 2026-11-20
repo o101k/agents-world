@@ -1,4 +1,5 @@
-import { Tile, type MapObject, type Point } from '@aw/shared';
+import { Tile, type MapObject, type MapObjectKind, type Point } from '@aw/shared';
+import { occupies } from './occupancy.ts';
 import { invalidateMapCaches, isWalkable, mapCache } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
@@ -8,8 +9,9 @@ const CLEARABLE = new Set(['tree', 'berry_bush', 'rock']);
 /**
  * A free w×h plot as close as possible to `near` (searching outward from 4 tiles away): grass
  * only, off paths and farmland, clear of buildings and fields with a one-tile margin all round,
- * and away from the map edge. With `door`, the doorstep (just below the middle of the bottom row)
- * must be walkable. Trees, bushes and rocks don't count against a plot: `clearPlot` removes them.
+ * clear of outdoor living agents on the plot footprint, and away from the map edge. With `door`,
+ * the doorstep (just below the middle of the bottom row) must be walkable. Trees, bushes and rocks
+ * don't count against a plot: `clearPlot` removes them.
  */
 export function findFreePlot(
   state: WorldState,
@@ -21,12 +23,20 @@ export function findFreePlot(
   const { map } = state;
   const cache = mapCache(map);
   const occupied = new Uint8Array(map.width * map.height);
-  for (const o of map.objects) {
-    if (CLEARABLE.has(o.kind)) continue;
-    for (let y = o.y - 1; y < o.y + o.h + 1; y++) {
-      for (let x = o.x - 1; x < o.x + o.w + 1; x++)
-        if (x >= 0 && y >= 0 && x < map.width && y < map.height) occupied[y * map.width + x] = 1;
+  for (const [kind, list] of cache.byKind) {
+    if (CLEARABLE.has(kind)) continue;
+    for (const o of list) {
+      for (let y = o.y - 1; y < o.y + o.h + 1; y++) {
+        for (let x = o.x - 1; x < o.x + o.w + 1; x++)
+          if (x >= 0 && y >= 0 && x < map.width && y < map.height) occupied[y * map.width + x] = 1;
+      }
     }
+  }
+  const agentOcc = new Uint8Array(map.width * map.height);
+  for (const a of state.agents) {
+    if (!occupies(a)) continue;
+    if (a.x >= 0 && a.y >= 0 && a.x < map.width && a.y < map.height)
+      agentOcc[a.y * map.width + a.x] = 1;
   }
   const ok = (x: number, y: number) => {
     if (x < 2 || y < 2 || x + w > map.width - 2 || y + h + 1 > map.height - 2) return false;
@@ -36,20 +46,36 @@ export function findFreePlot(
         if (occupied[i] || map.tiles[i] !== Tile.Grass) return false;
       }
     }
+    for (let yy = y; yy < y + h; yy++) {
+      for (let xx = x; xx < x + w; xx++) {
+        if (agentOcc[yy * map.width + xx]) return false;
+      }
+    }
     if (!door) return true;
     // The doorstep below the door must be walkable (trees there would block it).
     const sx = x + Math.floor(w / 2);
     const sy = y + h;
     return isWalkable(map, sx, sy) && cache.walk[sy * map.width + sx] === 1;
   };
-  for (let r = 4; r < Math.max(map.width, map.height); r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const x = near.x + dx;
-        const y = near.y + dy;
-        if (ok(x, y)) return { x, y };
-      }
+  const maxR = Math.max(map.width, map.height);
+  for (let r = 4; r < maxR; r++) {
+    // Top edge: dy = -r, dx = -r..r
+    for (let dx = -r; dx <= r; dx++) {
+      const x = near.x + dx;
+      const y = near.y - r;
+      if (ok(x, y)) return { x, y };
+    }
+    // Middle rows: dy = -r+1..r-1, dx = -r and dx = +r
+    for (let dy = -r + 1; dy <= r - 1; dy++) {
+      const y = near.y + dy;
+      if (ok(near.x - r, y)) return { x: near.x - r, y };
+      if (ok(near.x + r, y)) return { x: near.x + r, y };
+    }
+    // Bottom edge: dy = +r, dx = -r..r
+    for (let dx = -r; dx <= r; dx++) {
+      const x = near.x + dx;
+      const y = near.y + r;
+      if (ok(x, y)) return { x, y };
     }
   }
   return null;
@@ -63,7 +89,7 @@ export function findFreePlot(
 export function clearPlot(state: WorldState, plot: Point, w: number, h: number): MapObject[] {
   const { map } = state;
   const removed: MapObject[] = [];
-  map.objects = map.objects.filter((o) => {
+  const next = map.objects.filter((o) => {
     const inside =
       CLEARABLE.has(o.kind) &&
       o.x >= plot.x - 1 &&
@@ -73,16 +99,18 @@ export function clearPlot(state: WorldState, plot: Point, w: number, h: number):
     if (inside) removed.push(o);
     return !inside;
   });
-  for (const o of removed) delete state.resources[o.id];
-  invalidateMapCaches(map);
+  if (removed.length > 0) {
+    map.objects = next;
+    for (const o of removed) delete state.resources[o.id];
+    invalidateMapCaches(map);
+  }
   return removed;
 }
 
 /** A fresh object id for a kind: `${kind}-${n}` with n one past the highest in use. */
 export function nextObjectId(state: WorldState, kind: string): string {
   let max = 0;
-  for (const o of state.map.objects) {
-    if (o.kind !== kind) continue;
+  for (const o of mapCache(state.map).byKind.get(kind as MapObjectKind) ?? []) {
     const n = Number(o.id.slice(kind.length + 1));
     if (Number.isFinite(n)) max = Math.max(max, n);
   }

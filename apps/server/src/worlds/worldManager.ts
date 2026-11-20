@@ -1,7 +1,22 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { BrainRouter, DEFAULT_QUESTION, askAboutPerson, draftPerson } from '@aw/brain';
+import {
+  BrainRouter,
+  DEFAULT_QUESTION,
+  askAboutPerson,
+  draftPerson,
+  draftPersonOffline,
+} from '@aw/brain';
 import {
   CastPreviewRequest as CastPreviewRequestSchema,
   CreateWorldRequest,
@@ -62,6 +77,9 @@ import { WorldFile } from './worldFile.ts';
 import { WorldRunner, type RunnerHooks } from './worldRunner.ts';
 
 const newSeed = () => randomBytes(4).toString('hex');
+const FLESH_OUT_CONCURRENCY = 4;
+const STOP_FLESH_OUT_ERROR_RE =
+  /rate.?limit|429|quota|401|403|unauthorized|invalid.*api.?key|authentication/i;
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -76,6 +94,8 @@ export interface WorldManagerOptions {
   brains?: BrainRouter;
   /** Hooks for the active world's runner; receive the world id. */
   hooks?: (worldId: string) => RunnerHooks;
+  /** Resume the saved active world inside the constructor (default true). */
+  autoStart?: boolean;
 }
 
 /**
@@ -86,10 +106,12 @@ export class WorldManager {
   private readonly worldsDir: string;
   private readonly appStatePath: string;
   private readonly files = new Map<string, WorldFile>();
+  private readonly metaCache = new Map<string, WorldMeta>();
   private appState: AppState;
   private runner: WorldRunner | null = null;
   /** Replay of the active world's past (cached between scrubs). */
   private replayer: { worldId: string; replayer: Replayer } | null = null;
+  private lifecycleLock: Promise<void> = Promise.resolve();
   private readonly log: (msg: string) => void;
   readonly brains: BrainRouter;
 
@@ -101,11 +123,30 @@ export class WorldManager {
     this.brains = options.brains ?? new BrainRouter();
     this.worldsDir = join(dataDir, 'worlds');
     this.appStatePath = join(dataDir, 'app.json');
-    mkdirSync(this.worldsDir, { recursive: true });
+    mkdirSync(this.worldsDir, { recursive: true, mode: 0o700 });
     this.appState = this.readAppState();
+    if (options.autoStart !== false) this.start();
+  }
+
+  /** Resume the previously active world, clearing activeWorldId if its file is missing or corrupt. */
+  start(): void {
+    if (this.runner) return;
     const active = this.appState.activeWorldId;
-    if (active && !existsSync(this.pathFor(active))) this.setActive(null);
-    else if (active) this.startRunner(active);
+    if (!active) return;
+    if (!WORLD_ID_PATTERN.test(active) || !existsSync(this.pathFor(active))) {
+      this.log(`Active world "${active}" is missing or invalid; clearing active world.`);
+      this.setActive(null);
+      return;
+    }
+    try {
+      this.startRunner(active);
+    } catch (err) {
+      this.log(`Could not open active world "${active}": ${(err as Error).message}`);
+      this.files.get(active)?.close();
+      this.files.delete(active);
+      this.metaCache.delete(active);
+      this.setActive(null);
+    }
   }
 
   get activeWorldId(): string | null {
@@ -119,14 +160,31 @@ export class WorldManager {
 
   list(): WorldMeta[] {
     const worlds: WorldMeta[] = [];
+    const seen = new Set<string>();
     for (const name of readdirSync(this.worldsDir)) {
       const id = name.replace(/\.sqlite$/, '');
       if (!name.endsWith('.sqlite') || !WORLD_ID_PATTERN.test(id)) continue;
+      seen.add(id);
       try {
-        worlds.push(this.runner?.id === id ? this.runner.currentMeta() : this.file(id).readMeta());
+        if (this.runner?.id === id) {
+          worlds.push(this.runner.currentMeta());
+          continue;
+        }
+        const cached = this.metaCache.get(id);
+        if (cached) {
+          worlds.push({ ...cached });
+          continue;
+        }
+        const open = this.files.get(id);
+        const meta = open ? open.readMeta() : WorldFile.readMetaOnly(this.pathFor(id));
+        this.metaCache.set(id, meta);
+        worlds.push({ ...meta });
       } catch (err) {
         this.log(`Skipping unreadable world file ${name}: ${(err as Error).message}`);
       }
+    }
+    for (const id of [...this.metaCache.keys()]) {
+      if (!seen.has(id)) this.metaCache.delete(id);
     }
     return worlds.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -141,7 +199,8 @@ export class WorldManager {
         `Got ${req.brains.length} brains for a cast of ${specs.length} people.`,
       );
     // Everyone gets the brain picked for them, else the world's default (the free Mock brain).
-    const cast = (await this.fleshOutCast(specs, req.cast)).map((spec, i) => ({
+    const fleshed = await this.fleshOutCast(specs, req.cast);
+    const cast = fleshed.cast.map((spec, i) => ({
       ...spec,
       brain: { ...(req.brains?.[i] ?? req.defaultBrain ?? DEFAULT_BRAIN) },
     }));
@@ -164,12 +223,13 @@ export class WorldManager {
       population: state.agents.filter((a) => a.alive).length,
       running: false,
       speed: DEFAULT_SPEED,
-      spentUsd: 0,
-      planUsd: 0,
+      spentUsd: fleshed.spentUsd,
+      planUsd: fleshed.planUsd,
       capUsd: DEFAULT_CAP_USD,
     };
     const file = WorldFile.create(this.pathFor(id), meta, state);
-    this.files.set(id, file);
+    file.close();
+    this.metaCache.set(id, meta);
     this.log(`Created world "${meta.name}" (${id}, seed ${seed})`);
     return meta;
   }
@@ -226,8 +286,8 @@ export class WorldManager {
   private async fleshOutCast(
     cast: AgentSpec[],
     option: CreateWorldRequest['cast'],
-  ): Promise<AgentSpec[]> {
-    if (option?.mode !== 'generated' || !option.useAi) return cast;
+  ): Promise<{ cast: AgentSpec[]; spentUsd: number; planUsd: number }> {
+    if (option?.mode !== 'generated' || !option.useAi) return { cast, spentUsd: 0, planUsd: 0 };
     // Flesh out each adult with the first AI provider that's set up.
     const order: BrainConfig['provider'][] = [
       'anthropic',
@@ -236,50 +296,83 @@ export class WorldManager {
       'claude_plan',
     ];
     const provider = order.find((p) => this.brains.has(p));
-    if (!provider) return cast;
+    if (!provider) return { cast, spentUsd: 0, planUsd: 0 };
     const brain: BrainConfig = { provider, model: '', effort: 'frugal' };
-    for (const spec of cast) {
-      if (spec.age < 16) continue;
-      const partner = spec.partner ? ` Partner: ${spec.partner}.` : '';
-      const kids = cast.filter((c) => c.parents?.includes(spec.name)).map((c) => c.name);
-      const { draft } = await draftPerson(
-        {
-          description: `A ${spec.age}-year-old ${spec.sex === 'female' ? 'woman' : 'man'} who works as a ${spec.occupation}. ${spec.traits}${partner}${kids.length ? ` Children: ${kids.join(', ')}.` : ''}`,
-          name: spec.name,
-          sex: spec.sex,
-          age: Math.max(16, Math.round(spec.age)),
-        },
-        brain,
-        this.brains,
-      );
-      spec.traits = draft.traits;
-      spec.background = draft.background;
-      spec.personality = draft.personality;
-    }
-    return cast;
+    const adults = cast.filter((spec) => spec.age >= 16);
+    let nextIndex = 0;
+    let aborted = false;
+    let spentUsd = 0;
+    let planUsd = 0;
+
+    const worker = async () => {
+      while (!aborted) {
+        const idx = nextIndex++;
+        if (idx >= adults.length) return;
+        const spec = adults[idx]!;
+        const partner = spec.partner ? ` Partner: ${spec.partner}.` : '';
+        const kids = cast.filter((c) => c.parents?.includes(spec.name)).map((c) => c.name);
+        const { draft, usage, error } = await draftPerson(
+          {
+            description: `A ${spec.age}-year-old ${spec.sex === 'female' ? 'woman' : 'man'} who works as a ${spec.occupation}. ${spec.traits}${partner}${kids.length ? ` Children: ${kids.join(', ')}.` : ''}`,
+            name: spec.name,
+            sex: spec.sex,
+            age: Math.max(16, Math.round(spec.age)),
+          },
+          brain,
+          this.brains,
+        );
+        const cost = usage?.costUsd ?? 0;
+        if (Number.isFinite(cost) && cost > 0) {
+          spentUsd += cost;
+          if (usage?.coveredByPlan) planUsd += cost;
+        }
+        if (error) {
+          if (STOP_FLESH_OUT_ERROR_RE.test(error)) {
+            aborted = true;
+            return;
+          }
+          continue;
+        }
+        spec.traits = draft.traits;
+        spec.background = draft.background;
+        spec.personality = draft.personality;
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(FLESH_OUT_CONCURRENCY, adults.length) }, worker);
+    await Promise.all(workers);
+    return { cast, spentUsd, planUsd };
   }
 
   /** Make a world the active one: the previous one is saved and stops; this one resumes. */
   async activate(id: string): Promise<WorldMeta> {
-    const file = this.file(id);
-    if (this.runner?.id !== id) {
-      await this.stopRunner();
-      file.writeMeta({ updatedAt: new Date().toISOString() });
-      this.startRunner(id);
-    }
-    this.setActive(id);
-    return this.runner!.currentMeta();
+    return this.withLifecycleLock(async () => {
+      const path = this.pathFor(id);
+      if (!existsSync(path)) throw new NotFoundError(`World ${id} not found`);
+      if (this.runner?.id !== id) {
+        await this.stopRunner();
+        const file = this.file(id);
+        file.writeMeta({ updatedAt: new Date().toISOString() });
+        this.startRunner(id);
+      }
+      this.metaCache.delete(id);
+      this.setActive(id);
+      return this.runner!.currentMeta();
+    });
   }
 
   async delete(id: string): Promise<void> {
-    const path = this.pathFor(id);
-    if (!existsSync(path)) throw new NotFoundError(`World ${id} not found`);
-    if (this.runner?.id === id) await this.stopRunner();
-    this.files.get(id)?.close();
-    this.files.delete(id);
-    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
-    if (this.appState.activeWorldId === id) this.setActive(null);
-    this.log(`Deleted world ${id}`);
+    return this.withLifecycleLock(async () => {
+      const path = this.pathFor(id);
+      if (!existsSync(path)) throw new NotFoundError(`World ${id} not found`);
+      if (this.runner?.id === id) await this.stopRunner();
+      this.files.get(id)?.close();
+      this.files.delete(id);
+      this.metaCache.delete(id);
+      for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
+      if (this.appState.activeWorldId === id) this.setActive(null);
+      this.log(`Deleted world ${id}`);
+    });
   }
 
   view(id: string): WorldViewResponse {
@@ -331,6 +424,7 @@ export class WorldManager {
   }
 
   events(worldId: string, query: Parameters<WorldFile['queryEvents']>[0]) {
+    if (this.runner?.id === worldId) this.runner.persist();
     return this.file(worldId).queryEvents(query);
   }
 
@@ -339,17 +433,22 @@ export class WorldManager {
    * `tick` when replaying. Unknown in that state = NotFoundError.
    */
   objectHistory(worldId: string, objectId: string, tick?: number): ObjectHistoryResponse {
-    const state =
-      tick === undefined
-        ? this.requireActive(worldId).state
-        : this.replayState(worldId, tick).state;
+    let state: WorldState;
+    if (tick === undefined) {
+      const runner = this.requireActive(worldId);
+      runner.persist();
+      state = runner.state;
+    } else {
+      state = this.replayState(worldId, tick).state;
+    }
     if (!state.map.objects.some((o) => o.id === objectId))
       throw new NotFoundError(`No such object ${objectId}`);
     const file = this.file(worldId);
     const history = file.objectHistory(objectId, tick === undefined ? undefined : state.tick);
     const foundedTick = file.firstSnapshotTick();
+    const byId = new Map(state.agents.map((a) => [a.id, a]));
     const nameOf = (id: string) => {
-      const agent = state.agents.find((a) => a.id === id);
+      const agent = byId.get(id);
       return agent ? fullName(agent) : id;
     };
     return {
@@ -376,7 +475,9 @@ export class WorldManager {
    * interleaved with their own diary and life chapters, oldest first.
    */
   story(worldId: string, agentId: string): StoryEntry[] {
-    const state = this.requireActive(worldId).state;
+    const runner = this.requireActive(worldId);
+    runner.persist();
+    const state = runner.state;
     if (!state.agents.some((a) => a.id === agentId))
       throw new NotFoundError(`No such person ${agentId}`);
     const events = this.file(worldId).queryEvents({
@@ -529,7 +630,8 @@ export class WorldManager {
   /** A person with parents/grandparents above and children/grandchildren below. */
   familyTree(worldId: string, agentId: string): FamilyNode {
     const state = this.requireActive(worldId).state;
-    const find = (id: string | null) => (id ? state.agents.find((a) => a.id === id) : undefined);
+    const byId = new Map(state.agents.map((a) => [a.id, a]));
+    const find = (id: string | null) => (id ? byId.get(id) : undefined);
     const root = find(agentId);
     if (!root) throw new NotFoundError(`No such person ${agentId}`);
     const node = (
@@ -615,49 +717,57 @@ export class WorldManager {
       capReached: meta.spentUsd >= meta.capUsd,
     });
 
-    const usage = result.usage;
-    if (usage && usage.costUsd > 0) runner.addSpend(usage.costUsd, usage.coveredByPlan);
-    // Every call made to their AI is logged (also one that failed and the free summary replaced).
-    if (result.trace || usage || result.error) {
-      const replaced = result.provider === 'mock';
-      file.appendCalls([
-        {
-          tick: askedTick,
-          agentId,
-          provider: replaced ? agent.brain.provider : result.provider,
-          model: replaced ? agent.brain.model : result.model,
-          trigger: 'interview',
-          inputTokens: usage?.inputTokens ?? 0,
-          outputTokens: usage?.outputTokens ?? 0,
-          cachedTokens: usage?.cachedInputTokens ?? 0,
-          costUsd: usage?.costUsd ?? 0,
-          estimated: usage?.estimated ?? false,
-          plan: usage?.coveredByPlan ?? false,
-          latencyMs: result.trace?.latencyMs ?? 0,
-          prompt: result.trace?.prompt ?? null,
-          response: result.trace?.response ?? null,
-          error: result.error ?? null,
-        },
-      ]);
+    if (this.runner !== runner) {
+      throw new ConflictError('Active world changed while answering.');
     }
 
-    return file.appendInterview({
-      agentId,
-      askedTick,
-      fromTick: period.from,
-      toTick: period.to,
-      question,
-      answer: result.answer,
-      provider: result.provider,
-      model: result.model,
-      costUsd: usage?.costUsd ?? 0,
-      plan: usage?.coveredByPlan ?? false,
-      recordCount: digest.total,
-      usedCount: digest.entries.length,
-      ...(result.fallback ? { fallback: result.fallback } : {}),
-      ...(result.note ? { note: result.note } : {}),
-      createdAt: new Date().toISOString(),
+    const usage = result.usage;
+    const interview = file.transaction(() => {
+      // Every call made to their AI is logged (also one that failed and the free summary replaced).
+      if (result.trace || usage || result.error) {
+        const replaced = result.provider === 'mock';
+        file.appendCalls([
+          {
+            tick: askedTick,
+            agentId,
+            provider: replaced ? agent.brain.provider : result.provider,
+            model: replaced ? agent.brain.model : result.model,
+            trigger: 'interview',
+            inputTokens: usage?.inputTokens ?? 0,
+            outputTokens: usage?.outputTokens ?? 0,
+            cachedTokens: usage?.cachedInputTokens ?? 0,
+            costUsd: usage?.costUsd ?? 0,
+            estimated: usage?.estimated ?? false,
+            plan: usage?.coveredByPlan ?? false,
+            latencyMs: result.trace?.latencyMs ?? 0,
+            prompt: result.trace?.prompt ?? null,
+            response: result.trace?.response ?? null,
+            error: result.error ?? null,
+          },
+        ]);
+      }
+
+      return file.appendInterview({
+        agentId,
+        askedTick,
+        fromTick: period.from,
+        toTick: period.to,
+        question,
+        answer: result.answer,
+        provider: result.provider,
+        model: result.model,
+        costUsd: usage?.costUsd ?? 0,
+        plan: usage?.coveredByPlan ?? false,
+        recordCount: digest.total,
+        usedCount: digest.entries.length,
+        ...(result.fallback ? { fallback: result.fallback } : {}),
+        ...(result.note ? { note: result.note } : {}),
+        createdAt: new Date().toISOString(),
+      });
     });
+
+    if (usage && usage.costUsd > 0) runner.addSpend(usage.costUsd, usage.coveredByPlan);
+    return interview;
   }
 
   /** A page of a person's record (what the village holds about them) for a period. */
@@ -675,6 +785,7 @@ export class WorldManager {
   }
 
   calls(worldId: string, agentId: string, limit = 10): LlmCallView[] {
+    if (this.runner?.id === worldId) this.runner.persist();
     return this.file(worldId).listCalls(agentId, limit);
   }
 
@@ -684,38 +795,83 @@ export class WorldManager {
    */
   async spawn(worldId: string, req: SpawnRequest): Promise<{ agentId: string; note?: string }> {
     const runner = this.requireActive(worldId);
-    const { draft, usage, error } = await draftPerson(
-      req,
-      runner.state.settings.defaultBrain,
-      this.brains,
-    );
-    if (usage?.costUsd) runner.addSpend(usage.costUsd, usage.coveredByPlan);
-    const before = runner.state.nextAgentNum;
-    await runner.submit({
-      kind: 'spawn_agent',
-      spec: {
-        name: draft.name,
-        familyName: draft.familyName,
-        sex: draft.sex,
-        age: draft.age,
-        occupation: draft.occupation,
-        traits: draft.traits,
-        background: draft.background,
-        personality: draft.personality,
-        knowsVillage: false,
-        homeId: null,
-      },
+    const brain = runner.state.settings.defaultBrain;
+    const meta = runner.currentMeta();
+    const capReached =
+      brain.provider !== 'mock' && this.brains.has(brain.provider) && meta.spentUsd >= meta.capUsd;
+    const startedAt = Date.now();
+    let draftResult: Awaited<ReturnType<typeof draftPerson>>;
+    let note: string | undefined;
+    if (capReached) {
+      draftResult = { draft: draftPersonOffline(req) };
+      note = 'Spending cap reached; used a simple draft instead.';
+    } else {
+      draftResult = await draftPerson(req, brain, this.brains);
+      if (draftResult.error) {
+        note = `The AI couldn't help (${draftResult.error}); used a simple draft instead.`;
+      }
+    }
+    const latencyMs = Math.max(0, Date.now() - startedAt);
+
+    if (this.runner !== runner) {
+      throw new ConflictError('Active world changed while drafting person.');
+    }
+
+    const { draft, usage, model, error } = draftResult;
+    const agentId = await runner.spawnAgent({
+      name: draft.name,
+      familyName: draft.familyName,
+      sex: draft.sex,
+      age: draft.age,
+      occupation: draft.occupation,
+      traits: draft.traits,
+      background: draft.background,
+      personality: draft.personality,
+      knowsVillage: false,
+      homeId: null,
     });
-    return {
-      agentId: `a${before}`,
-      note: error ? `The AI couldn't help (${error}); used a simple draft instead.` : undefined,
-    };
+
+    if (!capReached && (usage || error || model)) {
+      this.file(worldId).appendCalls([
+        {
+          tick: runner.state.tick,
+          agentId,
+          provider: brain.provider,
+          model: model || brain.model,
+          trigger: 'draft',
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          cachedTokens: usage?.cachedInputTokens ?? 0,
+          costUsd: usage?.costUsd ?? 0,
+          estimated: usage?.estimated ?? false,
+          plan: usage?.coveredByPlan ?? false,
+          latencyMs,
+          prompt: null,
+          response: null,
+          error: error ?? null,
+        },
+      ]);
+    }
+    if (usage?.costUsd) runner.addSpend(usage.costUsd, usage.coveredByPlan);
+    return { agentId, note };
   }
 
   async closeAll(): Promise<void> {
-    await this.stopRunner();
-    for (const file of this.files.values()) file.close();
-    this.files.clear();
+    return this.withLifecycleLock(async () => {
+      await this.stopRunner();
+      for (const file of this.files.values()) file.close();
+      this.files.clear();
+      this.metaCache.clear();
+    });
+  }
+
+  private withLifecycleLock<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.lifecycleLock.then(fn, fn);
+    this.lifecycleLock = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private requireActive(id: string): WorldRunner {
@@ -733,7 +889,11 @@ export class WorldManager {
     const r = this.runner;
     this.runner = null;
     this.replayer = null;
-    await r?.stop();
+    if (!r) return;
+    await r.stop();
+    this.metaCache.delete(r.id);
+    this.files.get(r.id)?.close();
+    this.files.delete(r.id);
   }
 
   private file(id: string): WorldFile {
@@ -755,8 +915,9 @@ export class WorldManager {
   private readAppState(): AppState {
     try {
       const parsed = JSON.parse(readFileSync(this.appStatePath, 'utf8')) as Partial<AppState>;
+      const id = parsed.activeWorldId;
       return {
-        activeWorldId: typeof parsed.activeWorldId === 'string' ? parsed.activeWorldId : null,
+        activeWorldId: typeof id === 'string' && WORLD_ID_PATTERN.test(id) ? id : null,
       };
     } catch {
       return { activeWorldId: null };
@@ -765,6 +926,17 @@ export class WorldManager {
 
   private setActive(id: string | null): void {
     this.appState = { ...this.appState, activeWorldId: id };
-    writeFileSync(this.appStatePath, JSON.stringify(this.appState, null, 2));
+    const tmp = `${this.appStatePath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify(this.appState, null, 2));
+      renameSync(tmp, this.appStatePath);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // ignore cleanup error
+      }
+      throw err;
+    }
   }
 }

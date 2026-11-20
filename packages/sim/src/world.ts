@@ -282,6 +282,7 @@ export function emptyVillage(): Pick<
 
 /** Households own their houses; the baker keeps the bakery and the carpenter the workshop. */
 export function assignOwnership(state: WorldState): void {
+  const { byKind } = mapCache(state.map);
   for (const a of state.agents) {
     if (!a.alive) continue;
     if (a.homeId) {
@@ -294,7 +295,7 @@ export function assignOwnership(state: WorldState): void {
       ['workshop', 'carpenter'],
     ] as const) {
       if (!occ.startsWith(word)) continue;
-      const b = state.map.objects.find((o) => o.kind === kind);
+      const b = byKind.get(kind)?.[0];
       if (b && !state.owners[b.id]?.length) state.owners[b.id] = [a.id];
     }
   }

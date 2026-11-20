@@ -49,7 +49,8 @@ export const Portrait = memo(function Portrait({
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
-    const ctx = c.getContext('2d')!;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, c.width, c.height);
     ctx.drawImage(stripFor(key), 0, 0, CHARACTER_PX, CHARACTER_PX, 0, 0, c.width, c.height);
@@ -59,6 +60,7 @@ export const Portrait = memo(function Portrait({
       ref={ref}
       width={size}
       height={size}
+      aria-hidden="true"
       className="portrait"
       style={{ width: size, height: size, filter: dead ? 'grayscale(1) opacity(0.6)' : undefined }}
     />

@@ -28,7 +28,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     throw new Error(`Invalid AW_PORT: ${env.AW_PORT}`);
   }
   return {
-    dataDir: resolve(env.AGENTS_WORLD_HOME ?? join(homedir(), '.agents-world')),
+    dataDir: resolve(env.AGENTS_WORLD_HOME?.trim() || join(homedir(), '.agents-world')),
     port,
     host: '127.0.0.1',
     dev: env.AW_DEV === '1',

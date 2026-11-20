@@ -36,6 +36,8 @@ export function BrainFields({
     if (!settings) void load();
   }, [settings, load]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setModels([]);
     if (value.provider === 'mock' || value.provider === 'claude_plan') return;
     let cancelled = false;
     api
@@ -154,27 +156,53 @@ export function BrainEditor({
   extra?: ReactNode;
 }) {
   const [brain, setBrain] = useState(value);
+  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const key = JSON.stringify(value);
   const dirty = JSON.stringify(brain) !== key;
 
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await onSave(brain);
+      setStatus('Saved.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="brain-editor">
-      <BrainFields value={brain} onChange={setBrain} />
+      <BrainFields
+        value={brain}
+        onChange={(next) => {
+          setBrain(next);
+          if (status) setStatus(null);
+          if (error) setError(null);
+        }}
+      />
       {extra}
       <div className="row">
         <button
+          type="button"
           className="btn btn-primary btn-small"
-          disabled={!dirty && !extra}
-          onClick={() =>
-            void onSave(brain)
-              .then(() => setStatus('Saved.'))
-              .catch((e: Error) => setStatus(e.message))
-          }
+          disabled={busy || (!dirty && !extra)}
+          onClick={() => void save()}
         >
-          {saveLabel}
+          {busy ? 'Saving…' : saveLabel}
         </button>
         {status && <span className="muted small">{status}</span>}
+        {error && (
+          <span className="warn small" role="alert">
+            {error}
+          </span>
+        )}
       </div>
     </div>
   );

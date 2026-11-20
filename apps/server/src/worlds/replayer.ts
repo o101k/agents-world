@@ -16,6 +16,7 @@ export class Replayer {
   at(tick: number): WorldState {
     const target = Math.max(this.file.firstSnapshotTick(), tick);
     let s = this.state;
+    this.state = null;
     const nearest = this.file.snapshotTickAtOrBefore(target);
     // Start again from a snapshot when going back in time, or when one is closer than we are.
     if (!s || s.tick > target || (nearest > s.tick && target - s.tick > TICKS_PER_DAY / 4)) {

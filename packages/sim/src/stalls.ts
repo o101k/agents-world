@@ -19,8 +19,8 @@ export type StallIntent = Extract<
 
 /** The first usable stall this agent owns, if any. */
 function ownStall(state: WorldState, agent: Agent): MapObject | undefined {
-  return state.map.objects.find(
-    (o) => o.kind === 'stall' && state.owners[o.id]?.includes(agent.id) && usable(state, o.id),
+  return (mapCache(state.map).byKind.get('stall') ?? []).find(
+    (o) => state.owners[o.id]?.includes(agent.id) && usable(state, o.id),
   );
 }
 

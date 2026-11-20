@@ -1,4 +1,4 @@
-import { BitmapText, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js';
+import { BitmapText, CanvasSource, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js';
 import type { AgentView, Appearance, Point } from '@aw/shared';
 import type { Camera } from './camera.ts';
 import {
@@ -37,6 +37,7 @@ export interface AgentSprite {
   labelFont: string;
   view: AgentView;
   sprite: Sprite;
+  source: CanvasSource | null;
   frames: Texture[];
   /** The look the frames were painted for. */
   look: Appearance | null;
@@ -126,10 +127,11 @@ export class PeopleLayer {
     }
     for (const [id, a] of this.agents) {
       if (!seen.has(id)) {
+        this.freeTextures(a);
         a.sprite.destroy();
-        a.label.destroy();
-        a.zzz.destroy();
-        a.bubble.destroy({ children: true });
+        a.label.destroy({ style: true });
+        a.zzz.destroy({ style: true });
+        a.bubble.destroy({ children: true, context: true, style: true });
         a.grave?.destroy();
         this.agents.delete(id);
       }
@@ -211,7 +213,12 @@ export class PeopleLayer {
       a.zzz.visible = (a.view.activity === 'sleeping' || thinking) && cam.zoom >= 1.5;
       const marker = thinking ? '…' : 'z z';
       if (a.zzz.text !== marker) a.zzz.text = marker;
-      a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
+      // Sit neatly to the right of the name label when shown so the marker never overlaps letters.
+      if (a.label.visible) {
+        a.zzz.position.set(Math.round(screen.x + a.label.width / 2 + 4), Math.round(screen.y));
+      } else {
+        a.zzz.position.set(Math.round(screen.x + 6), Math.round(screen.y + 4));
+      }
       if (a.label.visible)
         labels.push({
           owner: id,
@@ -248,7 +255,15 @@ export class PeopleLayer {
 
   /** Frees the per-person textures (the rest goes with the Pixi app). */
   destroy(): void {
-    for (const a of this.agents.values()) for (const t of a.frames) t.destroy(true);
+    for (const a of this.agents.values()) this.freeTextures(a);
+    this.agents.clear();
+  }
+
+  private freeTextures(a: AgentSprite): void {
+    for (const t of a.frames) t.destroy(false);
+    a.frames = [];
+    a.source?.destroy();
+    a.source = null;
   }
 
   private createAgentSprite(v: AgentView, at: Point): AgentSprite {
@@ -294,6 +309,7 @@ export class PeopleLayer {
     const a: AgentSprite = {
       view: v,
       sprite,
+      source: null,
       frames: [],
       look: null,
       labelFont: LABEL_FONT,
@@ -321,14 +337,15 @@ export class PeopleLayer {
   }
 
   private retexture(a: AgentSprite, v: AgentView): void {
-    for (const t of a.frames) t.destroy(true);
+    this.freeTextures(a);
     const canvas = characterCanvas(v.appearance);
-    const base = Texture.from(canvas);
+    const source = new CanvasSource({ resource: canvas });
+    a.source = source;
     a.frames = Array.from(
       { length: CHARACTER_FRAMES },
       (_, i) =>
         new Texture({
-          source: base.source,
+          source,
           frame: new Rectangle(i * CHARACTER_PX, 0, CHARACTER_PX, CHARACTER_PX),
         }),
     );
@@ -343,21 +360,34 @@ export class PeopleLayer {
       if (!a.grave) {
         a.grave = new Sprite(this.textures.grave);
         a.grave.anchor.set(0.5, 1);
-        a.grave.position.set(a.to.x, a.to.y + 1);
-        a.grave.zIndex = a.to.y;
         this.graves.addChild(a.grave);
       }
+      a.grave.position.set(a.to.x, a.to.y + 1);
+      a.grave.zIndex = a.to.y;
       return;
+    }
+    // Scrubbing replay before a villager's death brings them back to life: remove the gravestone.
+    if (a.grave) {
+      a.grave.destroy();
+      a.grave = null;
     }
     // Nobody is ever hidden: people indoors are drawn in the open room. (animate shows the
     // living who are on screen.)
     a.baseScale =
-      v.stage === 'toddler' ? 0.6 : v.stage === 'child' ? 0.8 : v.stage === 'teen' ? 0.92 : 1;
+      v.stage === 'infant'
+        ? 0.5
+        : v.stage === 'toddler'
+          ? 0.6
+          : v.stage === 'child'
+            ? 0.8
+            : v.stage === 'teen'
+              ? 0.92
+              : 1;
     const sleeping = v.activity === 'sleeping';
     // The sick look pale and greenish.
     a.sprite.tint = v.sick ? 0xb8e0a0 : 0xffffff;
     a.sprite.rotation = sleeping ? -Math.PI / 2 : 0;
-    a.sprite.anchor.set(sleeping ? 0.5 : 0.5, sleeping ? 0.6 : 1);
+    a.sprite.anchor.set(0.5, sleeping ? 0.6 : 1);
   }
 
   private frameFor(a: AgentSprite, moving: boolean, now: number): Texture {

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { accessSync, chmodSync, constants, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { BrainConfig, DecisionRequest, EffortLevel } from '@aw/shared';
@@ -57,8 +57,13 @@ export function planEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 /** Finds the `claude` command: on PATH, then where its installers put it. Null if not installed. */
 export function findClaudeCli(env: NodeJS.ProcessEnv): string | null {
   const dirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
-  if (env.HOME) {
-    dirs.push(join(env.HOME, '.local', 'bin'), join(env.HOME, '.claude', 'local'));
+  const homes = [env.HOME, env.USERPROFILE].filter(
+    (h, i, arr): h is string => Boolean(h) && arr.indexOf(h) === i,
+  );
+  for (const home of homes) {
+    dirs.push(join(home, '.local', 'bin'), join(home, '.claude', 'local'));
+  }
+  if (process.platform !== 'win32') {
     dirs.push('/opt/homebrew/bin', '/usr/local/bin');
   }
   const names = process.platform === 'win32' ? ['claude.exe', 'claude.cmd'] : ['claude'];
@@ -66,6 +71,7 @@ export function findClaudeCli(env: NodeJS.ProcessEnv): string | null {
     for (const name of names) {
       const path = join(dir, name);
       try {
+        if (!statSync(path).isFile()) continue;
         accessSync(path, constants.X_OK);
         return path;
       } catch {
@@ -81,6 +87,9 @@ interface RunResult {
   stdout: string;
   stderr: string;
 }
+
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const SIGKILL_DELAY_MS = 3_000;
 
 function run(
   command: string,
@@ -102,19 +111,77 @@ function run(
     });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (d: string) => (stdout += d));
-    child.stderr.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-    const kill = () => child.kill('SIGTERM');
-    const timer = setTimeout(kill, opts.timeoutMs);
-    opts.signal?.addEventListener('abort', kill, { once: true });
-    child.on('error', (err) => {
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let killing = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const terminate = () => {
+      if (killing) return;
+      killing = true;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // already exited
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // already exited
+        }
+      }, SIGKILL_DELAY_MS);
+      killTimer.unref?.();
+    };
+
+    const cleanup = (includeKillTimer: boolean) => {
       clearTimeout(timer);
-      reject(err);
+      if (includeKillTimer) clearTimeout(killTimer);
+      opts.signal?.removeEventListener('abort', terminate);
+    };
+
+    const timer = setTimeout(terminate, opts.timeoutMs);
+    opts.signal?.addEventListener('abort', terminate, { once: true });
+
+    child.stdout.setEncoding('utf8').on('data', (d: string) => {
+      if (settled) return;
+      stdoutBytes += Buffer.byteLength(d, 'utf8');
+      if (stdoutBytes > MAX_OUTPUT_BYTES) {
+        settled = true;
+        cleanup(false);
+        terminate();
+        reject(new Error('Claude CLI stdout exceeded 4 MiB limit'));
+        return;
+      }
+      stdout += d;
+    });
+    child.stderr.setEncoding('utf8').on('data', (d: string) => {
+      if (settled) return;
+      stderrBytes += Buffer.byteLength(d, 'utf8');
+      if (stderrBytes > MAX_OUTPUT_BYTES) {
+        settled = true;
+        cleanup(false);
+        terminate();
+        reject(new Error('Claude CLI stderr exceeded 4 MiB limit'));
+        return;
+      }
+      stderr += d;
+    });
+
+    child.on('error', (err) => {
+      cleanup(true);
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', kill);
-      resolve({ code, stdout, stderr });
+      cleanup(true);
+      if (!settled) {
+        settled = true;
+        resolve({ code, stdout, stderr });
+      }
     });
     child.stdin.on('error', () => {}); // the process may exit before reading everything
     child.stdin.end(opts.input ?? '');
@@ -182,11 +249,15 @@ export async function checkClaudeCli(
   }
 }
 
-/** An empty folder to run the CLI in, so it never picks up a project's CLAUDE.md or settings. */
+let cachedWorkDir: string | undefined;
+
+/** An empty private folder to run the CLI in, so it never picks up a project's CLAUDE.md or settings. */
 function workDir(): string {
-  const dir = join(tmpdir(), 'agents-world-claude');
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  if (!cachedWorkDir) {
+    cachedWorkDir = mkdtempSync(join(tmpdir(), 'agents-world-claude-'));
+    chmodSync(cachedWorkDir, 0o700);
+  }
+  return cachedWorkDir;
 }
 
 const LIMIT_RE =
@@ -199,17 +270,29 @@ export function parseResetTime(text: string, now = new Date()): number | undefin
     const n = Number(epoch[1]);
     return n < 1e12 ? n * 1000 : n;
   }
-  const at = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text);
+  const at =
+    /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2})\s*(am|pm)?|\s*(am|pm))\b(?:\s*\(?(UTC|GMT)\)?)?/i.exec(
+      text,
+    );
   if (!at) return undefined;
   let hour = Number(at[1]);
   const minute = Number(at[2] ?? 0);
-  const ampm = at[3]?.toLowerCase();
-  if (ampm === 'pm' && hour < 12) hour += 12;
-  if (ampm === 'am' && hour === 12) hour = 0;
+  const ampm = (at[3] ?? at[4])?.toLowerCase();
+  const isUtc = Boolean(at[5]);
+  if (ampm) {
+    if (hour < 1 || hour > 12) return undefined;
+    if (ampm === 'pm' && hour < 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+  }
   if (hour > 23 || minute > 59) return undefined;
   const t = new Date(now);
-  t.setHours(hour, minute, 0, 0);
-  if (t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+  if (isUtc) {
+    t.setUTCHours(hour, minute, 0, 0);
+    if (t.getTime() <= now.getTime()) t.setUTCDate(t.getUTCDate() + 1);
+  } else {
+    t.setHours(hour, minute, 0, 0);
+    if (t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+  }
   return t.getTime();
 }
 
@@ -341,25 +424,33 @@ export class ClaudePlanProvider implements BrainProvider {
     } catch {
       out = extractJson(res.stdout) as CliResult | null;
     }
+    const resultText =
+      typeof out?.result === 'string' && out.result.trim() ? out.result.trim() : '';
+    const errorsText = out?.errors?.length ? out.errors.join('; ').trim() : '';
+    const stderrText = res.stderr.trim();
     const text = (
-      typeof out?.result === 'string'
-        ? out.result
-        : out?.errors?.length
-          ? out.errors.join('; ')
-          : out?.subtype?.startsWith('error_')
-            ? `Claude Code stopped (${out.subtype})`
-            : `${res.stdout}\n${res.stderr}`
+      resultText ||
+      errorsText ||
+      (out?.subtype?.startsWith('error_')
+        ? `Claude Code stopped (${out.subtype})`
+        : out
+          ? stderrText
+          : `${res.stdout}\n${res.stderr}`.trim())
     ).trim();
     if (!out || out.is_error || res.code !== 0) {
-      if (out?.api_error_status === 429 || LIMIT_RE.test(text))
-        throw new RateLimitError(text.slice(0, 300), {
-          resetsAt: parseResetTime(text),
+      const combined = [resultText, errorsText, stderrText, !out ? res.stdout.trim() : '']
+        .filter(Boolean)
+        .join('\n');
+      const limitText = LIMIT_RE.test(text) ? text : combined;
+      if (out?.api_error_status === 429 || LIMIT_RE.test(limitText))
+        throw new RateLimitError((limitText || text).slice(0, 300), {
+          resetsAt: parseResetTime(limitText || text),
           status: out?.api_error_status ?? undefined,
-          limit: /weekly/i.test(text) ? 'weekly plan limit' : 'plan usage limit',
+          limit: /weekly/i.test(limitText || text) ? 'weekly plan limit' : 'plan usage limit',
         });
-      if (/unknown option|unrecognized/i.test(text))
+      if (/unknown option|unrecognized/i.test(combined || text))
         throw new Error(
-          `Claude Code is too old for Agents World; run \`claude update\`. (${text.slice(0, 200)})`,
+          `Claude Code is too old for Agents World; run \`claude update\`. (${(text || combined).slice(0, 200)})`,
         );
       // The call ran and gave no answer, but its tokens and cost still count.
       if (out)

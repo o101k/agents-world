@@ -296,4 +296,51 @@ describe('WorldFile object events', () => {
       file.close();
     });
   });
+
+  describe('persistence hardening', () => {
+    it('reads meta via readMetaOnly and defaults missing event importance to 3 in queryEvents', () => {
+      const state = namedState();
+      const path = join(dir, 'meta-only.sqlite');
+      const file = WorldFile.create(path, meta(state), state);
+      file.appendEvent(10, 'custom', { text: 'No importance field' }, ['a1']);
+      file.close();
+
+      expect(WorldFile.readMetaOnly(path).name).toBe('Test');
+
+      const reopened = WorldFile.open(path);
+      const found = reopened.queryEvents({ limit: 10, minImportance: 3, agentId: 'a1' });
+      expect(found.map((e) => e.text)).toEqual(['No importance field']);
+      reopened.close();
+    });
+
+    it('prunes old llm_calls rows where prompt is null but response is present', () => {
+      const state = namedState();
+      const path = join(dir, 'prune.sqlite');
+      const file = WorldFile.create(path, meta(state), state);
+      const batch = Array.from({ length: 25 }, (_, i) => ({
+        tick: i + 1,
+        agentId: 'a1',
+        provider: 'anthropic',
+        model: 'm',
+        trigger: 'idle',
+        inputTokens: 10,
+        outputTokens: 10,
+        cachedTokens: 0,
+        costUsd: 0.001,
+        estimated: false,
+        plan: false,
+        latencyMs: 1,
+        prompt: null,
+        response: `resp-${i}`,
+        error: null,
+      }));
+      file.appendCalls(batch);
+      const all = file.listCalls('a1', 30);
+      expect(all).toHaveLength(25);
+      // Latest 20 retain response; oldest 5 are pruned to null
+      expect(all.slice(0, 20).every((c) => c.response !== null)).toBe(true);
+      expect(all.slice(20).every((c) => c.response === null)).toBe(true);
+      file.close();
+    });
+  });
 });

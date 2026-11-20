@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { BrainConfig, InterviewView, Sex } from '@aw/shared';
 import { api } from '../api.ts';
 import {
@@ -52,10 +52,20 @@ export function AskSection({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<PeriodPresetId>('today');
   const [text, setText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const mountedRef = useRef(true);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { asking, error, ask } = useAsk(worldId, agentId, (i) =>
-    setInterviews((prev) => [...prev, i]),
-  );
+  const closeDialog = useCallback(() => setDialogOpen(false), []);
+  const onAsked = useCallback((i: InterviewView) => setInterviews((prev) => [...prev, i]), []);
+  const { asking, error, ask } = useAsk(worldId, agentId, onAsked);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [worldId, agentId]);
 
   useEffect(() => {
     if (!settingsLoaded) void loadSettings();
@@ -82,11 +92,18 @@ export function AskSection({
     return (
       <section className="ask-section">
         <h3>Ask about {firstName}</h3>
-        {loadError ? <p className="warn">{loadError}</p> : <p className="muted small">Loading…</p>}
+        {loadError ? (
+          <p className="warn" role="alert">
+            {loadError}
+          </p>
+        ) : (
+          <p className="muted small">Loading…</p>
+        )}
       </section>
     );
   }
 
+  const busy = submitting || asking !== null;
   const nowTick = atTick ?? meta.lifeToTick;
   const presets = periodPresets(nowTick, meta.lifeFromTick, meta.lifeToTick, meta.daysPerYear);
   const shown = presets.filter((p) => p.available);
@@ -94,28 +111,38 @@ export function AskSection({
 
   // Refresh the clock first for the living, so "Today" follows the world's time.
   const submit = async (question: string, wholeLife = false) => {
-    const q = question.trim();
-    let m = meta;
-    if (alive) {
-      try {
-        m = toMeta(await api.interviews(worldId, agentId));
-        setMeta(m);
-      } catch {
-        // Keep the last clock; the ask itself will report a real problem.
+    if (submittingRef.current || asking !== null) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      const q = question.trim();
+      let m = meta;
+      if (alive) {
+        try {
+          m = toMeta(await api.interviews(worldId, agentId));
+          if (!mountedRef.current) return;
+          setMeta(m);
+        } catch {
+          // Keep the last clock; the ask itself will report a real problem.
+        }
       }
+      if (!mountedRef.current) return;
+      const period = wholeLife
+        ? { from: m.lifeFromTick, to: m.lifeToTick }
+        : periodFor(m, presetId, atTick);
+      if (wholeLife) setPresetId('life');
+      const ok = await ask(q, period.from, period.to);
+      if (ok && mountedRef.current) setText('');
+    } finally {
+      submittingRef.current = false;
+      if (mountedRef.current) setSubmitting(false);
     }
-    const period = wholeLife
-      ? { from: m.lifeFromTick, to: m.lifeToTick }
-      : periodFor(m, presetId, atTick);
-    if (wholeLife) setPresetId('life');
-    const ok = await ask(q, period.from, period.to);
-    if (ok) setText('');
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      if (!asking) void submit(text);
+      if (!busy) void submit(text);
     }
   };
 
@@ -137,14 +164,14 @@ export function AskSection({
           placeholder={`What did ${firstName} do?`}
           rows={rows}
           value={text}
-          disabled={asking !== null}
+          disabled={busy}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
         />
         <button
           type="button"
           className="btn btn-small btn-primary"
-          disabled={asking !== null}
+          disabled={busy}
           onClick={() => void submit(text)}
         >
           Ask
@@ -176,7 +203,7 @@ export function AskSection({
               key={s.text}
               type="button"
               className="ask-chip"
-              disabled={asking !== null}
+              disabled={busy}
               onClick={() => {
                 setText(s.text);
                 void submit(s.text, s.period === 'life');
@@ -189,7 +216,11 @@ export function AskSection({
 
       <p className="muted small ask-brain">{brainLine}</p>
 
-      {error && <p className="warn">{error}</p>}
+      {error && (
+        <p className="warn" role="alert">
+          {error}
+        </p>
+      )}
       {asking && (
         <PendingAnswer
           question={asking.question}
@@ -231,8 +262,8 @@ export function AskSection({
           initialFrom={periodFor(meta, presetId, atTick).from}
           initialTo={periodFor(meta, presetId, atTick).to}
           interviews={interviews}
-          onAsked={(i) => setInterviews((prev) => [...prev, i])}
-          onClose={() => setDialogOpen(false)}
+          onAsked={onAsked}
+          onClose={closeDialog}
         />
       )}
     </section>

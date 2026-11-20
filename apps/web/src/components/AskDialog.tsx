@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import {
   RECORD_KINDS,
+  TICKS_PER_DAY,
   formatClock,
   tickToClock,
   type BrainConfig,
@@ -20,12 +21,12 @@ import {
   suggestionsFor,
   type PeriodPresetId,
 } from '../ask.ts';
-import { useSettings } from '../settingsStore.ts';
 import { useWorld } from '../worldStore.ts';
 import { AnswerCard, PendingAnswer, useAsk } from './AnswerCard.tsx';
+import { useDialog } from './useDialog.ts';
 
 const PAGE = 100;
-const DAY = 1440;
+const DAY = TICKS_PER_DAY;
 const ZERO_COUNTS: Record<RecordKind, number> = {
   event: 0,
   said: 0,
@@ -43,6 +44,7 @@ export function AskDialog({
   firstName,
   fullName,
   sex,
+  brain,
   lifeFromTick,
   lifeToTick,
   nowTick,
@@ -73,6 +75,7 @@ export function AskDialog({
   onClose: () => void;
 }) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const { subj, poss } = pronounsFor(sex);
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
@@ -88,14 +91,7 @@ export function AskDialog({
   const activePreset: PeriodPresetId | null =
     presets.find((p) => p.available && p.from === from && p.to === to)?.id ?? null;
 
-  // Escape closes, unless the settings dialog is open on top of this one.
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && !useSettings.getState().open) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useDialog(dialogRef, onClose);
 
   // Newest answer in view.
   useEffect(() => {
@@ -106,25 +102,34 @@ export function AskDialog({
   // The record for the period and kind, page 1. Sliders are debounced so dragging doesn't flood.
   const key = `${from}|${to}|${kind}`;
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setRecError(null);
     const t = setTimeout(() => {
       api
-        .record(worldId, agentId, {
-          from,
-          to,
-          kinds: kind === 'all' ? undefined : kind,
-          limit: PAGE,
-          offset: 0,
-        })
+        .record(
+          worldId,
+          agentId,
+          {
+            from,
+            to,
+            kinds: kind === 'all' ? undefined : kind,
+            limit: PAGE,
+            offset: 0,
+          },
+          ac.signal,
+        )
         .then((r) => {
-          if (cancelled) return;
+          if (ac.signal.aborted) return;
           setRec({ key, data: r });
           setRecError(null);
         })
-        .catch((e: Error) => !cancelled && setRecError(e.message));
+        .catch((e: Error) => {
+          if (!ac.signal.aborted) setRecError(e.message);
+        });
     }, 250);
     return () => {
-      cancelled = true;
+      ac.abort();
       clearTimeout(t);
     };
   }, [worldId, agentId, from, to, kind, key]);
@@ -192,6 +197,7 @@ export function AskDialog({
   };
 
   const submit = (question: string, wholeLife = false) => {
+    if (asking) return;
     const q = question.trim();
     const period = wholeLife ? { from: lifeFromTick, to: lifeToTick } : { from, to };
     if (wholeLife) {
@@ -207,6 +213,8 @@ export function AskDialog({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel ask-dialog"
         role="dialog"
         aria-modal="true"
@@ -221,7 +229,12 @@ export function AskDialog({
               Asking never changes anything in the world.
             </p>
           </div>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-label="Close"
+            onClick={onClose}
+          >
             ✕
           </button>
         </div>
@@ -249,7 +262,7 @@ export function AskDialog({
                 type="range"
                 min={lifeFromTick}
                 max={to}
-                step={60}
+                step={15}
                 value={from}
                 onChange={(e) => setFrom(Number(e.target.value))}
                 aria-label="From"
@@ -262,7 +275,7 @@ export function AskDialog({
                 type="range"
                 min={from}
                 max={lifeToTick}
-                step={60}
+                step={15}
                 value={to}
                 onChange={(e) => setTo(Number(e.target.value))}
                 aria-label="To"
@@ -365,14 +378,24 @@ export function AskDialog({
                 </button>
               </div>
               <p className="muted small">
-                Asks about {periodText}. Each paid answer costs a little and counts toward the cap.
+                Asks about {periodText}.{' '}
+                {brain.provider === 'mock'
+                  ? 'Free summary from the record (Mock brain).'
+                  : 'Each paid answer costs a little and counts toward the cap.'}
               </p>
-              {askError && <p className="warn">{askError}</p>}
+              {askError && (
+                <p className="warn" role="alert">
+                  {askError}
+                </p>
+              )}
             </div>
           </div>
 
           <div className="ask-column ask-record">
-            <h3>The record · {periodText}</h3>
+            <h3>
+              The record · {periodText}
+              {loading && data ? <span className="muted"> · Updating…</span> : null}
+            </h3>
             <div className="ask-tabs" role="tablist" aria-label="Kind of record">
               {tabs.map((t) => (
                 <button
@@ -387,8 +410,12 @@ export function AskDialog({
                 </button>
               ))}
             </div>
-            <div className="ask-scroll">
-              {recError && <p className="warn">{recError}</p>}
+            <div className={`ask-scroll ${loading && data ? 'is-updating' : ''}`}>
+              {recError && (
+                <p className="warn" role="alert">
+                  {recError}
+                </p>
+              )}
               {!data && !recError && <p className="muted">Loading the record…</p>}
               {data && data.entries.length === 0 && !loading && (
                 <p className="muted">Nothing recorded in this period.</p>

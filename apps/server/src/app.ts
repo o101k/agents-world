@@ -25,6 +25,8 @@ export interface BuildOptions {
   log?: (msg: string) => void;
   /** Environment for API keys (defaults to process.env; tests pass {}). */
   env?: NodeJS.ProcessEnv;
+  /** Resume the saved active world during buildApp (default true). */
+  autoStart?: boolean;
 }
 
 export async function buildApp(config: ServerConfig, options: BuildOptions = {}): Promise<App> {
@@ -39,11 +41,18 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
   const worlds = new WorldManager(config.dataDir, {
     log: options.log,
     brains,
+    autoStart: options.autoStart,
     hooks: (worldId) => ({
-      onFrame: (frame) => hub.broadcast({ type: 'frame', worldId, ...frame }),
-      onEvents: (events) => hub.broadcast({ type: 'events', worldId, events }),
+      onFrame: (frame) => {
+        if (hub.size === 0) return;
+        hub.broadcast({ type: 'frame', worldId, ...frame });
+      },
+      onEvents: (events) => {
+        if (hub.size === 0) return;
+        hub.broadcast({ type: 'events', worldId, events });
+      },
       onStatus: () => {
-        if (!manager) return;
+        if (!manager || hub.size === 0) return;
         hub.broadcast({
           type: 'worlds_changed',
           worlds: manager.list(),
@@ -56,9 +65,9 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
 
   registerLocalOnlyGuard(server, config.dev ? [config.port, DEV_WEB_PORT] : [config.port]);
 
-  await server.register(fastifyWebsocket);
+  await server.register(fastifyWebsocket, { options: { maxPayload: 4096 } });
   server.get('/ws', { websocket: true }, (socket) => {
-    hub.add(socket);
+    if (!hub.add(socket)) return;
     hub.send(socket, {
       type: 'hello',
       serverVersion: SERVER_VERSION,
@@ -79,7 +88,8 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
   if (config.webDistDir) {
     await server.register(fastifyStatic, { root: config.webDistDir, wildcard: false });
     server.setNotFoundHandler((req, reply) => {
-      if (req.method !== 'GET' || req.url.startsWith('/api/') || req.url === '/ws') {
+      const path = req.url.split('?')[0] ?? '';
+      if (req.method !== 'GET' || path === '/api' || path.startsWith('/api/') || path === '/ws') {
         return reply.code(404).send({ error: 'Not found' });
       }
       return reply.sendFile('index.html');

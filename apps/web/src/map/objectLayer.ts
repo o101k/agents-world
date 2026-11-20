@@ -141,15 +141,21 @@ export class ObjectLayer {
   }
 
   /** Resource amounts changed (by object id): bushes show whether they have berries. */
-  setResources(changes: Record<string, number>): void {
-    Object.assign(this.resources, changes);
+  setResources(changes: Record<string, number>, replace = false): void {
+    const ids = new Set(Object.keys(changes));
+    if (replace) {
+      for (const prevId of Object.keys(this.resources)) ids.add(prevId);
+      this.resources = { ...changes };
+    } else {
+      Object.assign(this.resources, changes);
+    }
     const tex = this.textures;
-    for (const id of Object.keys(changes)) {
+    for (const id of ids) {
       const e = this.entries.get(id);
-      if (!e || !id.startsWith('berry_bush')) continue;
+      if (!e || e.obj.kind !== 'berry_bush') continue;
       // Set the normal texture too, so a later refresh (occupancy, occlusion) doesn't bring back
       // the old one.
-      e.normal = (changes[id] ?? 0) >= 1 ? tex.berry_bush : tex.berry_bush_empty;
+      e.normal = (this.resources[id] ?? 1) >= 1 ? tex.berry_bush : tex.berry_bush_empty;
       this.refreshEntry(e);
     }
   }

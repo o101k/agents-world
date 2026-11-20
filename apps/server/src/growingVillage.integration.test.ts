@@ -41,13 +41,7 @@ function setScene(state: WorldState): Map<string, Decision> {
         { type: 'stock_stall', item: 'bread', quantity: 2, price: 3 },
       ],
     ],
-    [
-      penkeeper.id,
-      [
-        { type: 'build', building: 'pen' },
-        { type: 'tend_animals' },
-      ],
-    ],
+    [penkeeper.id, [{ type: 'build', building: 'pen' }, { type: 'tend_animals' }]],
     [clearer.id, [{ type: 'clear_field' }]],
     [quarrier.id, [{ type: 'quarry' }]],
     [employer.id, [{ type: 'hire', agentId: worker.id, wage: 3, days: 2 }]],

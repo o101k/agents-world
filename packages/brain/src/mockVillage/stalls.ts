@@ -1,4 +1,11 @@
-import { FOOD_ITEMS, ITEMS, type Decision, type Intent, type ItemName, type Perception } from '@aw/shared';
+import {
+  FOOD_ITEMS,
+  ITEMS,
+  type Decision,
+  type Intent,
+  type ItemName,
+  type Perception,
+} from '@aw/shared';
 
 /**
  * Mock brain: Selling from one's own market stall, and buying at others'.
@@ -36,7 +43,12 @@ export function plan(p: Perception, roll: number): Decision | null {
 function sellFromOwnStall(p: Perception, roll: number): Decision | null {
   if (!/trad|bak/i.test(p.self.occupation) || !p.canDo.includes('stock_stall')) return null;
   const stall = p.knownPlaces.find(
-    (k) => k.kind === 'stall' && k.owner === 'you' && k.progress === undefined && !k.burnt,
+    (k) =>
+      k.kind === 'stall' &&
+      k.owner === 'you' &&
+      k.progress === undefined &&
+      !k.burnt &&
+      !k.unreachable,
   );
   if (!stall || roll >= 0.3) return null;
   for (const item of SELLABLE) {

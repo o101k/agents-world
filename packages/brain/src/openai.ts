@@ -20,8 +20,8 @@ const REASONING: Record<EffortLevel, 'low' | 'medium' | 'high'> = {
 };
 
 /** Reasoning models accept reasoning_effort; others reject it. */
-function isReasoningModel(model: string): boolean {
-  return /(^|\/)(o\d|gpt-5)/.test(model);
+export function isReasoningModel(model: string): boolean {
+  return /(^|\/)(o\d|gpt-5)/.test(model) && !/-chat(?:-|$)/.test(model);
 }
 
 /**
@@ -97,14 +97,16 @@ export class OpenAIProvider implements BrainProvider {
     const usage = costOf(
       model,
       {
-        input: (res.usage?.prompt_tokens ?? 0) - cached,
+        input: Math.max(0, (res.usage?.prompt_tokens ?? 0) - cached),
         output: res.usage?.completion_tokens ?? 0,
         cacheRead: cached,
       },
       this.prices(),
     );
     if (choice?.message.refusal) throw new RefusalError(choice.message.refusal, usage);
-    const call = choice?.message.tool_calls?.find((c) => c.type === 'function');
+    const call = choice?.message.tool_calls?.find(
+      (c) => c.type === 'function' && c.function.name === 'decide',
+    );
     let raw: unknown = null;
     if (call && call.type === 'function') {
       try {
@@ -129,6 +131,7 @@ export class OpenAIProvider implements BrainProvider {
 
   async generate(req: GenerateRequest, signal?: AbortSignal) {
     const model = req.model || this.defaultModel;
+    if (!model) throw new Error('No model chosen for this provider.');
     const res = await rateLimited(
       this.client.chat.completions.create(
         {
@@ -154,19 +157,34 @@ export class OpenAIProvider implements BrainProvider {
       ),
     );
     const msg = res.choices[0]?.message;
-    const call = msg?.tool_calls?.find((c) => c.type === 'function');
+    const cached = res.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    const usage = costOf(
+      model,
+      {
+        input: Math.max(0, (res.usage?.prompt_tokens ?? 0) - cached),
+        output: res.usage?.completion_tokens ?? 0,
+        cacheRead: cached,
+      },
+      this.prices(),
+    );
+    if (msg?.refusal) throw new RefusalError(msg.refusal, usage);
+    const call = msg?.tool_calls?.find(
+      (c) => c.type === 'function' && c.function.name === req.toolName,
+    );
     let output: unknown = null;
-    if (call && call.type === 'function') output = extractJson(call.function.arguments);
+    if (call && call.type === 'function') {
+      try {
+        output = JSON.parse(call.function.arguments);
+      } catch {
+        output = extractJson(call.function.arguments);
+      }
+    }
     output ??= extractJson(msg?.content ?? '');
     return {
       output,
       text: msg?.content || undefined,
       model,
-      usage: costOf(
-        model,
-        { input: res.usage?.prompt_tokens ?? 0, output: res.usage?.completion_tokens ?? 0 },
-        this.prices(),
-      ),
+      usage,
     };
   }
 

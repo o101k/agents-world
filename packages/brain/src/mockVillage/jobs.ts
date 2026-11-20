@@ -8,7 +8,7 @@ import type { Decision, ItemName, Perception } from '@aw/shared';
 /** Answer a trigger this feature causes (an offer, a meeting...). null = not ours. */
 export function reply(p: Perception, _roll: number): Decision | null {
   const t = p.trigger;
-  if (t.kind !== 'job_offer') return null;
+  if (t.kind !== 'job_offer' || !p.canDo.includes('respond_job')) return null;
   const yes = t.wage >= 4 || p.self.money < 15;
   return {
     thought: yes
@@ -25,7 +25,12 @@ export function plan(p: Perception, roll: number): Decision | null {
   const jobs = p.jobs ?? [];
 
   // A baker, farmer or carpenter with savings and no one working for them hires a helper.
-  if (/baker|farmer|carpenter/.test(occ) && p.self.money >= 60 && roll < 0.03) {
+  if (
+    p.canDo.includes('hire') &&
+    /baker|farmer|carpenter/.test(occ) &&
+    p.self.money >= 60 &&
+    roll < 0.03
+  ) {
     const employs = jobs.some((j) => j.role === 'employer');
     const known = p.visibleAgents.find((a) => p.knownPeople.some((k) => k.id === a.id));
     if (!employs && known) {
@@ -39,7 +44,7 @@ export function plan(p: Perception, roll: number): Decision | null {
 
   // A worker with a surplus of some good shares a little with the employer.
   const working = jobs.find((j) => j.role === 'worker');
-  if (working && roll < 0.1) {
+  if (working && p.canDo.includes('give') && roll < 0.1) {
     const surplus = Object.entries(p.self.inventory).find(([, n]) => (n ?? 0) > 4);
     if (surplus) {
       const [item] = surplus;

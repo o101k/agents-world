@@ -295,10 +295,23 @@ export interface ReplayResponse {
   map?: WireMap;
 }
 
+const emptyToUndefined = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
+
+export const DefaultBrainRequest = z.object({
+  brain: BrainConfigSchema,
+  applyToAll: z.boolean().optional().default(false),
+});
+export type DefaultBrainRequest = z.input<typeof DefaultBrainRequest>;
+
+export const AgingRequest = z.object({
+  daysPerYear: z.number().finite().min(1).max(60),
+});
+export type AgingRequest = z.infer<typeof AgingRequest>;
+
 export const ReplayQuery = z.object({
-  tick: z.coerce.number().int().min(0),
+  tick: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0)),
   /** The map version the viewer currently shows. */
-  mapVersion: z.coerce.number().int().optional(),
+  mapVersion: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
 });
 
 export interface StoryResponse {
@@ -307,7 +320,7 @@ export interface StoryResponse {
 
 export const ObjectHistoryQuery = z.object({
   /** The object as it was at this past tick (replay). Omitted = now. */
-  tick: z.coerce.number().int().min(0).optional(),
+  tick: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
 });
 
 /** Someone named in an object's history. */
@@ -345,12 +358,12 @@ export interface ObjectHistoryResponse {
 }
 
 export const EventsQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(500).default(200),
+  limit: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(500).default(200)),
   q: z.string().trim().max(100).optional(),
-  atOrBeforeTick: z.coerce.number().int().min(0).optional(),
-  beforeId: z.coerce.number().int().optional(),
+  atOrBeforeTick: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
+  beforeId: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
   agentId: z.string().max(40).optional(),
-  minImportance: z.coerce.number().int().min(1).max(5).default(1),
+  minImportance: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(5).default(1)),
 });
 export type EventsQuery = z.input<typeof EventsQuery>;
 

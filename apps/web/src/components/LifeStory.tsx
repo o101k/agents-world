@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { formatClock, type AgentDetail, type StoryEntry } from '@aw/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { TICKS_PER_DAY, formatClock, type AgentDetail, type StoryEntry } from '@aw/shared';
 import { api } from '../api.ts';
+import { useDialog } from './useDialog.ts';
 
 type Filter = 'all' | 'memory' | 'event';
 
@@ -17,31 +18,44 @@ export function LifeStory({
   agent: AgentDetail;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [entries, setEntries] = useState<StoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
 
+  useDialog(dialogRef, onClose);
+
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setEntries(null);
+    setError(null);
     api
-      .story(worldId, agent.id)
-      .then((r) => !cancelled && setEntries(r.entries))
-      .catch((e: Error) => !cancelled && setError(e.message));
-    return () => {
-      cancelled = true;
-    };
+      .story(worldId, agent.id, ac.signal)
+      .then((r) => !ac.signal.aborted && setEntries(r.entries))
+      .catch((e: Error) => !ac.signal.aborted && setError(e.message));
+    return () => ac.abort();
   }, [worldId, agent.id]);
 
-  const shown = (entries ?? []).filter((e) => filter === 'all' || e.source === filter);
-  const byDay = new Map<number, StoryEntry[]>();
-  for (const e of shown) {
-    const day = Math.floor(e.tick / 1440) + 1;
-    byDay.set(day, [...(byDay.get(day) ?? []), e]);
-  }
+  const { shownCount, days } = useMemo(() => {
+    const map = new Map<number, StoryEntry[]>();
+    let count = 0;
+    for (const e of entries ?? []) {
+      if (filter !== 'all' && e.source !== filter) continue;
+      count++;
+      const day = Math.floor(e.tick / TICKS_PER_DAY) + 1;
+      let list = map.get(day);
+      if (!list) map.set(day, (list = []));
+      list.push(e);
+    }
+    return { shownCount: count, days: [...map.entries()] };
+  }, [entries, filter]);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel story"
         role="dialog"
         aria-modal="true"
@@ -50,7 +64,12 @@ export function LifeStory({
       >
         <div className="modal-head">
           <h2 id="story-title">The life of {agent.name}</h2>
-          <button className="btn btn-small btn-ghost" onClick={onClose} aria-label="Close">
+          <button
+            type="button"
+            className="btn btn-small btn-ghost"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
@@ -68,6 +87,7 @@ export function LifeStory({
             ] as [Filter, string][]
           ).map(([f, label]) => (
             <button
+              type="button"
               key={f}
               role="tab"
               aria-selected={filter === f}
@@ -79,15 +99,22 @@ export function LifeStory({
           ))}
         </div>
         <div className="story-body">
-          {error && <p className="warn">{error}</p>}
+          {error && (
+            <p className="warn" role="alert">
+              {error}
+            </p>
+          )}
           {!entries && !error && <p className="muted">Loading…</p>}
-          {entries && shown.length === 0 && <p className="muted">Nothing recorded yet.</p>}
-          {[...byDay.entries()].map(([day, list]) => (
+          {entries && shownCount === 0 && <p className="muted">Nothing recorded yet.</p>}
+          {days.map(([day, list]) => (
             <section key={day} className="story-day">
               <h4>Day {day}</h4>
               <ul>
                 {list.map((e, i) => (
-                  <li key={i} className={e.source === 'memory' ? 'story-mine' : ''}>
+                  <li
+                    key={`${e.tick}-${e.source}-${e.kind}-${i}`}
+                    className={e.source === 'memory' ? 'story-mine' : ''}
+                  >
                     <span className="muted small">
                       {formatClock(e.tick).replace(/^Day \d+,?\s*/, '')}
                     </span>{' '}

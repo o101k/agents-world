@@ -20,37 +20,68 @@ export function ReplayBar({ worldId }: { worldId: string }) {
   const [speed, setSpeed] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Stop playback whenever replay closes (e.g. from the topbar Live button or world switch).
+  const isReplaying = replay !== null;
+  useEffect(() => {
+    if (!isReplaying) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+      setSpeed(null);
+      setError(null);
+    }
+  }, [isReplaying]);
+
   // Fetch the asked-for moment; one request at a time, always catching up with the latest ask.
   const inFlight = useRef(false);
-  const target = replay?.target;
+  const abortRef = useRef<AbortController | null>(null);
+  const alive = useRef(true);
   useEffect(() => {
-    if (target === undefined || inFlight.current) return;
-    const run = (tick: number) => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      abortRef.current?.abort();
+    };
+  }, [worldId]);
+
+  const target = replay?.target;
+  const session = replay?.session;
+  useEffect(() => {
+    if (target === undefined || session === undefined || inFlight.current) return;
+    const run = (tick: number, sess: number) => {
       inFlight.current = true;
+      const ac = new AbortController();
+      abortRef.current = ac;
       const s = useWorld.getState();
       const shownMap = s.replay?.view?.mapVersion ?? s.mapVersion;
       api
-        .replay(worldId, tick, shownMap)
+        .replay(worldId, tick, shownMap, ac.signal)
         .then((view) => {
-          useWorld.getState().setReplayView(view);
+          if (!alive.current) return;
+          useWorld.getState().setReplayView(view, worldId, sess);
           setError(null);
         })
-        .catch((e: Error) => setError(e.message))
+        .catch((e: Error) => {
+          if (!alive.current || ac.signal.aborted) return;
+          setError(e.message);
+        })
         .finally(() => {
           inFlight.current = false;
-          const wanted = useWorld.getState().replay?.target;
-          if (wanted !== undefined && wanted !== tick) run(wanted);
+          if (!alive.current) return;
+          const next = useWorld.getState().replay;
+          if (next && next.target !== tick) run(next.target, next.session);
         });
     };
-    run(target);
-  }, [target, worldId]);
+    run(target, session);
+  }, [target, session, worldId]);
 
   // Playback through history.
   useEffect(() => {
-    if (speed === null) return;
+    if (speed === null || !isReplaying) return;
     const t = setInterval(() => {
       const s = useWorld.getState();
-      if (!s.replay) return;
+      if (!s.replay) {
+        setSpeed(null);
+        return;
+      }
       const next = s.replay.target + speed;
       if (next >= s.tick) {
         setSpeed(null);
@@ -58,13 +89,15 @@ export function ReplayBar({ worldId }: { worldId: string }) {
       } else s.setReplayTarget(next);
     }, 250);
     return () => clearInterval(t);
-  }, [speed]);
+  }, [speed, isReplaying]);
 
   if (!replay) return null;
   const view = replay.view;
   const first = view?.firstTick ?? 0;
-  const jump = (minutes: number) =>
+  const jump = (minutes: number) => {
+    setSpeed(null);
     setTarget(Math.max(first, Math.min(liveTick, replay.target + minutes)));
+  };
 
   return (
     <div className="replay-bar" role="region" aria-label="Replay">
@@ -74,10 +107,20 @@ export function ReplayBar({ worldId }: { worldId: string }) {
         {view?.calendar ? ` · ${view.calendar.season}` : ''}
         {view && view.tick !== replay.target ? ' …' : ''}
       </span>
-      <button className="btn btn-small" onClick={() => jump(-1440)} title="Back one day">
+      <button
+        type="button"
+        className="btn btn-small"
+        onClick={() => jump(-1440)}
+        title="Back one day"
+      >
         −1d
       </button>
-      <button className="btn btn-small" onClick={() => jump(-60)} title="Back one hour">
+      <button
+        type="button"
+        className="btn btn-small"
+        onClick={() => jump(-60)}
+        title="Back one hour"
+      >
         −1h
       </button>
       <input
@@ -92,16 +135,28 @@ export function ReplayBar({ worldId }: { worldId: string }) {
           setTarget(Number(e.target.value));
         }}
       />
-      <button className="btn btn-small" onClick={() => jump(60)} title="Forward one hour">
+      <button
+        type="button"
+        className="btn btn-small"
+        onClick={() => jump(60)}
+        title="Forward one hour"
+      >
         +1h
       </button>
-      <button className="btn btn-small" onClick={() => jump(1440)} title="Forward one day">
+      <button
+        type="button"
+        className="btn btn-small"
+        onClick={() => jump(1440)}
+        title="Forward one day"
+      >
         +1d
       </button>
       <div className="segmented" role="group" aria-label="Replay speed">
         {PLAY_SPEEDS.map((p) => (
           <button
+            type="button"
             key={p.label}
+            aria-pressed={speed === p.minutes}
             className={`seg ${speed === p.minutes ? 'is-on' : ''}`}
             onClick={() => setSpeed(speed === p.minutes ? null : p.minutes)}
             title={`Play history at ${p.label}`}
@@ -110,10 +165,21 @@ export function ReplayBar({ worldId }: { worldId: string }) {
           </button>
         ))}
       </div>
-      <button className="btn btn-small btn-primary" onClick={() => setTarget(null)}>
+      <button
+        type="button"
+        className="btn btn-small btn-primary"
+        onClick={() => {
+          setSpeed(null);
+          setTarget(null);
+        }}
+      >
         Back to live
       </button>
-      {error && <span className="warn small">{error}</span>}
+      {error && (
+        <span className="warn small" role="alert">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

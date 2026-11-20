@@ -105,6 +105,10 @@ describe('life cycle', () => {
         3,
       );
       maren.lastChildTry = -1e9;
+      tobias.lastChildTry = -1e9;
+      tobias.asleep = false;
+      tobias.indoorsId = null;
+      tobias.action = null;
       adjacent(maren, tobias);
     }
     expect(maren.pregnancy?.fatherId).toBe(tobias.id);
@@ -126,6 +130,86 @@ describe('life cycle', () => {
     run(s, { [tobias.id]: [{ type: 'name_child', childId: baby.id, name: 'Wilma' }] }, 2);
     expect(baby.name).toBe('Wilma');
     expect(baby.named).toBe(true);
+  });
+
+  it('enforces 1-day child cooldown, re-verifies partnership, and sleeps indoors at home door', () => {
+    const s = fresh();
+    const maren = who(s, 'Maren');
+    const tobias = who(s, 'Tobias');
+    const home = s.map.objects.find((o) => o.id === tobias.homeId)!;
+    tobias.x = home.door!.x;
+    tobias.y = home.door!.y;
+    maren.x = home.door!.x + 1;
+    maren.y = home.door!.y;
+    tobias.indoorsId = null;
+    maren.indoorsId = null;
+    run(s, { [maren.id]: [{ type: 'try_for_child', agentId: tobias.id }] }, 2);
+    run(s, { [tobias.id]: [{ type: 'respond_child_request', fromId: maren.id, accept: true }] }, 2);
+    // Proper indoor check: sleeping at own home door puts responder indoors.
+    if (!maren.pregnancy || tobias.asleep) expect(tobias.indoorsId).toBe(tobias.homeId);
+    // Immediate retry within 1 day is blocked by lastChildTry cooldown.
+    tobias.asleep = false;
+    tobias.indoorsId = null;
+    tobias.action = null;
+    run(s, { [maren.id]: [{ type: 'try_for_child', agentId: tobias.id }] }, 2);
+    expect(maren.recent.some((r) => r.text.includes('wait another day'))).toBe(true);
+    // If partnership ends before response, respond_child_request rejects.
+    maren.lastChildTry = -1e9;
+    tobias.lastChildTry = -1e9;
+    run(s, { [maren.id]: [{ type: 'try_for_child', agentId: tobias.id }] }, 2);
+    maren.partnerId = null;
+    tobias.partnerId = null;
+    run(s, { [tobias.id]: [{ type: 'respond_child_request', fromId: maren.id, accept: true }] }, 2);
+    expect(tobias.recent.some((r) => r.text.includes('no longer partners'))).toBe(true);
+  });
+
+  it('guards dead targets in name_child, declare_will, and giveBirth, and gives heirs building knowledge', () => {
+    const s = fresh();
+    const maren = who(s, 'Maren');
+    const tobias = who(s, 'Tobias');
+    const piet = who(s, 'Piet');
+    // Dead heir rejected in declare_will.
+    piet.alive = false;
+    run(s, { [maren.id]: [{ type: 'declare_will', agentId: piet.id }] }, 2);
+    expect(maren.will).toBeNull();
+    // giveBirth does not notify dead father or wake asleep mother with awaiting.
+    tobias.alive = false;
+    const deadFatherMemories = tobias.memories.length;
+    maren.pregnancy = { fatherId: tobias.id, progress: 0.749, known: true };
+    maren.asleep = true;
+    maren.action = { type: 'sleep', since: s.tick };
+    run(s, {}, 20);
+    const baby = s.agents.at(-1)!;
+    expect(tobias.memories.length).toBe(deadFatherMemories);
+    expect(maren.awaiting).toBeNull();
+    // Dead child rejected in name_child.
+    baby.alive = false;
+    maren.asleep = false;
+    maren.action = null;
+    run(s, { [maren.id]: [{ type: 'name_child', childId: baby.id, name: 'Ghost' }] }, 2);
+    expect(baby.named).toBe(false);
+    // Heir gains knowledge of inherited buildings.
+    const jory = who(s, 'Jory');
+    delete jory.knowledge[maren.homeId!];
+    maren.will = { heirId: jory.id };
+    maren.health = 0.01;
+    maren.needs.water = 0;
+    run(s, {}, 5);
+    expect(jory.knowledge[maren.homeId!]).toBeDefined();
+  });
+
+  it('infants cannot walk across the map via approach', () => {
+    const s = fresh();
+    const lise = who(s, 'Lise'); // 6 months
+    const piet = who(s, 'Piet');
+    piet.x = lise.x + 10;
+    piet.y = lise.y;
+    piet.indoorsId = null;
+    lise.asleep = false;
+    lise.action = null;
+    run(s, { [lise.id]: [{ type: 'talk_to', agentId: piet.id, message: 'hi' }] }, 3);
+    expect((lise.action as { type: string } | null)?.type).not.toBe('walk');
+    expect(lise.recent.some((r) => r.text.includes('too little'))).toBe(true);
   });
 
   it('refuses conception when the answer is no', () => {

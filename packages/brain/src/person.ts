@@ -122,50 +122,51 @@ export async function draftPerson(
   router: BrainRouter,
 ): Promise<{ draft: PersonDraft; usage?: Usage; model?: string; error?: string }> {
   const offline = draftPersonOffline(req);
-  const provider = router.get(brain.provider);
-  if (brain.provider === 'mock' || !provider?.generate) return { draft: offline };
-  try {
-    const hints = [
-      req.name && `Name: ${req.name}`,
-      req.sex && `Sex: ${req.sex}`,
-      req.age && `Age: ${req.age}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const { output, usage, model } = await provider.generate({
-      model: brain.model,
-      system:
-        'You create characters for a life simulation set in a small pre-industrial village (farms, a river, a bakery, a workshop, a market). Stay faithful to the description; fill gaps plausibly.',
-      user: `Create this person:\n${req.description}\n${hints}\n\nCall create_person with the details.`,
-      toolName: 'create_person',
-      toolDescription: 'Define the new person.',
-      schema: PERSON_SCHEMA,
-      maxTokens: 1500,
-    });
-    const o = (output ?? {}) as Record<string, unknown>;
-    const sex: Sex = req.sex ?? (o.sex === 'male' || o.sex === 'female' ? o.sex : offline.sex);
-    const draft: PersonDraft = {
-      name:
-        req.name ||
-        (typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 40) : offline.name),
-      familyName:
-        typeof o.family_name === 'string' ? o.family_name.trim().slice(0, 40) : offline.familyName,
-      sex,
-      age: req.age ?? clamp(o.age, 16, 90, offline.age),
-      occupation: typeof o.occupation === 'string' ? o.occupation.slice(0, 60) : offline.occupation,
-      traits: typeof o.traits === 'string' ? o.traits.slice(0, 400) : offline.traits,
-      background:
-        typeof o.background === 'string' ? o.background.slice(0, 1200) : offline.background,
-      personality: {
-        openness: clamp(o.openness, 0, 100, 50),
-        conscientiousness: clamp(o.conscientiousness, 0, 100, 50),
-        extraversion: clamp(o.extraversion, 0, 100, 50),
-        agreeableness: clamp(o.agreeableness, 0, 100, 50),
-        neuroticism: clamp(o.neuroticism, 0, 100, 50),
-      },
+  const hints = [
+    req.name && `Name: ${req.name}`,
+    req.sex && `Sex: ${req.sex}`,
+    req.age && `Age: ${req.age}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const r = await router.generate(brain, {
+    model: brain.model,
+    system:
+      'You create characters for a life simulation set in a small pre-industrial village (farms, a river, a bakery, a workshop, a market). Stay faithful to the description; fill gaps plausibly.',
+    user: `Create this person:\n${req.description}\n${hints}\n\nCall create_person with the details.`,
+    toolName: 'create_person',
+    toolDescription: 'Define the new person.',
+    schema: PERSON_SCHEMA,
+    maxTokens: 1500,
+  });
+  if (r.notSetUp) return { draft: offline };
+  if (r.error || r.timedOut || r.refused || r.limit || !r.output || typeof r.output !== 'object') {
+    return {
+      draft: offline,
+      usage: r.usage,
+      model: r.model,
+      error: r.error ?? 'The model did not return a person.',
     };
-    return { draft, usage, model };
-  } catch (err) {
-    return { draft: offline, error: (err as Error).message };
   }
+  const o = r.output as Record<string, unknown>;
+  const sex: Sex = req.sex ?? (o.sex === 'male' || o.sex === 'female' ? o.sex : offline.sex);
+  const nonEmpty = (v: unknown, max: number, fallback: string) =>
+    typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : fallback;
+  const draft: PersonDraft = {
+    name: req.name || nonEmpty(o.name, 40, offline.name),
+    familyName: nonEmpty(o.family_name, 40, offline.familyName),
+    sex,
+    age: req.age ?? clamp(o.age, 16, 90, offline.age),
+    occupation: nonEmpty(o.occupation, 60, offline.occupation),
+    traits: nonEmpty(o.traits, 400, offline.traits),
+    background: nonEmpty(o.background, 1200, offline.background),
+    personality: {
+      openness: clamp(o.openness, 0, 100, 50),
+      conscientiousness: clamp(o.conscientiousness, 0, 100, 50),
+      extraversion: clamp(o.extraversion, 0, 100, 50),
+      agreeableness: clamp(o.agreeableness, 0, 100, 50),
+      neuroticism: clamp(o.neuroticism, 0, 100, 50),
+    },
+  };
+  return { draft, usage: r.usage, model: r.model };
 }

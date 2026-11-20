@@ -25,9 +25,11 @@ function inFavour(p: Perception, roll: number): boolean {
 export function reply(p: Perception, roll: number): Decision | null {
   const t = p.trigger;
   if (t.kind === 'meeting_called') {
-    if (p.self.age < 18 || roll >= 0.6) return null;
+    if (p.self.age < 18 || roll >= 0.6 || !p.canDo.includes('go_to')) return null;
     const place = p.village?.meetings.find((m) => m.topic === t.topic)?.placeId;
     if (!place) return null;
+    const knownPlace = p.knownPlaces.find((k) => k.id === place);
+    if (knownPlace && (knownPlace.burnt || knownPlace.unreachable)) return null;
     return decision(
       `A village meeting about ${t.topic} is called. I'll go and hear what's said.`,
       'Go to the meeting',
@@ -39,7 +41,11 @@ export function reply(p: Perception, roll: number): Decision | null {
   }
   if (t.kind === 'meeting_open') {
     const proposals = p.village?.proposals ?? [];
-    if (proposals.length === 0 && p.personality.agreeableness > 55) {
+    if (
+      proposals.length === 0 &&
+      p.personality.agreeableness > 55 &&
+      p.canDo.includes('propose_rule')
+    ) {
       const options = [...RULES];
       const trusted = p.knownPeople.slice().sort((a, b) => b.trust - a.trust)[0];
       if (trusted && trusted.trust > 0) {
@@ -60,12 +66,13 @@ export function reply(p: Perception, roll: number): Decision | null {
       );
     }
     const open = proposals.find((x) => !x.voted);
-    if (!open) return null;
+    if (!open || !p.canDo.includes('vote')) return null;
     return decision('A proposal is being voted on. I should have my say.', 'Vote', [
       { type: 'vote', proposalId: open.id, accept: inFavour(p, roll) },
     ]);
   }
   if (t.kind === 'rule_proposed') {
+    if (!p.canDo.includes('vote')) return null;
     const tax = p.village?.proposals.find((x) => x.id === t.proposalId)?.tax ?? 0;
     const accept = tax > 2 && p.self.money < 20 ? false : inFavour(p, roll);
     return decision(`${t.byName} has proposed something at the meeting. I'll vote.`, 'Vote', [
@@ -80,6 +87,7 @@ export function plan(p: Perception, roll: number): Decision | null {
   const village = p.village;
   // An extraverted grown-up with no meeting in view now and then calls one.
   if (
+    p.canDo.includes('call_meeting') &&
     (village?.meetings.length ?? 0) === 0 &&
     p.self.age >= 18 &&
     p.personality.extraversion > 70 &&
@@ -91,12 +99,19 @@ export function plan(p: Perception, roll: number): Decision | null {
     ]);
   }
   // The leader with a purse of 20+ now and then pays 5 coins to someone they know who is near.
-  if (village?.leader?.id === p.agentId && (village.treasury ?? 0) >= 20 && roll < 0.05) {
+  if (
+    p.canDo.includes('pay_from_treasury') &&
+    village?.leader?.id === p.agentId &&
+    (village.treasury ?? 0) >= 20 &&
+    roll < 0.05
+  ) {
     const near = p.visibleAgents.find((v) => p.knownPeople.some((k) => k.id === v.id));
     if (near) {
-      return decision(`The purse can spare a little. ${near.name} could use it.`, 'Pay from the purse', [
-        { type: 'pay_from_treasury', agentId: near.id, coins: 5 },
-      ]);
+      return decision(
+        `The purse can spare a little. ${near.name} could use it.`,
+        'Pay from the purse',
+        [{ type: 'pay_from_treasury', agentId: near.id, coins: 5 }],
+      );
     }
   }
   return null;

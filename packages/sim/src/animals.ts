@@ -65,7 +65,7 @@ export function startTendAnimals(
 ): void {
   const { state } = ctx;
   const { map } = state;
-  const pens = map.objects.filter((o) => o.kind === 'pen');
+  const pens = mapCache(map).byKind.get('pen') ?? [];
   let pen: MapObject | undefined;
   if (intent.objectId) {
     pen = pens.find((o) => o.id === intent.objectId);
@@ -99,6 +99,7 @@ export function finishTendAnimals(ctx: Ctx, agent: Agent, action: TaskAction): v
   const pen = ensurePen(state, o.id);
   const name = objName(state, o.id);
 
+  const hadAnimals = pen.hens + pen.sheep > 0;
   // Put animals from the bag into the pen, up to its capacity.
   const hensIn = Math.min(agent.inventory.hen ?? 0, PEN_CAPACITY - pen.hens - pen.sheep);
   pen.hens += hensIn;
@@ -115,8 +116,10 @@ export function finishTendAnimals(ctx: Ctx, agent: Agent, action: TaskAction): v
   if (pen.hens + pen.sheep === 0)
     return fail(ctx, agent, 'The pen is empty — I need hens or sheep from the market.');
 
+  const firstStock = !hadAnimals && (hensIn > 0 || sheepIn > 0);
+  const due = state.tick - pen.lastTendedTick >= FEED_GAP;
   let produce = '';
-  if (state.tick - pen.lastTendedTick >= FEED_GAP) {
+  if (due) {
     const fodder = FODDER.find((item) => (agent.inventory[item] ?? 0) > 0);
     const fed = fodder !== undefined;
     if (fodder) take(agent, fodder, 1);
@@ -137,9 +140,11 @@ export function finishTendAnimals(ctx: Ctx, agent: Agent, action: TaskAction): v
   if (produce) remember(agent, state.tick, `I tended the animals at ${name}: ${produce}.`, 2);
   else remember(agent, state.tick, 'The animals were already seen to.', 1);
 
-  pen.lastTendedTick = state.tick;
-  train(agent, 'farming', 0.3);
-  observeWork(state, agent, 'farming');
+  if (due || firstStock) {
+    pen.lastTendedTick = state.tick;
+    train(agent, 'farming', 0.3);
+    observeWork(state, agent, 'farming');
+  }
   const who = fullName(agent);
   emit(
     ctx,
@@ -162,7 +167,7 @@ export function animalsTick(ctx: Ctx): void {
   for (const id of Object.keys(state.pens).sort()) {
     const pen = state.pens[id]!;
     const o = byId.get(id);
-    if (!o || o.kind !== 'pen') continue;
+    if (!o || o.kind !== 'pen' || !usable(state, id)) continue;
     const name = objName(state, id);
     const total = pen.hens + pen.sheep;
     const idle = state.tick - pen.lastTendedTick;

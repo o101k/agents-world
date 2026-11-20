@@ -1,16 +1,24 @@
-import { Tile, type MapObject, type Point } from '@aw/shared';
+import { Tile, type MapObject, type MapObjectKind, type Point } from '@aw/shared';
 import type { FamilyRole } from '@aw/shared';
 import type { Agent } from './agent.ts';
 import { createAgent, type AgentSpec } from './cast.ts';
 import { occupies } from './occupancy.ts';
 import type { Rng } from './rng.ts';
-import { distanceToObject, isWalkable, nearestWalkable } from './spatial.ts';
+import { distanceToObject, isWalkable, mapCache, nearestWalkable } from './spatial.ts';
 import type { WorldState } from './world.ts';
 
-const VILLAGE_KINDS = new Set(['house', 'bakery', 'workshop', 'market', 'well', 'field', 'dock']);
+const VILLAGE_KINDS: readonly MapObjectKind[] = [
+  'house',
+  'bakery',
+  'workshop',
+  'market',
+  'well',
+  'field',
+  'dock',
+];
 
 export function houses(state: WorldState): MapObject[] {
-  return state.map.objects.filter((o) => o.kind === 'house');
+  return [...(mapCache(state.map).byKind.get('house') ?? [])];
 }
 
 /** Where newcomers arrive: the road at the east edge of the map. */
@@ -28,11 +36,12 @@ export function arrivalPoint(state: WorldState): Point {
 /** Adds a person to the world. Deterministic given the RNG. */
 export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
   const id = `a${state.nextAgentNum++}`;
-  const homes = houses(state);
+  const cache = mapCache(state.map);
+  const homes = cache.byKind.get('house') ?? [];
   let homeId = spec.homeId ?? null;
   if (homeId === null && spec.household !== undefined)
     homeId = homes[spec.household % Math.max(1, homes.length)]?.id ?? null;
-  const home = homeId ? state.map.objects.find((o) => o.id === homeId) : undefined;
+  const home = homeId ? cache.byId.get(homeId) : undefined;
 
   let position = spec.position ?? home?.door ?? arrivalPoint(state);
   if (!isWalkable(state.map, position.x, position.y)) {
@@ -61,16 +70,21 @@ export function addAgent(state: WorldState, spec: AgentSpec, rng: Rng): Agent {
   });
 
   if (spec.knowsVillage) {
-    for (const o of state.map.objects) {
-      const nearHome =
-        home && o.kind === 'berry_bush' && distanceToObject(o, home.door ?? home) <= 12;
-      if (VILLAGE_KINDS.has(o.kind) || nearHome) {
-        agent.knowledge[o.id] = {
-          lastSeenTick: state.tick,
-          lastSeenAmount: state.resources[o.id]
-            ? Math.floor(state.resources[o.id]!.amount)
-            : undefined,
-        };
+    const record = (o: MapObject) => {
+      agent.knowledge[o.id] = {
+        lastSeenTick: state.tick,
+        lastSeenAmount: state.resources[o.id]
+          ? Math.floor(state.resources[o.id]!.amount)
+          : undefined,
+      };
+    };
+    for (const kind of VILLAGE_KINDS) {
+      for (const o of cache.byKind.get(kind) ?? []) record(o);
+    }
+    if (home) {
+      const anchor = home.door ?? home;
+      for (const o of cache.byKind.get('berry_bush') ?? []) {
+        if (distanceToObject(o, anchor) <= 12) record(o);
       }
     }
   }
