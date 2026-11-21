@@ -5,7 +5,9 @@ import {
   createWorldState,
   deserializeWorldState,
   generateCast,
+  interactionTiles,
   pendingRequests,
+  rocksNear,
   serializeWorldState,
   step,
   type TickInput,
@@ -33,6 +35,15 @@ function setScene(state: WorldState): Map<string, Decision> {
   penkeeper.skills.building = 30;
   employer.money = 200;
 
+  // Start the quarrier at a rock, so the scripted quarry begins at once rather than being
+  // cut short on the walk by the meeting call.
+  const rock = rocksNear(state.map, quarrier, 25)
+    .map((o) => ({ o, tiles: interactionTiles(state.map, o) }))
+    .find((r) => r.tiles.length > 0);
+  if (!rock) throw new Error('the generated map needs a reachable rock');
+  quarrier.x = rock.tiles[0]!.x;
+  quarrier.y = rock.tiles[0]!.y;
+
   const plans: [string, Intent[]][] = [
     [
       stallman.id,
@@ -41,13 +52,7 @@ function setScene(state: WorldState): Map<string, Decision> {
         { type: 'stock_stall', item: 'bread', quantity: 2, price: 3 },
       ],
     ],
-    [
-      penkeeper.id,
-      [
-        { type: 'build', building: 'pen' },
-        { type: 'tend_animals' },
-      ],
-    ],
+    [penkeeper.id, [{ type: 'build', building: 'pen' }, { type: 'tend_animals' }]],
     [clearer.id, [{ type: 'clear_field' }]],
     [quarrier.id, [{ type: 'quarry' }]],
     [employer.id, [{ type: 'hire', agentId: worker.id, wage: 3, days: 2 }]],

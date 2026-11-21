@@ -63,35 +63,51 @@ export function AgentInspector({
   // Poll while shown: cheap on localhost and keeps the mind view live. In replay, load the past.
   useEffect(() => {
     let cancelled = false;
-    const load = () =>
+    let activeAbort: AbortController | null = null;
+    const load = () => {
+      activeAbort?.abort();
+      const ctrl = new AbortController();
+      activeAbort = ctrl;
       (atTick === undefined
-        ? api.agent(worldId, agentId)
-        : api.replayAgent(worldId, atTick, agentId)
+        ? api.agent(worldId, agentId, ctrl.signal)
+        : api.replayAgent(worldId, atTick, agentId, ctrl.signal)
       )
         .then((r) => {
-          if (cancelled) return;
+          if (cancelled || ctrl.signal.aborted) return;
           setAgent(r.agent);
           setError(null);
         })
-        .catch((e: Error) => !cancelled && setError(e.message));
+        .catch((e: unknown) => {
+          if (cancelled || ctrl.signal.aborted) return;
+          setError(e instanceof Error ? e.message : String(e));
+        });
+    };
     const first = setTimeout(() => void load(), atTick === undefined ? 0 : 150);
     const t = atTick === undefined ? setInterval(() => void load(), 600) : undefined;
     return () => {
       cancelled = true;
+      activeAbort?.abort();
       clearTimeout(first);
       clearInterval(t);
     };
   }, [worldId, agentId, atTick]);
   const replaying = atTick !== undefined;
 
-  if (error) return <p className="muted">{error}</p>;
+  if (error)
+    return (
+      <p className="warn" role="alert">
+        {error}
+      </p>
+    );
   if (!agent || agent.id !== agentId) return <p className="muted">Loading…</p>;
 
   const status = agent.alive
     ? agent.indoors && agent.activity === 'sleeping'
       ? 'Sleeping at home'
-      : ACTIVITY_LABEL[agent.activity]
-    : `Died ${agent.death ? formatClock(agent.death.tick) : ''} of ${agent.death?.cause}`;
+      : (ACTIVITY_LABEL[agent.activity] ?? agent.activity)
+    : agent.death
+      ? `Died ${formatClock(agent.death.tick)} of ${agent.death.cause}`
+      : 'Dead';
 
   return (
     <div className="inspector">
@@ -107,7 +123,9 @@ export function AgentInspector({
         </div>
         {agent.alive && !replaying && (
           <button
+            type="button"
             className={`btn btn-small ${following ? 'btn-primary' : ''}`}
+            aria-pressed={following}
             onClick={() => setFollow(following ? null : agentId)}
           >
             {following ? 'Following' : 'Follow'}
@@ -191,7 +209,7 @@ export function AgentInspector({
           </p>
         )}
         {agent.will && <p className="small">Will: everything goes to {agent.will.heirName}.</p>}
-        <button className="btn btn-small" onClick={() => setTreeOpen(true)}>
+        <button type="button" className="btn btn-small" onClick={() => setTreeOpen(true)}>
           Family tree
         </button>
         {treeOpen && (
@@ -245,7 +263,7 @@ export function AgentInspector({
         ) : (
           <ul className="recent">
             {agent.recent.map((r, i) => (
-              <li key={i}>
+              <li key={`${r.tick}-${i}`}>
                 <span className="muted small">{formatClock(r.tick)}</span> {r.text}
               </li>
             ))}
@@ -283,13 +301,13 @@ export function AgentInspector({
 
       <section>
         <h3>Memory</h3>
-        <button className="btn btn-small" onClick={() => setStoryOpen(true)}>
+        <button type="button" className="btn btn-small" onClick={() => setStoryOpen(true)}>
           Life story
         </button>
         {storyOpen && (
           <LifeStory worldId={worldId} agent={agent} onClose={() => setStoryOpen(false)} />
         )}
-        <Memories agent={agent} />
+        <Memories key={agent.id} agent={agent} />
       </section>
 
       {agent.people.length > 0 && (
@@ -326,7 +344,7 @@ export function AgentInspector({
             }}
           />
         )}
-        <AiExchanges worldId={worldId} agentId={agentId} />
+        <AiExchanges key={agentId} worldId={worldId} agentId={agentId} />
       </section>
     </div>
   );
@@ -345,20 +363,21 @@ function Memories({ agent }: { agent: AgentDetail }) {
     .filter((m) => m.kind === 'chapter')
     .sort((a, b) => a.tick - b.tick);
   const beliefs = agent.memories.filter((m) => m.kind === 'belief');
+  const stream = agent.memories.filter((m) => m.kind !== 'chapter' && m.kind !== 'belief');
   const list =
     filter === 'forgotten'
       ? agent.forgotten
       : filter === 'story'
         ? agent.memories.filter((m) => m.kind === 'diary')
-        : agent.memories.filter((m) => m.kind !== 'chapter' && m.kind !== 'belief');
+        : stream;
   return (
     <div className="memory">
       {chapters.length > 0 && (
         <>
           <h4>Life so far</h4>
           <ol className="chapters">
-            {chapters.map((c) => (
-              <li key={c.tick}>{c.text}</li>
+            {chapters.map((c, i) => (
+              <li key={`${c.tick}-${i}`}>{c.text}</li>
             ))}
           </ol>
         </>
@@ -367,8 +386,8 @@ function Memories({ agent }: { agent: AgentDetail }) {
         <>
           <h4>Believes</h4>
           <ul className="beliefs">
-            {beliefs.map((b) => (
-              <li key={b.tick + b.text}>{b.text}</li>
+            {beliefs.map((b, i) => (
+              <li key={`${b.tick}-${i}`}>{b.text}</li>
             ))}
           </ul>
         </>
@@ -376,13 +395,14 @@ function Memories({ agent }: { agent: AgentDetail }) {
       <div className="segmented" role="tablist" aria-label="Which memories">
         {(
           [
-            ['all', `Memories (${agent.memories.length})`],
+            ['all', `Memories (${stream.length})`],
             ['story', 'Diary'],
             ['forgotten', `Forgotten (${agent.forgotten.length})`],
           ] as [MemoryFilter, string][]
         ).map(([f, label]) => (
           <button
             key={f}
+            type="button"
             role="tab"
             aria-selected={filter === f}
             className={`seg ${filter === f ? 'is-on' : ''}`}
@@ -400,7 +420,7 @@ function Memories({ agent }: { agent: AgentDetail }) {
         <ul className="recent memories">
           {list.slice(0, limit).map((m, i) => (
             <li
-              key={i}
+              key={`${m.tick}-${m.kind}-${i}`}
               className={m.forgotten ? 'is-forgotten' : ''}
               style={
                 m.forgotten || m.strength === undefined
@@ -422,7 +442,7 @@ function Memories({ agent }: { agent: AgentDetail }) {
         </ul>
       )}
       {list.length > limit && (
-        <button className="linkish small" onClick={() => setLimit(limit + 30)}>
+        <button type="button" className="linkish small" onClick={() => setLimit(limit + 30)}>
           Show more ({list.length - limit} more)
         </button>
       )}
@@ -442,19 +462,41 @@ function FactRow({ label, value }: { label: string; value: string }) {
 /** The raw prompts and replies behind recent decisions (for curiosity and debugging). */
 function AiExchanges({ worldId, agentId }: { worldId: string; agentId: string }) {
   const [calls, setCalls] = useState<LlmCallView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next) void api.calls(worldId, agentId).then((r) => setCalls(r.calls));
-  };
+
+  useEffect(() => {
+    if (!open) return;
+    const ctrl = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setError(null);
+    api
+      .calls(worldId, agentId, ctrl.signal)
+      .then((r) => {
+        if (!ctrl.signal.aborted) setCalls(r.calls);
+      })
+      .catch((e: unknown) => {
+        if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => ctrl.abort();
+  }, [open, worldId, agentId]);
+
   return (
     <div className="exchanges">
-      <button className="linkish small" onClick={toggle}>
+      <button
+        type="button"
+        className="linkish small"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
         {open ? '▾' : '▸'} Raw AI exchanges
       </button>
       {open &&
-        (calls === null ? (
+        (error ? (
+          <p className="warn small" role="alert">
+            {error}
+          </p>
+        ) : calls === null ? (
           <p className="muted small">Loading…</p>
         ) : calls.length === 0 ? (
           <p className="muted small">
@@ -496,7 +538,7 @@ function PersonRow({
     <>
       <dt>{label}</dt>
       <dd>
-        <button className="linkish" onClick={() => onPick?.(p.id)}>
+        <button type="button" className="linkish" onClick={() => onPick?.(p.id)}>
           {p.name}
           {p.alive ? '' : ' †'}
         </button>
@@ -524,7 +566,7 @@ function feelingLabel(r: RelationshipView): string {
 function RelationRow({ r, onPick }: { r: RelationshipView; onPick?: (id: string) => void }) {
   return (
     <li>
-      <button className="linkish" onClick={() => onPick?.(r.id)}>
+      <button type="button" className="linkish" onClick={() => onPick?.(r.id)}>
         {r.name}
       </button>
       {r.role && <span className="tag">{r.role}</span>}

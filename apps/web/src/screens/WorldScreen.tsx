@@ -10,6 +10,7 @@ import {
   type MapObjectKind,
   type RateLimitNotice,
   type WorldMap,
+  type WorldSettings,
   type WorldViewResponse,
 } from '@aw/shared';
 import { api } from '../api.ts';
@@ -50,14 +51,32 @@ const OBJECT_BLURBS: Partial<Record<MapObjectKind, string>> = {
   stall: "A villager's own stall: their goods at their prices.",
 };
 
+const OBJECT_PLURALS: Record<MapObjectKind, string> = {
+  house: 'Houses',
+  market: 'Markets',
+  well: 'Wells',
+  field: 'Fields',
+  bakery: 'Bakeries',
+  workshop: 'Workshops',
+  dock: 'Docks',
+  tree: 'Trees',
+  berry_bush: 'Berry bushes',
+  rock: 'Rocks',
+  pen: 'Animal pens',
+  stall: 'Market stalls',
+};
+
 type Tab = 'selected' | 'people' | 'world';
 
 export function WorldScreen({ worldId }: { worldId: string }) {
   const setShowWorldsScreen = useApp((s) => s.setShowWorldsScreen);
+  const connectionEpoch = useApp((s) => s.connectionEpoch);
   const meta = useApp((s) => s.worlds.find((w) => w.id === worldId));
   const [view, setView] = useState<WorldViewResponse | null>(null);
+  const [worldSettings, setWorldSettings] = useState<WorldSettings | null>(null);
   const [map, setMap] = useState<WorldMap | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [spawnNote, setSpawnNote] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('people');
   const sidebarOpen = useLayout((s) => s.sidebarOpen);
   const sidebarWidth = useLayout((s) => s.sidebarWidth);
@@ -76,14 +95,19 @@ export function WorldScreen({ worldId }: { worldId: string }) {
     () =>
       useWorld.subscribe((s, prev) => {
         if (!s.replay && prev.replay) setPastMap(null);
-        const view = s.replay?.view;
-        if (view && view !== prev.replay?.view && view.map)
-          setPastMap({ version: view.mapVersion, map: decodeMap(view.map) });
-        if (view && !view.map && view.mapVersion === s.mapVersion) setPastMap(null);
+        const replayView = s.replay?.view;
+        if (replayView && replayView !== prev.replay?.view && replayView.map)
+          setPastMap({ version: replayView.mapVersion, map: decodeMap(replayView.map) });
+        if (replayView && !replayView.map && replayView.mapVersion === s.mapVersion)
+          setPastMap(null);
       }),
     [],
   );
   const shownMap = pastMap?.map ?? map;
+  const shownMapRef = useRef(shownMap);
+  useEffect(() => {
+    shownMapRef.current = shownMap;
+  }, [shownMap]);
   const pastOwners = useWorld((s) => s.replay?.view?.owners);
   const openSettings = useSettings((s) => s.setOpen);
   const rendererRef = useRef<WorldRenderer | null>(null);
@@ -95,31 +119,49 @@ export function WorldScreen({ worldId }: { worldId: string }) {
   const mapBusy = useRef(false);
   /** False after unmount (App keys this screen by world, so a world change unmounts it too). */
   const alive = useRef(true);
+  const spawnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      if (spawnTimerRef.current !== null) clearTimeout(spawnTimerRef.current);
+      useWorld.getState().reset();
     };
   }, []);
 
-  // State starts fresh per world: App renders this screen with key={worldId}.
+  const worldTitle = meta?.name ?? view?.meta.name;
   useEffect(() => {
-    let cancelled = false;
-    Promise.all([api.worldView(worldId), api.events(worldId, { limit: 300 })])
+    document.title = worldTitle ? `${worldTitle} — Agents World` : 'Agents World';
+    return () => {
+      document.title = 'Agents World';
+    };
+  }, [worldTitle]);
+
+  // Load world state on mount and resync cleanly after WebSocket reconnects.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    Promise.all([
+      api.worldView(worldId, ctrl.signal),
+      api.events(worldId, { limit: 300 }, ctrl.signal),
+    ])
       .then(([v, ev]) => {
-        if (cancelled) return;
+        if (ctrl.signal.aborted) return;
         useWorld.getState().load(worldId, v, ev.events);
         shownMapVersion.current = v.mapVersion;
         setView(v);
+        setWorldSettings(v.settings);
         setMap(decodeMap(v.map));
         setOwners(v.owners);
+        setError(null);
       })
-      .catch((e: Error) => !cancelled && setError(e.message));
+      .catch((e: unknown) => {
+        if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      });
     return () => {
-      cancelled = true;
-      useWorld.getState().reset();
+      ctrl.abort();
     };
-  }, [worldId]);
+  }, [worldId, connectionEpoch]);
 
   // The map changed on the helper (e.g. a house is being built): fetch just the map, in place.
   // A reply is applied even if the version moved on in flight; the newer one is fetched next.
@@ -159,48 +201,55 @@ export function WorldScreen({ worldId }: { worldId: string }) {
     [],
   );
 
-  // Space toggles play/pause.
+  // Space toggles play/pause when no dialog or input is active.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (document.querySelector('[role="dialog"]')) return;
       const target = e.target as HTMLElement | null;
       if (
-        e.key !== ' ' ||
-        (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName))
+        target &&
+        (target.isContentEditable ||
+          ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName))
       )
         return;
       e.preventDefault();
-      void api.control(worldId, { running: !useWorld.getState().runner.running });
+      void api.control(worldId, { running: !useWorld.getState().runner.running }).catch(() => {});
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [worldId]);
 
-  const pickAgent = (id: string) => {
+  const pickAgent = useCallback((id: string) => {
     const sel: MapSelection = { kind: 'agent', id };
     useWorld.getState().select(sel);
     rendererRef.current?.select(sel, true);
-  };
+  }, []);
+
   /** Select a house, bush… (e.g. from a timeline entry) and show it on the map. */
-  const pickObject = (id: string) => {
-    const object = shownMap?.objects.find((o) => o.id === id);
+  const pickObject = useCallback((id: string) => {
+    const object = shownMapRef.current?.objects.find((o) => o.id === id);
     if (!object) return;
     const sel: MapSelection = { kind: 'object', id, tile: { x: object.x, y: object.y } };
     useWorld.getState().select(sel);
     rendererRef.current?.select(sel, true);
-  };
+  }, []);
 
   return (
     <div className="world-screen">
       <header className="topbar">
-        <button className="btn btn-ghost" onClick={() => setShowWorldsScreen(true)}>
+        <button type="button" className="btn btn-ghost" onClick={() => setShowWorldsScreen(true)}>
           ← Worlds
         </button>
-        <div className="topbar-title">{meta?.name ?? view?.meta.name ?? '…'}</div>
+        <h1 className="topbar-title">{worldTitle ?? '…'}</h1>
         {view && <TimeControls worldId={worldId} />}
         <div className="topbar-spacer" />
         {view && <SpendMeter worldId={worldId} />}
         <button
+          type="button"
           className={`btn btn-small ${replaying ? 'btn-primary' : ''}`}
+          aria-pressed={replaying}
+          disabled={!view}
           onClick={() =>
             useWorld
               .getState()
@@ -211,21 +260,27 @@ export function WorldScreen({ worldId }: { worldId: string }) {
           {replaying ? '⏵ Live' : '⏪ Replay'}
         </button>
         <button
+          type="button"
           className="btn btn-small"
+          disabled={!view}
           onClick={() => setEventsOpen(true)}
           title="Trigger a drought, storm, sickness, fire or bumper harvest"
         >
           ⚡ Events
         </button>
         <button
+          type="button"
           className="btn btn-small"
+          disabled={!view}
           onClick={() => setBrainsOpen(true)}
           title="Choose which AI each person thinks with, and see what they have spent"
         >
           🧠 Brains
         </button>
         <button
+          type="button"
           className="btn btn-small"
+          disabled={!view}
           onClick={() => setSpawning(true)}
           title="Bring a new person into the world"
         >
@@ -233,6 +288,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </button>
         <ViewMenu />
         <button
+          type="button"
           className="btn btn-small btn-ghost"
           onClick={() => openSettings(true)}
           title="Settings: AI providers, keys, prices"
@@ -248,16 +304,41 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         </div>
       )}
       {rateLimit && <RateLimitBanner notice={rateLimit} />}
+      {spawnNote && (
+        <div className="banner banner-info row-between" role="status">
+          <span>{spawnNote}</span>
+          <button
+            type="button"
+            className="btn btn-small btn-ghost"
+            onClick={() => setSpawnNote(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <ConditionsBar map={shownMap} onPickObject={pickObject} />
       {eventsOpen && (
         <WorldEventsDialog worldId={worldId} map={map} onClose={() => setEventsOpen(false)} />
       )}
-      {brainsOpen && <WorldBrainsDialog worldId={worldId} onClose={() => setBrainsOpen(false)} />}
+      {brainsOpen && (
+        <WorldBrainsDialog
+          worldId={worldId}
+          onClose={() => setBrainsOpen(false)}
+          onSettingsUpdated={setWorldSettings}
+        />
+      )}
       {spawning && (
         <SpawnDialog
           worldId={worldId}
           onClose={() => setSpawning(false)}
-          onSpawned={(id) => setTimeout(() => pickAgent(id), 300)}
+          onSpawned={(id, note) => {
+            if (note) setSpawnNote(note);
+            if (spawnTimerRef.current !== null) clearTimeout(spawnTimerRef.current);
+            spawnTimerRef.current = setTimeout(() => {
+              spawnTimerRef.current = null;
+              if (alive.current) pickAgent(id);
+            }, 300);
+          }}
         />
       )}
 
@@ -271,27 +352,41 @@ export function WorldScreen({ worldId }: { worldId: string }) {
         }
       >
         <main className="map-area">
-          {error && <div className="banner banner-error">{error}</div>}
+          {error && (
+            <div className="banner banner-error" role="alert">
+              {error}
+            </div>
+          )}
           <div className="map-wrap">
-            {shownMap && <MapView map={shownMap} rendererRef={rendererRef} />}
+            {shownMap ? (
+              <MapView map={shownMap} rendererRef={rendererRef} />
+            ) : !error ? (
+              <div className="map-loading muted">Loading village…</div>
+            ) : null}
             <div className="map-controls" aria-label="Map controls">
               <button
+                type="button"
                 className="btn btn-icon"
                 title="Zoom in (+)"
+                aria-label="Zoom in"
                 onClick={() => rendererRef.current?.zoomBy(1)}
               >
                 +
               </button>
               <button
+                type="button"
                 className="btn btn-icon"
                 title="Zoom out (−)"
+                aria-label="Zoom out"
                 onClick={() => rendererRef.current?.zoomBy(-1)}
               >
                 −
               </button>
               <button
+                type="button"
                 className="btn btn-icon"
                 title="Fit map (F)"
+                aria-label="Fit map"
                 onClick={() => rendererRef.current?.fit()}
               >
                 ⤢
@@ -308,6 +403,7 @@ export function WorldScreen({ worldId }: { worldId: string }) {
               {(['selected', 'people', 'world'] as Tab[]).map((t) => (
                 <button
                   key={t}
+                  type="button"
                   role="tab"
                   aria-selected={tab === t}
                   className={`tab ${tab === t ? 'is-on' : ''}`}
@@ -331,14 +427,19 @@ export function WorldScreen({ worldId }: { worldId: string }) {
                   <p className="muted">Click a person or anything on the map.</p>
                 ))}
               {tab === 'people' && <PeopleList onPick={pickAgent} />}
-              {tab === 'world' && view && (
-                <WorldInfo
-                  worldId={worldId}
-                  view={view}
-                  map={map}
-                  onOpenBrains={() => setBrainsOpen(true)}
-                />
-              )}
+              {tab === 'world' &&
+                (view && worldSettings ? (
+                  <WorldInfo
+                    worldId={worldId}
+                    view={view}
+                    settings={worldSettings}
+                    onSettingsChange={setWorldSettings}
+                    map={map}
+                    onOpenBrains={() => setBrainsOpen(true)}
+                  />
+                ) : (
+                  <p className="muted">Loading…</p>
+                ))}
             </div>
           </aside>
         )}
@@ -350,17 +451,44 @@ export function WorldScreen({ worldId }: { worldId: string }) {
 function WorldInfo({
   worldId,
   view,
+  settings,
+  onSettingsChange,
   map,
   onOpenBrains,
 }: {
   worldId: string;
   view: WorldViewResponse;
+  settings: WorldSettings;
+  onSettingsChange: (s: WorldSettings) => void;
   map: WorldMap | null;
   onOpenBrains: () => void;
 }) {
-  const [settings, setSettings] = useState(view.settings);
   const [applyToAll, setApplyToAll] = useState(false);
-  const [daysPerYear, setDaysPerYear] = useState(view.settings.daysPerYear);
+  const [daysPerYear, setDaysPerYear] = useState(settings.daysPerYear);
+  const [agingError, setAgingError] = useState<string | null>(null);
+  const savedDaysRef = useRef(settings.daysPerYear);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setDaysPerYear(settings.daysPerYear);
+    savedDaysRef.current = settings.daysPerYear;
+  }, [settings.daysPerYear]);
+
+  const commitAging = (nextDays: number) => {
+    if (nextDays === savedDaysRef.current) return;
+    setAgingError(null);
+    void api
+      .setAging(worldId, nextDays)
+      .then((updated) => {
+        savedDaysRef.current = updated.daysPerYear;
+        onSettingsChange(updated);
+      })
+      .catch((e: unknown) => {
+        setAgingError(e instanceof Error ? e.message : String(e));
+        setDaysPerYear(savedDaysRef.current);
+      });
+  };
+
   const counts = new Map<MapObjectKind, number>();
   for (const o of map?.objects ?? []) counts.set(o.kind, (counts.get(o.kind) ?? 0) + 1);
   return (
@@ -377,7 +505,7 @@ function WorldInfo({
         <dt>Aging</dt>
         <dd>{daysPerYear} in-game days per year</dd>
         {(['house', 'field', 'tree', 'berry_bush'] as MapObjectKind[]).map((k) => (
-          <FactRow key={k} label={`${OBJECT_LABELS[k]}s`} value={counts.get(k) ?? 0} />
+          <FactRow key={k} label={OBJECT_PLURALS[k]} value={counts.get(k) ?? 0} />
         ))}
       </dl>
       <h3>Aging speed</h3>
@@ -388,9 +516,15 @@ function WorldInfo({
         value={daysPerYear}
         aria-label="In-game days per year of age"
         onChange={(e) => setDaysPerYear(Number(e.target.value))}
-        onPointerUp={() => void api.setAging(worldId, daysPerYear)}
-        onKeyUp={() => void api.setAging(worldId, daysPerYear)}
+        onPointerUp={() => commitAging(daysPerYear)}
+        onKeyUp={() => commitAging(daysPerYear)}
+        onBlur={() => commitAging(daysPerYear)}
       />
+      {agingError && (
+        <p className="warn small" role="alert">
+          {agingError}
+        </p>
+      )}
       <p className="muted small">
         One year of age every {daysPerYear} in-game day{daysPerYear === 1 ? '' : 's'} (a lifetime of
         ~70 years ≈ {Math.round(70 * daysPerYear)} days). Lower is faster.
@@ -403,7 +537,7 @@ function WorldInfo({
       <p className="muted small">
         Used for newborns and spawned people. You can also set each person’s brain in their
         inspector, or everyone at once in{' '}
-        <button className="linkish" onClick={onOpenBrains}>
+        <button type="button" className="linkish" onClick={onOpenBrains}>
           Brains &amp; spending…
         </button>
       </p>
@@ -422,7 +556,7 @@ function WorldInfo({
           </label>
         }
         onSave={async (brain) => {
-          setSettings(await api.setDefaultBrain(worldId, brain, applyToAll));
+          onSettingsChange(await api.setDefaultBrain(worldId, brain, applyToAll));
           setApplyToAll(false);
         }}
       />
@@ -465,6 +599,7 @@ function SelectionDetails({
   if (selection.kind === 'agent')
     return (
       <AgentInspector
+        key={selection.id}
         worldId={worldId}
         agentId={selection.id}
         onPick={onPick}
@@ -473,23 +608,27 @@ function SelectionDetails({
     );
   if (selection.kind === 'object') {
     const object = map?.objects.find((o) => o.id === selection.id);
-    if (!object) return null;
+    if (!object) {
+      return <p className="muted">This place does not exist at this moment.</p>;
+    }
     const amount = resources[object.id] ?? (object.kind === 'tree' ? 4 : undefined);
     const owners = ownersById[object.id];
-    const crop =
-      object.kind === 'field'
-        ? Number(object.id.split('-')[1]) % 2 === 1
-          ? 'Wheat'
-          : 'Vegetables'
-        : null;
+    const isCommonField = object.kind === 'field' && !(owners && owners.length > 0);
+    const commonCrop = isCommonField
+      ? Number(object.id.split('-')[1]) % 2 === 1
+        ? 'Wheat'
+        : 'Vegetables'
+      : null;
     const amountLabel =
       object.kind === 'berry_bush'
         ? 'Berries'
         : object.kind === 'tree'
           ? 'Wood left'
-          : crop
-            ? `${crop} ready`
-            : 'Amount';
+          : commonCrop
+            ? `${commonCrop} ready`
+            : object.kind === 'field'
+              ? 'Harvest ready'
+              : 'Amount';
     return (
       <div className="selection">
         <div className="selection-title">{object.name ?? OBJECT_LABELS[object.kind]}</div>
@@ -518,7 +657,9 @@ function SelectionDetails({
           </p>
         )}
         {object.kind === 'market' && <MarketPanel worldId={worldId} />}
-        {(object.kind === 'pen' || object.kind === 'stall') && (
+        {(object.kind === 'pen' ||
+          object.kind === 'stall' ||
+          (object.kind === 'field' && Boolean(owners?.length))) && (
           <VillageObjectFacts worldId={worldId} object={object} />
         )}
         <ObjectHistory
@@ -541,18 +682,28 @@ function SelectionDetails({
   );
 }
 
-/** A stall's goods or a pen's animals, from the village's records. */
+/** A stall's goods, pen's animals, or owned field's sown crop from the village's records. */
 function VillageObjectFacts({ worldId, object }: { worldId: string; object: MapObject }) {
-  const village = useVillage(worldId);
+  const { data: village } = useVillage(worldId);
   if (!village) return null;
   if (object.kind === 'stall') {
     const stall = village.stalls.find((s) => s.id === object.id);
     if (!stall) return null;
     return (
       <>
-        <h4 className="village-sub">Goods for sale</h4>
+        <h3 className="village-sub">Goods for sale</h3>
         <StallStock stock={stall.stock} />
       </>
+    );
+  }
+  if (object.kind === 'field') {
+    const field = village.fields.find((f) => f.id === object.id);
+    if (!field) return null;
+    return (
+      <p>
+        <strong>Crop:</strong>{' '}
+        {field.crop ? `${field.crop[0]!.toUpperCase()}${field.crop.slice(1)}` : 'Unsown'}
+      </p>
     );
   }
   const pen = village.pens.find((p) => p.id === object.id);

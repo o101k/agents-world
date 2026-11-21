@@ -68,8 +68,7 @@ function fundJob(
     if (!opts.partial && k < total) return null;
     const { buys, cost } = shortfall(p, kind, k);
     const affordable =
-      buys.length === 0 ||
-      (opts.canBuy && p.canDo.includes('buy') && p.self.money >= cost + 10);
+      buys.length === 0 || (opts.canBuy && p.canDo.includes('buy') && p.self.money >= cost + 10);
     if (!affordable) continue;
     const steps = Math.min(k, MAX_STEPS - buys.length);
     if (steps < 1) return null;
@@ -85,7 +84,8 @@ function fundJob(
 export function plan(p: Perception, roll: number): Decision | null {
   if (!p.canDo.includes('build')) return null;
   const inv = p.self.inventory;
-  const ownsKind = (kind: string) => p.knownPlaces.some((k) => k.kind === kind && k.owner === 'you');
+  const ownsKind = (kind: string) =>
+    p.knownPlaces.some((k) => k.kind === kind && k.owner === 'you');
 
   // An unfinished building of our own: carry on with what we have, or buy the rest of the job
   // (or as much of it as we can pay for) when the roll allows.
@@ -93,6 +93,8 @@ export function plan(p: Perception, roll: number): Decision | null {
     (k) =>
       k.owner === 'you' &&
       k.progress !== undefined &&
+      !k.burnt &&
+      !k.unreachable &&
       k.kind !== 'field' &&
       (BUILDING_KINDS as string[]).includes(k.kind),
   );

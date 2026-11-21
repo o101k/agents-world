@@ -194,13 +194,17 @@ function stamp(tick: number): string {
   return `[Day ${c.day} ${String(c.hour).padStart(2, '0')}:${String(c.minute).padStart(2, '0')}]`;
 }
 
+const cmpId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 /** A few words about where the agent is standing. */
 export function describeLocation(state: WorldState, agent: Agent): string {
   const cache = mapCache(state.map);
   if (agent.indoorsId) return `inside ${cache.byId.get(agent.indoorsId)?.name ?? 'a building'}`;
   const near = objectsNear(state.map, agent, 2)
     .filter((o) => o.kind !== 'berry_bush')
-    .sort((a, b) => distanceToObject(a, agent) - distanceToObject(b, agent))[0];
+    .sort(
+      (a, b) => distanceToObject(a, agent) - distanceToObject(b, agent) || cmpId(a.id, b.id),
+    )[0];
   if (near) {
     const name = near.name ?? OBJECT_LABELS[near.kind].toLowerCase();
     if (agent.homeId === near.id) return 'at home (outside the door)';
@@ -246,7 +250,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       ...(k.lastSeenAnimals ? { animals: { ...k.lastSeenAnimals } } : {}),
     });
   }
-  knownPlaces.sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
+  knownPlaces.sort((a, b) => a.distance - b.distance || cmpId(a.id, b.id));
   // In a big village the nearest places crowd out the ones that matter most: always keep home,
   // what they own, and the village's one-of-a-kind places.
   const vital = (k: KnownPlace) =>
@@ -256,7 +260,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
     ...knownPlaces.filter((k) => !vital(k)).slice(0, MAX_PLACES),
   ]
     .slice(0, MAX_PLACES + 10)
-    .sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id));
+    .sort((a, b) => a.distance - b.distance || cmpId(a.id, b.id));
 
   const senses = agent.alive && !agent.asleep;
   const radius = senseRadius(state, agent);
@@ -265,7 +269,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         .filter((o) => o !== agent && o.alive && !o.indoorsId)
         .map((o) => ({ o, d: Math.max(Math.abs(o.x - agent.x), Math.abs(o.y - agent.y)) }))
         .filter(({ d }) => d <= radius)
-        .sort((a, b) => a.d - b.d)
+        .sort((a, b) => a.d - b.d || cmpId(a.o.id, b.o.id))
         .map(({ o, d }) => ({
           id: o.id,
           name: nameAsKnown(agent, o),
@@ -290,7 +294,10 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
       ...(p.role ? { role: p.role } : {}),
       lastSeenTick: p.lastSeenTick,
     }))
-    .sort((a, b) => (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity)
+    .sort(
+      (a, b) =>
+        (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity || cmpId(a.id, b.id),
+    )
     .slice(0, 30);
   const find = (id: string | null) => (id ? findAgent(state, id) : undefined);
   const partner = find(agent.partnerId);
@@ -320,7 +327,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
         .map((p) => ({ id: p.id, name: nameAsKnown(agent, p), alive: p.alive, adoptive: true })),
     ],
   };
-  const rocks = senses ? rocksNear(state.map, agent, isNight ? 4 : 8).length : 0;
+  const rocks = senses && radius > 0 ? rocksNear(state.map, agent, radius).length : 0;
   const jobs = jobsFor(state, agent);
   const village = villageKnowledge(state, agent);
   const requests = state.requests
@@ -384,7 +391,7 @@ export function buildPerception(state: WorldState, agent: Agent): Perception {
           expiresTick: o.expiresTick,
         };
       }),
-    treesNearby: senses ? countTrees(state, agent, isNight ? 4 : 8) : 0,
+    treesNearby: senses && radius > 0 ? countTrees(state, agent, radius) : 0,
     ...(rocks > 0 ? { rocksNearby: rocks } : {}),
     ...(jobs.length ? { jobs } : {}),
     ...(village ? { village } : {}),

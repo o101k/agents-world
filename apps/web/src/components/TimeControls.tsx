@@ -33,7 +33,9 @@ export function TimeControls({ worldId }: { worldId: string }) {
         <span aria-hidden>{night ? '☾' : '☀'}</span> {formatClock(tick)}
       </div>
       <button
+        type="button"
         className={`btn play-pause ${runner.running ? '' : 'btn-primary'}`}
+        aria-pressed={runner.running}
         onClick={() => control({ running: !runner.running })}
         title={runner.running ? 'Pause (Space)' : 'Play (Space)'}
         data-testid="play-pause"
@@ -43,7 +45,9 @@ export function TimeControls({ worldId }: { worldId: string }) {
       <div className="segmented" role="group" aria-label="Speed">
         {SPEED_PRESETS.map((s) => (
           <button
+            type="button"
             key={s}
+            aria-pressed={runner.speed === s}
             className={`seg ${runner.speed === s ? 'is-on' : ''}`}
             onClick={() => control({ speed: s })}
             title={s === 0 ? 'As fast as possible' : `${s} in-game minutes per second`}

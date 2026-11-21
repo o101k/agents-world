@@ -474,48 +474,53 @@ const ItemSchema = z.enum([
   'hen',
   'sheep',
 ]);
+const NonEmptyId = z.string().trim().min(1);
 const Qty = z.number().int().min(1).max(999);
-const BundleSchema = z.object({
-  item: ItemSchema.optional(),
-  quantity: z.number().int().min(0).max(999).optional(),
-  coins: z.number().int().min(0).max(100000).optional(),
-});
+const BundleSchema = z
+  .object({
+    item: ItemSchema.optional(),
+    quantity: z.number().int().min(0).max(999).optional(),
+    coins: z.number().int().min(0).max(100000).optional(),
+  })
+  .refine((b) => (b.item ? (b.quantity ?? 1) >= 1 : (b.quantity ?? 0) === 0), {
+    message: 'Item bundle must have positive quantity and no orphan quantity without item',
+  });
 const PointSchema = z.object({ x: z.number().int(), y: z.number().int() });
 
 export const IntentSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('go_to'),
-    target: z.union([z.object({ objectId: z.string() }), PointSchema]),
+    target: z.union([z.object({ objectId: NonEmptyId }), PointSchema]),
   }),
-  z.object({ type: z.literal('gather'), objectId: z.string() }),
+  z.object({ type: z.literal('gather'), objectId: NonEmptyId }),
   z.object({ type: z.literal('eat'), item: ItemSchema }),
-  z.object({ type: z.literal('drink'), sourceId: z.string().optional() }),
+  z.object({ type: z.literal('drink'), sourceId: NonEmptyId.optional() }),
   z.object({ type: z.literal('sleep') }),
   z.object({ type: z.literal('rest'), minutes: z.number().min(1).max(600) }),
   z.object({ type: z.literal('explore') }),
   z.object({
     type: z.literal('talk_to'),
-    agentId: z.string(),
+    agentId: NonEmptyId,
     message: z.string().min(1).max(600),
   }),
-  z.object({ type: z.literal('chop_wood'), objectId: z.string().optional() }),
+  z.object({ type: z.literal('chop_wood'), objectId: NonEmptyId.optional() }),
   z.object({ type: z.literal('craft'), recipe: z.enum(['bread', 'planks', 'tools', 'clothes']) }),
   z.object({ type: z.literal('buy'), item: ItemSchema, quantity: Qty }),
   z.object({ type: z.literal('sell'), item: ItemSchema, quantity: Qty }),
-  z.object({ type: z.literal('give'), agentId: z.string(), gift: BundleSchema }),
+  z.object({ type: z.literal('give'), agentId: NonEmptyId, gift: BundleSchema }),
   z.object({
     type: z.literal('offer_trade'),
-    agentId: z.string(),
+    agentId: NonEmptyId,
     give: BundleSchema,
     ask: BundleSchema,
   }),
-  z.object({ type: z.literal('respond_offer'), offerId: z.string(), accept: z.boolean() }),
-  z.object({ type: z.literal('steal'), agentId: z.string(), item: ItemSchema.optional() }),
-  z.object({ type: z.literal('attack'), agentId: z.string() }),
-  z.object({ type: z.literal('feed'), agentId: z.string(), item: ItemSchema }),
+  z.object({ type: z.literal('respond_offer'), offerId: NonEmptyId, accept: z.boolean() }),
+  z.object({ type: z.literal('steal'), agentId: NonEmptyId, item: ItemSchema.optional() }),
+  z.object({ type: z.literal('attack'), agentId: NonEmptyId }),
+  z.object({ type: z.literal('feed'), agentId: NonEmptyId, item: ItemSchema }),
   z.object({
     type: z.literal('teach'),
-    agentId: z.string(),
+    agentId: NonEmptyId,
     skill: z.enum([
       'foraging',
       'fishing',
@@ -527,21 +532,21 @@ export const IntentSchema = z.discriminatedUnion('type', [
       'language',
     ]),
   }),
-  z.object({ type: z.literal('propose_partnership'), agentId: z.string() }),
-  z.object({ type: z.literal('respond_proposal'), fromId: z.string(), accept: z.boolean() }),
+  z.object({ type: z.literal('propose_partnership'), agentId: NonEmptyId }),
+  z.object({ type: z.literal('respond_proposal'), fromId: NonEmptyId, accept: z.boolean() }),
   z.object({ type: z.literal('end_partnership') }),
-  z.object({ type: z.literal('try_for_child'), agentId: z.string() }),
-  z.object({ type: z.literal('respond_child_request'), fromId: z.string(), accept: z.boolean() }),
+  z.object({ type: z.literal('try_for_child'), agentId: NonEmptyId }),
+  z.object({ type: z.literal('respond_child_request'), fromId: NonEmptyId, accept: z.boolean() }),
   z.object({
     type: z.literal('name_child'),
-    childId: z.string(),
+    childId: NonEmptyId,
     name: z.string().trim().min(1).max(40),
   }),
-  z.object({ type: z.literal('adopt_child'), childId: z.string() }),
-  z.object({ type: z.literal('respond_adoption'), fromId: z.string(), accept: z.boolean() }),
-  z.object({ type: z.literal('declare_will'), agentId: z.string() }),
+  z.object({ type: z.literal('adopt_child'), childId: NonEmptyId }),
+  z.object({ type: z.literal('respond_adoption'), fromId: NonEmptyId, accept: z.boolean() }),
+  z.object({ type: z.literal('declare_will'), agentId: NonEmptyId }),
   z.object({ type: z.literal('build_house') }),
-  z.object({ type: z.literal('tend'), agentId: z.string() }),
+  z.object({ type: z.literal('tend'), agentId: NonEmptyId }),
   z.object({
     type: z.literal('build'),
     building: z.enum(['house', 'bakery', 'workshop', 'well', 'pen', 'stall']),
@@ -550,10 +555,10 @@ export const IntentSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('sow'),
     item: z.enum(['wheat', 'vegetables']),
-    objectId: z.string().optional(),
+    objectId: NonEmptyId.optional(),
   }),
-  z.object({ type: z.literal('quarry'), objectId: z.string().optional() }),
-  z.object({ type: z.literal('tend_animals'), objectId: z.string().optional() }),
+  z.object({ type: z.literal('quarry'), objectId: NonEmptyId.optional() }),
+  z.object({ type: z.literal('tend_animals'), objectId: NonEmptyId.optional() }),
   z.object({
     type: z.literal('stock_stall'),
     item: ItemSchema,
@@ -563,29 +568,29 @@ export const IntentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('take_from_stall'), item: ItemSchema, quantity: Qty }),
   z.object({
     type: z.literal('buy_from_stall'),
-    objectId: z.string(),
+    objectId: NonEmptyId,
     item: ItemSchema,
     quantity: Qty,
   }),
   z.object({
     type: z.literal('hire'),
-    agentId: z.string(),
+    agentId: NonEmptyId,
     wage: z.number().int().min(1).max(999),
     days: z.number().int().min(1).max(30),
   }),
-  z.object({ type: z.literal('respond_job'), fromId: z.string(), accept: z.boolean() }),
-  z.object({ type: z.literal('end_job'), agentId: z.string() }),
+  z.object({ type: z.literal('respond_job'), fromId: NonEmptyId, accept: z.boolean() }),
+  z.object({ type: z.literal('end_job'), agentId: NonEmptyId }),
   z.object({ type: z.literal('call_meeting'), topic: z.string().trim().min(1).max(200) }),
   z.object({
     type: z.literal('propose_rule'),
     text: z.string().trim().min(1).max(300),
     tax: z.number().int().min(0).max(100).optional(),
-    leaderId: z.string().optional(),
+    leaderId: NonEmptyId.optional(),
   }),
-  z.object({ type: z.literal('vote'), proposalId: z.string(), accept: z.boolean() }),
+  z.object({ type: z.literal('vote'), proposalId: NonEmptyId, accept: z.boolean() }),
   z.object({
     type: z.literal('pay_from_treasury'),
-    agentId: z.string(),
+    agentId: NonEmptyId,
     coins: z.number().int().min(1).max(100000),
   }),
 ]);
@@ -593,21 +598,23 @@ export const IntentSchema = z.discriminatedUnion('type', [
 export const DecisionSchema = z.object({
   thought: z.string().max(2000).default(''),
   goal: z.string().max(300).default(''),
-  plan: z.array(z.unknown()).max(20).default([]),
-  remember: z.object({ text: z.string().max(500), importance: z.number() }).optional(),
+  plan: z.array(IntentSchema).max(20).default([]),
+  remember: z
+    .object({ text: z.string().max(500), importance: z.number().min(1).max(10) })
+    .optional(),
   feelings: z
     .array(
       z.object({
-        agentId: z.string(),
-        affection: z.number().optional(),
-        trust: z.number().optional(),
-        romance: z.number().optional(),
+        agentId: NonEmptyId,
+        affection: z.number().min(-3).max(3).optional(),
+        trust: z.number().min(-3).max(3).optional(),
+        romance: z.number().min(-3).max(3).optional(),
       }),
     )
     .max(10)
     .optional(),
   diary: z.string().max(1500).optional(),
-  beliefs: z.array(z.string().max(300)).max(5).optional(),
+  beliefs: z.array(z.string().max(300)).max(3).optional(),
 });
 
 /** Human-readable one-liner for an intent, e.g. for the inspector. */

@@ -41,26 +41,40 @@ export function EventLog({
   // Which filters the fetched history belongs to (so we know when a search is still running).
   const historyKey = JSON.stringify([importantOnly, agentFilter, q, until]);
   const [loadedKey, setLoadedKey] = useState('');
-  const searching = loadedKey !== historyKey;
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const searching = Boolean(fromHistory) && loadedKey !== historyKey && !historyError;
   useEffect(() => {
-    if (!worldId || !fromHistory) return;
-    let cancelled = false;
+    if (!worldId || !fromHistory) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+      setHistoryError(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    setHistoryError(null);
     api
-      .events(worldId, {
-        limit: 300,
-        minImportance: importantOnly ? 3 : 1,
-        ...(agentFilter ? { agentId: agentFilter } : {}),
-        ...(q ? { q } : {}),
-        ...(until !== null ? { atOrBeforeTick: until } : {}),
-      })
+      .events(
+        worldId,
+        {
+          limit: 300,
+          minImportance: importantOnly ? 3 : 1,
+          ...(agentFilter ? { agentId: agentFilter } : {}),
+          ...(q ? { q } : {}),
+          ...(until !== null ? { atOrBeforeTick: until } : {}),
+        },
+        ctrl.signal,
+      )
       .then((r) => {
-        if (cancelled) return;
+        if (ctrl.signal.aborted) return;
         setHistory(r.events);
         setLoadedKey(JSON.stringify([importantOnly, agentFilter, q, until]));
+        setHistoryError(null);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setHistoryError(e instanceof Error ? e.message : String(e));
+      });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [worldId, importantOnly, agentFilter, q, until, fromHistory]);
 
@@ -107,13 +121,22 @@ export function EventLog({
         </label>
       </div>
       <ol className="event-list">
-        {shown.length === 0 && (
+        {historyError && (
+          <li className="warn small" role="alert">
+            Could not load timeline history: {historyError}
+          </li>
+        )}
+        {shown.length === 0 && !historyError && (
           <li className="muted">
             {q
               ? searching
                 ? 'Searching…'
                 : `Nothing in the history matches “${q}”.`
-              : 'Nothing has happened yet. Press Play.'}
+              : importantOnly || (selectedOnly && selectedAgent)
+                ? searching
+                  ? 'Loading…'
+                  : 'No events match these filters yet.'
+                : 'Nothing has happened yet. Press Play.'}
           </li>
         )}
         {shown.slice(0, 300).map((e) => (
@@ -142,6 +165,7 @@ const EventRow = memo(function EventRow({
   return (
     <li className={`event imp-${e.importance}`}>
       <button
+        type="button"
         className="event-time linkish"
         title="Replay this moment on the map"
         onClick={() => useWorld.getState().setReplayTarget(e.tick)}
@@ -149,11 +173,19 @@ const EventRow = memo(function EventRow({
         {formatClock(e.tick)}
       </button>
       {e.actors[0] ? (
-        <button className="event-text linkish" onClick={() => onPickAgent(e.actors[0]!)}>
+        <button
+          type="button"
+          className="event-text linkish"
+          onClick={() => onPickAgent(e.actors[0]!)}
+        >
           {e.text}
         </button>
       ) : e.objects?.[0] ? (
-        <button className="event-text linkish" onClick={() => onPickObject(e.objects![0]!)}>
+        <button
+          type="button"
+          className="event-text linkish"
+          onClick={() => onPickObject(e.objects![0]!)}
+        >
           {e.text}
         </button>
       ) : (

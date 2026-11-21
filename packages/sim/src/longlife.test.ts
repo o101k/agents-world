@@ -5,7 +5,7 @@ import { canDrinkAt, conditionLevel } from './conditions.ts';
 import { step, type TickInput } from './engine.ts';
 import { fadeMemories, nightOf } from './memory.ts';
 import { buildPerception } from './perception.ts';
-import { interactionTiles } from './spatial.ts';
+import { interactionTiles, invalidateMapCaches } from './spatial.ts';
 import { Tile } from '@aw/shared';
 import {
   createWorldState,
@@ -332,5 +332,152 @@ describe('world events', () => {
     expect(maren.sickness).toBeNull();
     for (const m of maren.memories) expect(m.strength).toBe(m.importance);
     step(up, []);
+  });
+
+  it('illness kills on the exact tick health hits 0 without acting or requesting AI', () => {
+    const s = fresh();
+    const a = who(s, 'Aldric');
+    a.health = 0.001;
+    a.sickness = { severity: 1, since: s.tick - 10 * TICKS_PER_HOUR, known: true, tended: -1e9 };
+    a.awaiting = null;
+    const res = step(s, []);
+    expect(a.alive).toBe(false);
+    expect(a.death?.cause).toBe('illness');
+    expect(a.awaiting).toBeNull();
+    expect(res.requests.some((r) => r.agentId === a.id)).toBe(false);
+  });
+
+  it('guards NaN in set_days_per_year, usage.costUsd, and world_event intensity/hours', () => {
+    const s = fresh();
+    const a = who(s, 'Maren');
+    const daysBefore = s.settings.daysPerYear;
+    const spentBefore = a.spentUsd;
+    step(s, [
+      { kind: 'set_days_per_year', value: Number.NaN },
+      {
+        kind: 'decision',
+        agentId: a.id,
+        decision: { thought: '', goal: '', plan: [] },
+        usage: { costUsd: Number.NaN },
+      },
+      {
+        kind: 'world_event',
+        event: { kind: 'drought', intensity: Number.NaN, hours: Number.NaN },
+      },
+    ]);
+    expect(s.settings.daysPerYear).toBe(daysBefore);
+    expect(a.spentUsd).toBe(spentBefore);
+    expect(Number.isFinite(s.conditions[0]!.intensity)).toBe(true);
+    expect(Number.isFinite(s.conditions[0]!.endTick)).toBe(true);
+  });
+
+  it('fire evacuation separates residents and clears burnt stall stock', () => {
+    const s = fresh();
+    const maren = who(s, 'Maren');
+    const tobias = who(s, 'Tobias');
+    const lise = who(s, 'Lise'); // infant
+    const home = s.map.objects.find((o) => o.id === maren.homeId)!;
+    for (const a of [maren, tobias, lise]) {
+      a.x = home.door!.x;
+      a.y = home.door!.y;
+      a.indoorsId = home.id;
+      a.awaiting = null;
+    }
+    step(s, [
+      {
+        kind: 'world_event',
+        event: { kind: 'fire', intensity: 0.2, hours: 1, targetId: home.id },
+      },
+    ]);
+    // Residents evacuated to distinct tiles and infant did not get an awaiting trigger.
+    const coords = [maren, tobias, lise].map((a) => `${a.x},${a.y}`);
+    expect(new Set(coords).size).toBe(3);
+    // Burnt stall clears stock when fire burns out.
+    const stallId = 'stall-fire-test';
+    s.map.objects.push({ id: stallId, kind: 'stall', x: 5, y: 5, w: 2, h: 1 });
+    s.stalls[stallId] = { stock: { bread: { quantity: 5, price: 8 } } };
+    invalidateMapCaches(s.map);
+    step(s, [
+      {
+        kind: 'world_event',
+        event: { kind: 'fire', intensity: 0.5, hours: 1, targetId: stallId },
+      },
+    ]);
+    run(s, 61);
+    expect(s.stalls[stallId]!.stock).toEqual({});
+  });
+
+  it('stone regrows at rate 1 unaffected by drought, prunes when full, and is skipped by bumper_harvest', () => {
+    const s = fresh();
+    const rock = s.map.objects.find((o) => o.kind === 'rock')!;
+    s.resources[rock.id] = { amount: 2, max: 6, regenPerDay: 24, item: 'stone' };
+    step(s, [
+      { kind: 'world_event', event: { kind: 'bumper_harvest', intensity: 1, hours: 24 } },
+      { kind: 'world_event', event: { kind: 'drought', intensity: 1, hours: 24 } },
+    ]);
+    // Bumper harvest must NOT touch stone.
+    expect(s.resources[rock.id]!.amount).toBe(2);
+    // Advance to next hourly regrowth tick: stone regrows by 24 * 1 / 24 = 1 even in severe drought.
+    s.tick = Math.ceil(s.tick / TICKS_PER_HOUR) * TICKS_PER_HOUR - 1;
+    step(s, []);
+    expect(s.resources[rock.id]!.amount).toBe(3);
+    // Once full, stone entry is pruned from state.resources.
+    s.resources[rock.id]!.amount = 5.5;
+    s.tick = Math.ceil(s.tick / TICKS_PER_HOUR) * TICKS_PER_HOUR - 1;
+    step(s, []);
+    expect(s.resources[rock.id]).toBeUndefined();
+  });
+
+  it('memoryTick ignores diary/belief/chapter for noteworthy days and applyReflection enforces MEMORY_LIMIT', async () => {
+    const { MEMORY_LIMIT } = await import('./agent.ts');
+    const s = fresh();
+    const maren = who(s, 'Maren');
+    // Only diary/belief/chapter memories from today: must NOT trigger a daily reflection.
+    s.tick = TICKS_PER_DAY + 22 * TICKS_PER_HOUR;
+    maren.asleep = true;
+    maren.action = { type: 'sleep', since: s.tick - 10 };
+    maren.lastReflectDay = nightOf(s.tick) - 1;
+    maren.lastChapterAge = Math.floor(maren.age);
+    maren.memories = [
+      {
+        tick: s.tick - 5,
+        text: 'Diary: old',
+        importance: 6,
+        kind: 'diary',
+        people: [],
+        strength: 6,
+      },
+      {
+        tick: s.tick - 5,
+        text: 'A belief',
+        importance: 6,
+        kind: 'belief',
+        people: [],
+        strength: 6,
+      },
+    ];
+    step(s, []);
+    expect(maren.awaiting).toBeNull();
+
+    // Fill to MEMORY_LIMIT with regular memories, then apply a reflection: must stay <= MEMORY_LIMIT.
+    maren.memories = [];
+    for (let i = 0; i < MEMORY_LIMIT; i++) {
+      remember(maren, s.tick - 100 - i, `Memory ${i}`, 3);
+    }
+    maren.awaiting = { kind: 'reflect', scope: 'day' };
+    step(s, [
+      {
+        kind: 'decision',
+        agentId: maren.id,
+        decision: {
+          thought: '',
+          goal: '',
+          plan: [],
+          diary: 'Today was full.',
+          beliefs: ['One', 'Two', 'Three'],
+        },
+      },
+    ]);
+    expect(maren.memories.length).toBeLessThanOrEqual(MEMORY_LIMIT);
   });
 });

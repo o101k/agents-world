@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { TICKS_PER_DAY, TICKS_PER_HOUR } from '@aw/shared';
-import { step } from './engine.ts';
+import { nearestKnown, step } from './engine.ts';
+import { invalidateMapCaches } from './spatial.ts';
 import { buildPerception } from './perception.ts';
-import { agentView } from './views.ts';
+import { agentDetail, agentView } from './views.ts';
 import { TREE_WOOD, createWorldState, resourceAmount } from './world.ts';
 
 function fresh() {
@@ -23,6 +24,51 @@ describe('activity of people', () => {
     expect(agentView(a).activity).toBe('working');
     a.action = { type: 'chop', objectId: 'x', until: 10 };
     expect(agentView(a).activity).toBe('gathering');
+  });
+
+  it('agentDetail shows each task action accurately instead of Resting', () => {
+    const s = fresh();
+    const a = s.agents[0]!;
+    a.asleep = false;
+    for (const [task, prefix] of [
+      ['clear_field', 'Clearing '],
+      ['sow', 'Sowing '],
+      ['quarry', 'Quarrying '],
+      ['tend_animals', 'Tending '],
+    ] as const) {
+      a.action = { type: 'task', task, objectId: 'obj-1', until: s.tick + 10 };
+      expect(agentDetail(s, a).currentAction).toBe(`${prefix}obj-1`);
+    }
+  });
+
+  it('buildPerception skips rocksNearby and treesNearby when indoors (radius === 0)', () => {
+    const s = fresh();
+    const a = s.agents[0]!;
+    const tree = s.map.objects.find((o) => o.kind === 'tree')!;
+    a.x = tree.x;
+    a.y = tree.y;
+    a.asleep = false;
+    a.indoorsId = a.homeId ?? 'house-1';
+    const p = buildPerception(s, a);
+    expect(p.treesNearby).toBe(0);
+    expect(p.rocksNearby).toBeUndefined();
+  });
+
+  it('nearestKnown breaks distance ties deterministically by ASCII id', () => {
+    const s = fresh();
+    const a = s.agents[0]!;
+    a.x = 10;
+    a.y = 10;
+    s.map.objects.push(
+      { id: 'well-z', kind: 'well', x: 12, y: 10, w: 1, h: 1 },
+      { id: 'well-a', kind: 'well', x: 8, y: 10, w: 1, h: 1 },
+    );
+    invalidateMapCaches(s.map);
+    a.knowledge = {
+      'well-z': { lastSeenTick: s.tick },
+      'well-a': { lastSeenTick: s.tick },
+    };
+    expect(nearestKnown(s, a, ['well'])).toBe('well-a');
   });
 
   it('shows a nearby woodcutter as chopping wood to others', () => {

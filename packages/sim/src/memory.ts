@@ -1,5 +1,5 @@
 import { TICKS_PER_DAY, TICKS_PER_HOUR, tickToClock, type Decision } from '@aw/shared';
-import { forgetMemory, fullName, type Agent, type Memory } from './agent.ts';
+import { forgetMemory, fullName, trimMemories, type Agent, type Memory } from './agent.ts';
 import { emit, type Ctx } from './engine.ts';
 import { recallFor } from './perception.ts';
 import type { WorldState } from './world.ts';
@@ -44,7 +44,17 @@ export function memoryTick(ctx: Ctx, agent: Agent): void {
     return;
   const scope = Math.floor(agent.age) > agent.lastChapterAge && agent.age >= 4 ? 'year' : 'day';
   // An uneventful day needs no diary entry (and costs nothing); a birthday always gets a chapter.
-  if (scope === 'day' && !agent.memories.some((m) => m.tick > state.tick - TICKS_PER_DAY)) return;
+  if (
+    scope === 'day' &&
+    !agent.memories.some(
+      (m) =>
+        m.tick > state.tick - TICKS_PER_DAY &&
+        m.kind !== 'diary' &&
+        m.kind !== 'belief' &&
+        m.kind !== 'chapter',
+    )
+  )
+    return;
   agent.lastReflectDay = night;
   agent.awaiting = { kind: 'reflect', scope };
 }
@@ -72,6 +82,7 @@ function upbringing(state: WorldState, child: Agent): void {
       a.age >= 18 &&
       (a.id === child.motherId ||
         a.id === child.fatherId ||
+        child.adoptiveParentIds.includes(a.id) ||
         (child.homeId !== null && a.homeId === child.homeId)),
   );
   if (carers.length === 0) return;
@@ -155,6 +166,7 @@ export function applyReflection(
   const beliefs = agent.memories.filter((m) => m.kind === 'belief').sort((a, b) => a.tick - b.tick);
   for (const old of beliefs.slice(0, Math.max(0, beliefs.length - BELIEF_LIMIT)))
     forgetMemory(agent, agent.memories.indexOf(old));
+  trimMemories(agent);
   if (text) agent.thought = text;
 }
 

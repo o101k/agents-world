@@ -76,12 +76,12 @@ function fields(state: Layout): Layout {
 }
 
 /** The layout of the panels, remembered in this browser and shared by every world. */
-export const useLayout = create<LayoutState>((set) => {
+export const useLayout = create<LayoutState>((set, get) => {
   const initial = load();
   return {
     ...initial,
     set: (patch) => {
-      const next = parseLayout({ ...fields(useLayout.getState()), ...patch });
+      const next = parseLayout({ ...fields(get()), ...patch });
       save(next);
       set(next);
     },

@@ -390,3 +390,184 @@ describe('object history', () => {
     await wm.closeAll();
   });
 });
+
+describe('WorldManager lifecycle, recovery, and AI safeguards', () => {
+  it('recovers from corrupt active world file and supports autoStart: false', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Corrupt', seed: 'corrupt', mapSize: 'small' });
+    await wm.activate(w.id);
+    await wm.closeAll();
+
+    // autoStart: false defers opening active world until start() is called.
+    const deferred = new WorldManager(dir, { autoStart: false });
+    expect(deferred.active).toBeNull();
+    expect(deferred.activeWorldId).toBe(w.id);
+    deferred.start();
+    expect(deferred.active?.id).toBe(w.id);
+    await deferred.closeAll();
+
+    // Corrupt the sqlite file: constructor/start() must clear activeWorldId instead of crashing.
+    writeFileSync(join(dir, 'worlds', `${w.id}.sqlite`), 'not-a-valid-sqlite-db');
+    const recovered = new WorldManager(dir);
+    expect(recovered.active).toBeNull();
+    expect(recovered.activeWorldId).toBeNull();
+    await recovered.closeAll();
+  });
+
+  it('serializes concurrent activate and delete operations safely', async () => {
+    const wm = new WorldManager(dir);
+    const a = await wm.create({ name: 'A', seed: 'a', mapSize: 'small' });
+    const b = await wm.create({ name: 'B', seed: 'b', mapSize: 'small' });
+    await Promise.all([wm.activate(a.id), wm.activate(b.id), wm.delete(a.id)]);
+    expect(wm.activeWorldId).toBe(b.id);
+    expect(wm.list().map((w) => w.id)).toEqual([b.id]);
+    await wm.closeAll();
+  });
+
+  it('enforces spending cap in spawn(), logs draft calls, and detects world switch during async AI calls', async () => {
+    const { BrainRouter } = await import('@aw/brain');
+    const { ConflictError } = await import('./worldManager.ts');
+    let generateCalls = 0;
+    let releaseDraft: (() => void) | null = null;
+    const provider = {
+      id: 'anthropic' as const,
+      decide: async () => ({
+        decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+      }),
+      generate: async () => {
+        generateCalls++;
+        if (releaseDraft) {
+          await new Promise<void>((r) => {
+            releaseDraft = r;
+          });
+        }
+        return {
+          output: {
+            name: 'Tilda',
+            family_name: 'Ash',
+            sex: 'female',
+            age: 28,
+            occupation: 'potter',
+            traits: 'Careful and steady.',
+            background: 'Came from the coast.',
+          },
+          model: 'claude-test',
+          usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.003 },
+        };
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([provider]) });
+    const a = await wm.create({
+      name: 'SpawnCap',
+      seed: 'spcap',
+      mapSize: 'small',
+      defaultBrain: { provider: 'anthropic', model: 'claude-test', effort: 'frugal' },
+    });
+    const b = await wm.create({ name: 'Other', seed: 'other', mapSize: 'small' });
+    await wm.activate(a.id);
+
+    // Normal AI spawn logs the draft call to llm_calls and records spend.
+    const spawned = await wm.spawn(a.id, { description: 'A potter from the coast.' });
+    expect(generateCalls).toBe(1);
+    const draftCalls = wm.calls(a.id, spawned.agentId);
+    expect(draftCalls.some((c) => c.trigger === 'draft' && c.costUsd > 0)).toBe(true);
+
+    // Cap reached: skips AI call and uses offline draft with a note.
+    wm.setCap(a.id, 0);
+    const capped = await wm.spawn(a.id, { description: 'A carpenter.' });
+    expect(generateCalls).toBe(1);
+    expect(capped.note).toMatch(/cap/i);
+
+    // World switch during in-flight draft throws ConflictError.
+    wm.setCap(a.id, 10);
+    let unblock!: () => void;
+    releaseDraft = () => {};
+    const slowProvider = {
+      ...provider,
+      generate: async () =>
+        new Promise<Awaited<ReturnType<typeof provider.generate>>>((resolve) => {
+          unblock = () =>
+            resolve({
+              output: {
+                name: 'Late',
+                family_name: 'Guest',
+                sex: 'male',
+                age: 30,
+                occupation: 'smith',
+                traits: 'Strong.',
+                background: 'Late.',
+              },
+              model: 'claude-test',
+              usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.001 },
+            });
+        }),
+    };
+    wm.brains.register(slowProvider);
+    const pendingSpawn = wm.spawn(a.id, { description: 'Late arrival.' });
+    await new Promise((r) => setTimeout(r, 15));
+    await wm.activate(b.id);
+    unblock();
+    await expect(pendingSpawn).rejects.toThrow(ConflictError);
+    await wm.closeAll();
+  });
+
+  it('fleshOutCast limits concurrency to 4, stops early on auth/rate-limit error, and tracks spend', async () => {
+    const { BrainRouter, RateLimitError } = await import('@aw/brain');
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let totalCalls = 0;
+    let failAfter = Number.POSITIVE_INFINITY;
+    const provider = {
+      id: 'anthropic' as const,
+      decide: async () => ({
+        decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 30 }] },
+      }),
+      generate: async () => {
+        totalCalls++;
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 15));
+        inFlight--;
+        if (totalCalls > failAfter) {
+          throw new RateLimitError('Too many requests', { status: 429 });
+        }
+        return {
+          output: {
+            name: 'X',
+            family_name: 'Y',
+            sex: 'female',
+            age: 30,
+            occupation: 'baker',
+            traits: 'Kind.',
+            background: 'Local.',
+          },
+          model: 'claude-test',
+          usage: { inputTokens: 50, outputTokens: 50, costUsd: 0.01, coveredByPlan: true },
+        };
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([provider]) });
+    const w = await wm.create({
+      name: 'Flesh',
+      seed: 'flesh',
+      mapSize: 'small',
+      cast: { mode: 'generated', adults: 8, children: 2, useAi: true },
+    });
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+    expect(w.spentUsd).toBeCloseTo(0.08, 6);
+    expect(w.planUsd).toBeCloseTo(0.08, 6);
+
+    // Rate-limit stops remaining adults early.
+    totalCalls = 0;
+    failAfter = 1;
+    await wm.create({
+      name: 'FleshStop',
+      seed: 'flesh2',
+      mapSize: 'small',
+      cast: { mode: 'generated', adults: 12, children: 0, useAi: true },
+    });
+    expect(totalCalls).toBeLessThan(12);
+    await wm.closeAll();
+  });
+});

@@ -49,7 +49,7 @@ import { calendarTick, seasonEffects } from './seasons.ts';
 import { NUTRITION, isFood } from './items.ts';
 import { MARKET_TARGET, allQuotes, driftMarket, quote } from './market.ts';
 import { findPathToAny, type CostFn } from './pathfinding.ts';
-import { crowd, occupantAt, occupies } from './occupancy.ts';
+import { crowd, invalidateOccupancy, occupantAt, occupies, syncOccupant } from './occupancy.ts';
 import { buildPerception, nameAsKnown } from './perception.ts';
 import {
   applyFeelings,
@@ -162,6 +162,7 @@ function isTwilight(tick: number): boolean {
 /** Advance the world by one tick. Mutates `state`. Pure apart from that: same inputs, same result. */
 export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
   state.tick += 1;
+  invalidateOccupancy(state);
   const ctx: Ctx = {
     state,
     rng: undefined as unknown as Rng,
@@ -205,7 +206,10 @@ export function step(state: WorldState, inputs: TickInput[] = []): StepResult {
       if (agent.speech && state.tick >= agent.speech.until) agent.speech = null;
       updateBody(ctx, agent);
       if (!agent.alive) continue;
-      if (agent.sickness) sicknessTick(ctx, agent);
+      if (agent.sickness) {
+        sicknessTick(ctx, agent);
+        if (!agent.alive) continue;
+      }
       lifeTick(ctx, agent, ageStep);
       if (!agent.alive) continue;
       memoryTick(ctx, agent);
@@ -272,7 +276,8 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       if (!agent?.alive) return;
       const trigger = agent.awaiting;
       agent.decisions += 1;
-      agent.spentUsd += Math.max(0, input.usage?.costUsd ?? 0);
+      const cost = input.usage?.costUsd;
+      if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) agent.spentUsd += cost;
       if (trigger?.kind === 'reflect') {
         // A night's reflection: the body keeps sleeping; only the mind changes.
         agent.awaiting = null;
@@ -346,7 +351,8 @@ function applyInput(ctx: Ctx, input: TickInput): void {
       if (input.applyToAll) for (const a of state.agents) if (a.alive) a.brain = { ...input.brain };
       return;
     case 'set_days_per_year':
-      state.settings.daysPerYear = Math.min(60, Math.max(1, input.value));
+      if (Number.isFinite(input.value))
+        state.settings.daysPerYear = Math.min(60, Math.max(1, input.value));
       return;
     case 'world_event':
       startWorldEvent(ctx, input.event);
@@ -367,13 +373,16 @@ function regrowResources(ctx: Ctx): void {
     (conditionLevel(state, 'bumper_harvest') > 0 ? 2 : 1);
   for (const id of ids) {
     const r = state.resources[id]!;
-    if (r.amount >= r.max) continue;
+    if (r.amount >= r.max) {
+      if (r.item === 'wood' || r.item === 'stone') delete state.resources[id];
+      continue;
+    }
     const before = Math.floor(r.amount);
-    const rate = r.item === 'wood' ? season.woodGrowth : growth;
+    const rate = r.item === 'stone' ? 1 : r.item === 'wood' ? season.woodGrowth : growth;
     r.amount = Math.min(r.max, r.amount + (r.regenPerDay * rate) / 24);
     if (Math.floor(r.amount) !== before) ctx.changed.add(id);
-    // Trees are tracked only while recovering from chopping, to keep the state small.
-    if (r.item === 'wood' && r.amount >= r.max) delete state.resources[id];
+    // Trees and rocks are tracked only while recovering, to keep the state small.
+    if ((r.item === 'wood' || r.item === 'stone') && r.amount >= r.max) delete state.resources[id];
   }
 }
 
@@ -463,10 +472,10 @@ function updateBody(ctx: Ctx, agent: Agent): void {
     // every couple of minutes.
     const slept = agent.action?.type === 'sleep' ? state.tick - agent.action.since : Infinity;
     const rested = hour >= 5 && hour < 21 && n.energy >= 90 && slept >= MIN_NAP;
-    const desperate = n.food < 8 || n.water < 8;
+    const desperate = !infant && (n.food < 8 || n.water < 8) && slept >= 30;
     if (rested || desperate) {
       // Hunger or thirst can drag even an exhausted person to their feet for a while.
-      if (desperate) n.energy = Math.max(n.energy, 12);
+      if (desperate && slept >= 15) n.energy = Math.max(n.energy, 12);
       wake(ctx, agent, true);
     }
   } else if (n.energy <= 0) {
@@ -497,6 +506,8 @@ function die(ctx: Ctx, agent: Agent, forcedCause?: string): void {
   agent.plan = [];
   agent.awaiting = null;
   agent.indoorsId = null;
+  if (ctx.state.leaderId === agent.id) ctx.state.leaderId = null;
+  syncOccupant(ctx.state, agent);
   emit(
     ctx,
     'died',
@@ -514,6 +525,7 @@ export function wake(ctx: Ctx, agent: Agent, requestDecision: boolean): void {
   agent.asleep = false;
   agent.indoorsId = null;
   agent.action = null;
+  syncOccupant(ctx.state, agent);
   // Fresh eyes on urgent needs after sleep, but keep "starving"/"crying" alerts until they recover.
   for (const k of ['food', 'water', 'energy', 'warmth']) delete agent.alerted[k];
   emit(ctx, 'woke_up', [agent.id], `${fullName(agent)} woke up.`, 1);
@@ -579,6 +591,14 @@ const SUCCESS_EVENTS = new Set([
   'stall',
   'job',
   'meeting',
+  'built',
+  'fed',
+  'taught',
+  'tended',
+  'partnered',
+  'adopted',
+  'treasury',
+  'rule_passed',
 ]);
 
 export function fail(ctx: Ctx, agent: Agent, reason: string): void {
@@ -614,7 +634,7 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       const next = action.path[action.step];
       if (!next) {
         agent.action = null;
-        if (action.then) startIntent(ctx, agent, action.then);
+        if (action.then) startIntent(ctx, agent, action.then, !('tries' in action.then));
         return;
       }
       if (!isWalkable(state.map, next.x, next.y)) return fail(ctx, agent, 'My way was blocked.');
@@ -625,11 +645,12 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       agent.facing = facingTo(agent, next);
       agent.x = next.x;
       agent.y = next.y;
+      syncOccupant(state, agent);
       ctx.moved.add(agent.id);
       action.step++;
       if (action.step >= action.path.length) {
         agent.action = null;
-        if (action.then) startIntent(ctx, agent, action.then);
+        if (action.then) startIntent(ctx, agent, action.then, !('tries' in action.then));
       }
       return;
     }
@@ -672,8 +693,8 @@ function progressAction(ctx: Ctx, agent: Agent): void {
       if (state.tick >= action.until) {
         agent.needs.water = 100;
         agent.action = null;
-        const well = state.map.objects.find(
-          (o) => o.kind === 'well' && isAt(agent, interactionTiles(state.map, o)),
+        const well = (mapCache(state.map).byKind.get('well') ?? []).find((o) =>
+          isAt(agent, interactionTiles(state.map, o)),
         );
         emit(
           ctx,
@@ -741,6 +762,7 @@ function passBy(ctx: Ctx, agent: Agent, action: WalkAction, other: Agent): boole
   const from = { x: other.x, y: other.y };
   other.x = agent.x;
   other.y = agent.y;
+  syncOccupant(ctx.state, other);
   if (oa) {
     oa.path.splice(oa.step, 0, from);
     other.facing = facingTo(other, from);
@@ -787,6 +809,7 @@ function moveLine(ctx: Ctx, agent: Agent): boolean {
     p.facing = facingTo(p, t);
     p.x = t.x;
     p.y = t.y;
+    syncOccupant(state, p);
     pa.step++;
     pa.blocked = 0;
     ctx.moved.add(p.id);
@@ -821,6 +844,7 @@ function stepAside(ctx: Ctx, other: Agent, action: WalkAction): boolean {
     other.facing = facingTo(other, { x, y });
     other.x = x;
     other.y = y;
+    syncOccupant(state, other);
     ctx.moved.add(other.id);
     return true;
   }
@@ -917,6 +941,7 @@ function separatePeople(ctx: Ctx): void {
     if (!free) continue;
     agent.x = free.x;
     agent.y = free.y;
+    syncOccupant(state, agent);
     const j = free.y * w + free.x;
     taken.add(j);
     claimed.add(j);
@@ -977,8 +1002,10 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
   const { map } = state;
   const cache = mapCache(map);
   // Stepping out: anything but resting or sleeping takes a person back outside.
-  if (agent.indoorsId && intent.type !== 'rest' && intent.type !== 'sleep' && agent.age >= 1)
+  if (agent.indoorsId && intent.type !== 'rest' && intent.type !== 'sleep' && agent.age >= 1) {
     agent.indoorsId = null;
+    syncOccupant(state, agent);
+  }
   switch (intent.type) {
     case 'go_to': {
       if ('objectId' in intent.target) {
@@ -986,10 +1013,25 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
         if (!o) return fail(ctx, agent, `I tried to go somewhere that doesn't exist.`);
         walkTo(ctx, agent, interactionTiles(map, o), null, objName(state, o.id), o.id);
       } else {
-        const { x, y } = intent.target;
+        const x = Math.round(intent.target.x);
+        const y = Math.round(intent.target.y);
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          x < 0 ||
+          y < 0 ||
+          x >= map.width ||
+          y >= map.height
+        ) {
+          return fail(
+            ctx,
+            agent,
+            `I couldn't find a way to (${intent.target.x}, ${intent.target.y}).`,
+          );
+        }
         const goal = isWalkable(map, x, y)
           ? { x, y }
-          : nearestWalkable(map, { x, y }, (p) => isWalkable(map, p.x, p.y), 6);
+          : nearestWalkable(map, { x, y }, () => true, 6);
         if (!goal) return fail(ctx, agent, `I couldn't find a way to (${x}, ${y}).`);
         walkTo(ctx, agent, [goal], null, `(${x}, ${y})`);
       }
@@ -1005,6 +1047,7 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
         walkTo(ctx, agent, tiles, intent, objName(state, o.id), o.id);
         return;
       }
+      if (!isAt(agent, tiles)) return fail(ctx, agent, `I couldn't reach ${objName(state, o.id)}.`);
       if (o.kind !== 'dock') {
         const r = state.resources[o.id];
         if (!r || r.amount < 1) {
@@ -1071,10 +1114,14 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
       agent.asleep = true;
       agent.plan = [];
       agent.action = { type: 'sleep', since: state.tick };
-      agent.indoorsId =
-        home?.door && home.door.x === agent.x && home.door.y === agent.y && usable(state, home.id)
-          ? home.id
-          : null;
+      if (home?.door && cheb(agent, home.door) <= 1 && usable(state, home.id)) {
+        agent.x = home.door.x;
+        agent.y = home.door.y;
+        agent.indoorsId = home.id;
+      } else {
+        agent.indoorsId = null;
+      }
+      syncOccupant(state, agent);
       const where = agent.indoorsId ? 'at home' : 'outside';
       emit(ctx, 'fell_asleep', [agent.id], `${fullName(agent)} fell asleep ${where}.`, 1);
       remember(agent, state.tick, `I went to sleep ${where}.`);
@@ -1092,8 +1139,10 @@ function startIntent(ctx: Ctx, agent: Agent, intent: Intent, arrived = false): v
         home.door.x === agent.x &&
         home.door.y === agent.y &&
         usable(state, home.id)
-      )
+      ) {
         agent.indoorsId = home.id;
+        syncOccupant(state, agent);
+      }
       return;
     }
     case 'talk_to': {
@@ -1351,7 +1400,7 @@ export function nearestKnown(state: WorldState, agent: Agent, kinds: string[]): 
     const o = cache.byId.get(id);
     if (!o || !kinds.includes(o.kind)) continue;
     const d = distanceToObject(o, agent);
-    if (d < bestD) {
+    if (d < bestD || (d === bestD && best !== null && id < best)) {
       bestD = d;
       best = id;
     }
@@ -1399,6 +1448,7 @@ export function approach(
     }
     if (cheb(agent, building.door) <= Math.max(1, range)) {
       other.indoorsId = null;
+      syncOccupant(ctx.state, other);
       remember(
         other,
         ctx.state.tick,
@@ -1409,6 +1459,10 @@ export function approach(
       );
       return true;
     }
+  }
+  if (agent.age < 1) {
+    fail(ctx, agent, `I'm too little to go over to ${who}.`);
+    return false;
   }
   if (dist > 60) {
     fail(ctx, agent, `${who} is too far away to reach.`);
@@ -1505,6 +1559,7 @@ function startChop(ctx: Ctx, agent: Agent, objectId: string | undefined, arrived
     walkTo(ctx, agent, tiles, { type: 'chop_wood', objectId: tree.id }, 'a tree');
     return;
   }
+  if (!isAt(agent, tiles)) return fail(ctx, agent, "I couldn't reach that tree.");
   agent.facing = facingTo(agent, tree);
   agent.action = { type: 'chop', objectId: tree.id, until: state.tick + 30 };
 }
@@ -1524,8 +1579,10 @@ function finishChop(ctx: Ctx, agent: Agent, treeId: string): void {
   const got = Math.min(2 + (tools ? 1 : 0), Math.floor(r.amount));
   if (got <= 0) return fail(ctx, agent, 'That tree had no more wood worth taking.');
   r.amount -= got;
+  ctx.changed.add(treeId);
   agent.inventory.wood = (agent.inventory.wood ?? 0) + got;
   train(agent, 'building', 0.1);
+  observeWork(state, agent, 'building');
   emit(ctx, 'gathered', [agent.id], `${fullName(agent)} chopped ${got} wood.`, 1, [treeId]);
   remember(agent, state.tick, `I chopped ${got} wood.`);
 }
@@ -1540,13 +1597,14 @@ function startCraft(
   const { map } = state;
   const recipe = RECIPES[intent.recipe];
   if (!recipe) return fail(ctx, agent, "I don't know how to make that.");
-  const workplaces = map.objects.filter((o) => o.kind === recipe.place && usable(state, o.id));
+  const ofKind = mapCache(map).byKind.get(recipe.place) ?? [];
+  const workplaces = ofKind.filter((o) => usable(state, o.id));
   const here = workplaces.find((o) => isAt(agent, interactionTiles(map, o)));
   if (!here) {
     if (arrived) return fail(ctx, agent, `I couldn't get into the ${recipe.place}.`);
     const known = workplaces.filter((o) => agent.knowledge[o.id]);
     if (known.length === 0) {
-      const ruined = map.objects.some((o) => o.kind === recipe.place && !usable(state, o.id));
+      const ruined = ofKind.some((o) => !usable(state, o.id));
       return fail(
         ctx,
         agent,
@@ -1606,8 +1664,8 @@ function finishCraft(ctx: Ctx, agent: Agent, name: keyof typeof RECIPES): void {
   train(agent, recipe.skill, 0.5);
   observeWork(state, agent, recipe.skill);
   const where = recipe.place === 'bakery' ? 'the bakery' : 'the workshop';
-  const place = state.map.objects.find(
-    (o) => o.kind === recipe.place && isAt(agent, interactionTiles(state.map, o)),
+  const place = (mapCache(state.map).byKind.get(recipe.place) ?? []).find((o) =>
+    isAt(agent, interactionTiles(state.map, o)),
   );
   emit(
     ctx,
@@ -1627,7 +1685,7 @@ function marketTrade(
   arrived: boolean,
 ): void {
   const { state } = ctx;
-  const market = state.map.objects.find((o) => o.kind === 'market');
+  const market = mapCache(state.map).byKind.get('market')?.[0];
   if (!market) return fail(ctx, agent, 'There is no market here.');
   const tiles = interactionTiles(state.map, market);
   if (!isAt(agent, tiles) && cheb(agent, { x: market.x + 1, y: market.y }) > 2) {
@@ -1639,61 +1697,67 @@ function marketTrade(
   seePrices(state, agent);
   const item = intent.item;
   const label = ITEM_LABELS[item].toLowerCase();
-  const q = quote(state.market, item);
   const wanted = Math.max(1, Math.floor(intent.quantity));
   if (intent.type === 'buy') {
-    const stock = state.market.stock[item] ?? 0;
-    const qty = Math.min(wanted, stock, Math.floor(agent.money / q.buy));
-    if (qty <= 0) {
+    const startStock = state.market.stock[item] ?? 0;
+    if (startStock <= 0) return fail(ctx, agent, `The market had no ${label}.`);
+    const firstPrice = quote(state.market, item).buy;
+    if (agent.money < firstPrice) {
       return fail(
         ctx,
         agent,
-        stock <= 0
-          ? `The market had no ${label}.`
-          : `I couldn't afford ${label} (${q.buy} coins each; I have ${agent.money}).`,
+        `I couldn't afford ${label} (${firstPrice} coins each; I have ${agent.money}).`,
       );
     }
-    agent.money -= qty * q.buy;
-    state.market.stock[item] = stock - qty;
+    let qty = 0;
+    let total = 0;
+    while (qty < wanted && (state.market.stock[item] ?? 0) > 0) {
+      const unit = quote(state.market, item).buy;
+      if (agent.money < unit) break;
+      agent.money -= unit;
+      state.market.stock[item] = (state.market.stock[item] ?? 0) - 1;
+      total += unit;
+      qty += 1;
+    }
     agent.inventory[item] = (agent.inventory[item] ?? 0) + qty;
+    seePrices(state, agent);
     emit(
       ctx,
       'traded',
       [agent.id],
-      `${fullName(agent)} bought ${qty} ${label} at the market for ${qty * q.buy} coins.`,
+      `${fullName(agent)} bought ${qty} ${label} at the market for ${total} coins.`,
       2,
       [market.id],
     );
-    remember(
-      agent,
-      state.tick,
-      `I bought ${qty} ${label} at the market for ${qty * q.buy} coins (${q.buy} each).`,
-      2,
-    );
+    remember(agent, state.tick, `I bought ${qty} ${label} at the market for ${total} coins.`, 2);
   } else {
-    const room = Math.max(0, MARKET_TARGET[item] * 3 - (state.market.stock[item] ?? 0));
-    const qty = Math.min(wanted, agent.inventory[item] ?? 0, room);
-    if ((agent.inventory[item] ?? 0) <= 0) return fail(ctx, agent, `I had no ${label} to sell.`);
-    if (qty <= 0)
+    const have = agent.inventory[item] ?? 0;
+    if (have <= 0) return fail(ctx, agent, `I had no ${label} to sell.`);
+    const cap = MARKET_TARGET[item] * 3;
+    if ((state.market.stock[item] ?? 0) >= cap)
       return fail(ctx, agent, `The market won't take any more ${label} — it's overflowing.`);
-    agent.inventory[item]! -= qty;
+    let qty = 0;
+    let total = 0;
+    const limit = Math.min(wanted, have);
+    while (qty < limit && (state.market.stock[item] ?? 0) < cap) {
+      const unit = quote(state.market, item).sell;
+      state.market.stock[item] = (state.market.stock[item] ?? 0) + 1;
+      agent.money += unit;
+      total += unit;
+      qty += 1;
+    }
+    agent.inventory[item] = have - qty;
     if (!agent.inventory[item]) delete agent.inventory[item];
-    agent.money += qty * q.sell;
-    state.market.stock[item] = (state.market.stock[item] ?? 0) + qty;
+    seePrices(state, agent);
     emit(
       ctx,
       'traded',
       [agent.id],
-      `${fullName(agent)} sold ${qty} ${label} at the market for ${qty * q.sell} coins.`,
+      `${fullName(agent)} sold ${qty} ${label} at the market for ${total} coins.`,
       2,
       [market.id],
     );
-    remember(
-      agent,
-      state.tick,
-      `I sold ${qty} ${label} at the market for ${qty * q.sell} coins (${q.sell} each).`,
-      2,
-    );
+    remember(agent, state.tick, `I sold ${qty} ${label} at the market for ${total} coins.`, 2);
   }
   agent.action = { type: 'rest', until: state.tick + 5 };
 }
@@ -1717,7 +1781,11 @@ function personAction(
   if (intent.type === 'respond_offer') {
     const offer = state.offers.find((o) => o.id === intent.offerId && o.to === agent.id);
     if (!offer) return fail(ctx, agent, 'That offer is no longer open.');
-    const from = findAgent(state, offer.from)!;
+    const from = findAgent(state, offer.from);
+    if (!from?.alive) {
+      state.offers = state.offers.filter((o) => o !== offer);
+      return fail(ctx, agent, 'That offer is no longer open.');
+    }
     const who = nameAsKnown(agent, from);
     const terms = `${describeBundle(offer.give)} for ${describeBundle(offer.ask)}`;
     const answer = (accepted: boolean) => {

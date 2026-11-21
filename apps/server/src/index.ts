@@ -4,14 +4,16 @@ import { buildApp } from './app.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const { server } = await buildApp(config, {
+  const { server, worlds } = await buildApp(config, {
     logger: { level: 'warn' },
     log: (msg) => console.log(`  ${msg}`),
+    autoStart: false,
   });
 
   try {
     await server.listen({ host: config.host, port: config.port });
   } catch (err) {
+    await server.close().catch(() => {});
     if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
       console.error(
         `\nPort ${config.port} is already in use. Agents World may already be running — ` +
@@ -21,6 +23,8 @@ async function main(): Promise<void> {
     }
     throw err;
   }
+
+  worlds.start();
 
   const url = config.dev ? `http://localhost:${DEV_WEB_PORT}` : `http://127.0.0.1:${config.port}`;
   console.log(`\n  Agents World is running at ${url}`);
@@ -32,11 +36,29 @@ async function main(): Promise<void> {
 
   let stopping = false;
   const stop = async (signal: string) => {
-    if (stopping) return;
+    if (stopping) {
+      if (signal === 'SIGINT') {
+        console.error('\n  Second SIGINT received — forcing exit.');
+        process.exit(130);
+      }
+      return;
+    }
     stopping = true;
     console.log(`\n  ${signal} received — saving and shutting down…`);
-    await server.close();
-    process.exit(0);
+    const forceTimer = setTimeout(() => {
+      console.error('  Shutdown timed out after 10s — forcing exit.');
+      process.exit(1);
+    }, 10_000);
+    forceTimer.unref();
+    try {
+      await server.close();
+      clearTimeout(forceTimer);
+      process.exit(0);
+    } catch (err) {
+      clearTimeout(forceTimer);
+      console.error('  Error during shutdown:', err);
+      process.exit(1);
+    }
   };
   process.on('SIGINT', () => void stop('SIGINT'));
   process.on('SIGTERM', () => void stop('SIGTERM'));

@@ -47,15 +47,19 @@ export function registerSettingsRoutes(
 
   /** Lists the provider's models — also serves as a connection test. */
   app.get<{ Params: { id: string } }>('/api/providers/:id/models', async (req, reply) => {
+    if (!PROVIDERS.has(req.params.id)) throw new NotFoundError('Unknown provider');
     const provider = brains.get(req.params.id as 'anthropic');
     if (!provider?.listModels)
       return reply.code(400).send({ error: 'This provider is not set up yet.' });
     try {
       return { models: await provider.listModels() };
     } catch (err) {
-      return reply
-        .code(502)
-        .send({ error: `Couldn't reach the provider: ${(err as Error).message}` });
+      const detail = (((err as Error)?.message ?? String(err)) || 'Unknown error')
+        // eslint-disable-next-line no-control-regex -- strip control characters from error text
+        .replace(/[\r\n\t\x00-\x1f\x7f]+/g, ' ')
+        .trim()
+        .slice(0, 300);
+      return reply.code(502).send({ error: `Couldn't reach the provider: ${detail}` });
     }
   });
 }

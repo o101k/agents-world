@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FamilyNode } from '@aw/shared';
 import { api } from '../api.ts';
+import { useDialog } from './useDialog.ts';
 
 /** Grandparents → parents → the person (and partner) → children → grandchildren. */
 export function FamilyTree({
@@ -14,13 +15,22 @@ export function FamilyTree({
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [tree, setTree] = useState<FamilyNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useDialog(dialogRef, onClose);
+
   useEffect(() => {
+    const ac = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets/loading state when the fetch key changes
+    setTree(null);
+    setError(null);
     api
-      .familyTree(worldId, agentId)
-      .then(setTree)
-      .catch((e: Error) => setError(e.message));
+      .familyTree(worldId, agentId, ac.signal)
+      .then((t) => !ac.signal.aborted && setTree(t))
+      .catch((e: Error) => !ac.signal.aborted && setError(e.message));
+    return () => ac.abort();
   }, [worldId, agentId]);
 
   const person = (
@@ -29,6 +39,7 @@ export function FamilyTree({
   ) =>
     n ? (
       <button
+        type="button"
         key={n.id}
         className={`tree-person ${n.alive ? '' : 'is-dead'} ${cls}`}
         onClick={() => onPick(n.id)}
@@ -49,6 +60,8 @@ export function FamilyTree({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel family-tree"
         role="dialog"
         aria-modal="true"
@@ -57,11 +70,16 @@ export function FamilyTree({
       >
         <div className="modal-head">
           <h2 id="tree-title">Family tree{tree ? ` — ${tree.name}` : ''}</h2>
-          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn btn-ghost" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
-        {error && <p className="warn">{error}</p>}
+        {error && (
+          <p className="warn" role="alert">
+            {error}
+          </p>
+        )}
+        {!tree && !error && <p className="muted">Loading family tree…</p>}
         {tree && (
           <div className="tree">
             {grandparents.some(Boolean) && (

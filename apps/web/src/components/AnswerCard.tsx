@@ -81,16 +81,21 @@ export function PendingAnswer({
   }, []);
   const seconds = Math.floor((now - startedAt) / 1000);
   return (
-    <div className="ask-card ask-pending" role="status">
+    <div className="ask-card ask-pending">
       <div className="ask-q">{question.trim() || `What did ${firstName} do?`}</div>
       <div className="ask-reading">
-        Reading {her} record
+        <span role="status">Reading {her} record</span>
         <span className="ask-dots" aria-hidden="true">
           <span>.</span>
           <span>.</span>
           <span>.</span>
         </span>
-        {seconds >= 3 && <span className="muted small"> {seconds}s</span>}
+        {seconds >= 3 && (
+          <span className="muted small" aria-hidden="true">
+            {' '}
+            {seconds}s
+          </span>
+        )}
       </div>
     </div>
   );
@@ -123,7 +128,13 @@ export function AnswerCard({
 
   useEffect(() => {
     const el = answerRef.current;
-    if (clamp && el) setOverflows(el.scrollHeight > el.clientHeight + 1);
+    if (!clamp || !el) return;
+    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [clamp, interview.answer]);
 
   const question =

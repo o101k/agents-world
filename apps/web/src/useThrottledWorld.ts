@@ -12,23 +12,25 @@ type WorldState = ReturnType<typeof useWorld.getState>;
  */
 export function useThrottledWorld<T>(select: (s: WorldState) => T, ms = 250): T {
   const [value, setValue] = useState(() => select(useWorld.getState()));
+  const renderedRef = useRef(value);
   // Callers pass inline selectors, so the latest one is kept in a ref instead of as a dependency.
   const selectRef = useRef(select);
   useEffect(() => {
     selectRef.current = select;
+    renderedRef.current = value;
   });
   useEffect(() => {
     const current = () => selectRef.current(useWorld.getState());
     let last = current();
-    const throttle = createThrottle(() => setValue(current()), ms);
+    const throttle = createThrottle(() => setValue(() => current()), ms);
     const unsubscribe = useWorld.subscribe((state) => {
       const next = selectRef.current(state);
       if (Object.is(next, last)) return;
       last = next;
       throttle.trigger();
     });
-    // The store may have changed between render and subscribe: a leading run sets the state now.
-    throttle.trigger();
+    // Only trigger if the store actually changed between initial render and subscribe.
+    if (!Object.is(last, renderedRef.current)) throttle.trigger();
     return () => {
       unsubscribe();
       throttle.cancel();

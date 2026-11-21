@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { accessSync, chmodSync, constants, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { BrainConfig, DecisionRequest, EffortLevel, ModelPrice } from '@aw/shared';
@@ -69,8 +69,13 @@ export function agyPlanEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 /** Finds the `agy` command: on PATH, then common install locations. Null if not installed. */
 export function findAgyCli(env: NodeJS.ProcessEnv): string | null {
   const dirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
-  if (env.HOME) {
-    dirs.push(join(env.HOME, '.local', 'bin'));
+  const homes = [env.HOME, env.USERPROFILE].filter(
+    (h, i, arr): h is string => Boolean(h) && arr.indexOf(h) === i,
+  );
+  for (const home of homes) {
+    dirs.push(join(home, '.local', 'bin'));
+  }
+  if (process.platform !== 'win32') {
     dirs.push('/opt/homebrew/bin', '/usr/local/bin');
   }
   const names = process.platform === 'win32' ? ['agy.exe', 'agy.cmd'] : ['agy'];
@@ -78,6 +83,7 @@ export function findAgyCli(env: NodeJS.ProcessEnv): string | null {
     for (const name of names) {
       const path = join(dir, name);
       try {
+        if (!statSync(path).isFile()) continue;
         accessSync(path, constants.X_OK);
         return path;
       } catch {
@@ -93,6 +99,9 @@ interface RunResult {
   stdout: string;
   stderr: string;
 }
+
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const SIGKILL_DELAY_MS = 3_000;
 
 function run(
   command: string,
@@ -113,19 +122,77 @@ function run(
     });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (d: string) => (stdout += d));
-    child.stderr.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-    const kill = () => child.kill('SIGTERM');
-    const timer = setTimeout(kill, opts.timeoutMs);
-    opts.signal?.addEventListener('abort', kill, { once: true });
-    child.on('error', (err) => {
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let killing = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const terminate = () => {
+      if (killing) return;
+      killing = true;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // already exited
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // already exited
+        }
+      }, SIGKILL_DELAY_MS);
+      killTimer.unref?.();
+    };
+
+    const cleanup = (includeKillTimer: boolean) => {
       clearTimeout(timer);
-      reject(err);
+      if (includeKillTimer) clearTimeout(killTimer);
+      opts.signal?.removeEventListener('abort', terminate);
+    };
+
+    const timer = setTimeout(terminate, opts.timeoutMs);
+    opts.signal?.addEventListener('abort', terminate, { once: true });
+
+    child.stdout.setEncoding('utf8').on('data', (d: string) => {
+      if (settled) return;
+      stdoutBytes += Buffer.byteLength(d, 'utf8');
+      if (stdoutBytes > MAX_OUTPUT_BYTES) {
+        settled = true;
+        cleanup(false);
+        terminate();
+        reject(new Error('Antigravity CLI stdout exceeded 4 MiB limit'));
+        return;
+      }
+      stdout += d;
+    });
+    child.stderr.setEncoding('utf8').on('data', (d: string) => {
+      if (settled) return;
+      stderrBytes += Buffer.byteLength(d, 'utf8');
+      if (stderrBytes > MAX_OUTPUT_BYTES) {
+        settled = true;
+        cleanup(false);
+        terminate();
+        reject(new Error('Antigravity CLI stderr exceeded 4 MiB limit'));
+        return;
+      }
+      stderr += d;
+    });
+
+    child.on('error', (err) => {
+      cleanup(true);
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', kill);
-      resolve({ code, stdout, stderr });
+      cleanup(true);
+      if (!settled) {
+        settled = true;
+        resolve({ code, stdout, stderr });
+      }
     });
   });
 }
@@ -201,11 +268,15 @@ export async function checkAgyCli(
   }
 }
 
-/** An empty folder to run the CLI in, so it never picks up a project's AGENTS/CLAUDE instructions. */
+let cachedWorkDir: string | undefined;
+
+/** An empty private folder to run the CLI in, so it never picks up a project's AGENTS/CLAUDE instructions. */
 function workDir(): string {
-  const dir = join(tmpdir(), 'agents-world-agy');
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  if (!cachedWorkDir) {
+    cachedWorkDir = mkdtempSync(join(tmpdir(), 'agents-world-agy-'));
+    chmodSync(cachedWorkDir, 0o700);
+  }
+  return cachedWorkDir;
 }
 
 const LIMIT_RE =
@@ -286,17 +357,29 @@ export class AgyPlanProvider implements BrainProvider {
     } catch {
       out = extractJson(res.stdout) as AgyCliResult | null;
     }
-    const text = (out?.error || out?.response || `${res.stdout}\n${res.stderr}`).trim();
+    const errorText = typeof out?.error === 'string' && out.error.trim() ? out.error.trim() : '';
+    const responseText =
+      typeof out?.response === 'string' && out.response.trim() ? out.response.trim() : '';
+    const stderrText = res.stderr.trim();
+    const text = (
+      errorText ||
+      responseText ||
+      (out ? stderrText : `${res.stdout}\n${res.stderr}`.trim())
+    ).trim();
     if (!out || out.status === 'ERROR' || out.finished_reason === 'error' || res.code !== 0) {
-      if (LIMIT_RE.test(text))
-        throw new RateLimitError(text.slice(0, 300), {
-          resetsAt: parseResetTime(text),
-          status: /\b429\b/.test(text) ? 429 : undefined,
-          limit: /weekly/i.test(text) ? 'weekly plan limit' : 'plan usage limit',
+      const combined = [errorText, responseText, stderrText, !out ? res.stdout.trim() : '']
+        .filter(Boolean)
+        .join('\n');
+      const limitText = LIMIT_RE.test(text) ? text : combined;
+      if (LIMIT_RE.test(limitText))
+        throw new RateLimitError((limitText || text).slice(0, 300), {
+          resetsAt: parseResetTime(limitText || text),
+          status: /\b429\b/.test(limitText || text) ? 429 : undefined,
+          limit: /weekly/i.test(limitText || text) ? 'weekly plan limit' : 'plan usage limit',
         });
-      if (/unknown flag|flag provided but not defined|unrecognized/i.test(text))
+      if (/unknown flag|flag provided but not defined|unrecognized/i.test(combined || text))
         throw new Error(
-          `Antigravity CLI is too old for Agents World; run \`agy update\`. (${text.slice(0, 200)})`,
+          `Antigravity CLI is too old for Agents World; run \`agy update\`. (${(text || combined).slice(0, 200)})`,
         );
       if (out && (out.usage?.total_tokens ?? 0) > 0)
         throw new NoDecisionError(

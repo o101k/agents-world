@@ -1,4 +1,4 @@
-import { Container, Sprite, Texture } from 'pixi.js';
+import { CanvasSource, Container, Sprite, Texture } from 'pixi.js';
 import type { WorldMap } from '@aw/shared';
 import { TILE_PX, type AtlasFrame, type SpriteName } from './pixelArt.ts';
 import { PixelBuffer } from './pixelBuffer.ts';
@@ -53,10 +53,7 @@ export class GroundLayer {
   /** The last view, applied to chunks as they are built. */
   private view: ViewRect | null = null;
 
-  constructor(
-    readonly atlas: Atlas,
-    _textures: Record<SpriteName, Texture>,
-  ) {}
+  constructor(readonly atlas: Atlas) {}
 
   /**
    * Draws the ground of `map`, replacing whatever was drawn before. Only the chunks that changed
@@ -97,7 +94,7 @@ export class GroundLayer {
       if (!ctx) throw new Error('Canvas 2D is not available');
       const pixels = new PixelBuffer(canvas.width, canvas.height);
       const image = new ImageData(pixels.data, pixels.width, pixels.height);
-      const sprite = new Sprite(Texture.from(canvas));
+      const sprite = new Sprite(new Texture({ source: new CanvasSource({ resource: canvas }) }));
       const x0 = r.x0 * TILE_PX;
       const y0 = r.y0 * TILE_PX;
       sprite.position.set(x0, y0);

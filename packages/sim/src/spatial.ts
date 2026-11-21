@@ -1,14 +1,15 @@
-import { Tile, type MapObject, type Point, type WorldMap } from '@aw/shared';
+import { Tile, type MapObject, type MapObjectKind, type Point, type WorldMap } from '@aw/shared';
 import { buildWalkability } from './walkability.ts';
 
 /**
  * Derived, cached lookups over a map. Never serialized; rebuilt on demand.
  * Call invalidateMapCaches(map) whenever tiles or objects change.
  */
-interface MapCache {
+export interface MapCache {
   walk: Uint8Array;
   byId: Map<string, MapObject>;
-  /** Non-tree objects bucketed by 8×8 cell for fast "what's near me" queries. */
+  byKind: Map<MapObjectKind, MapObject[]>;
+  /** Non-tree/non-rock objects bucketed by every 8×8 cell their footprint overlaps. */
   cells: Map<number, MapObject[]>;
   /** Trees, bucketed the same way (there are thousands on a big map). */
   treeCells: Map<number, MapObject[]>;
@@ -17,22 +18,65 @@ interface MapCache {
 const CELL = 8;
 const caches = new WeakMap<WorldMap, MapCache>();
 
+const DIRS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+] as const;
+
+let bfsSeen = new Uint32Array(0);
+let bfsGen = 0;
+
+function acquireBfsSeen(n: number): { seen: Uint32Array; gen: number } {
+  if (bfsSeen.length < n) {
+    bfsSeen = new Uint32Array(n);
+    bfsGen = 0;
+  }
+  bfsGen += 1;
+  if (bfsGen > 0xfffffffe) {
+    bfsSeen.fill(0);
+    bfsGen = 1;
+  }
+  return { seen: bfsSeen, gen: bfsGen };
+}
+
 export function mapCache(map: WorldMap): MapCache {
   let c = caches.get(map);
   if (!c) {
-    const byId = new Map(map.objects.map((o) => [o.id, o]));
+    const byId = new Map<string, MapObject>();
+    const byKind = new Map<MapObjectKind, MapObject[]>();
     const cells = new Map<number, MapObject[]>();
     const treeCells = new Map<number, MapObject[]>();
     const cols = Math.ceil(map.width / CELL);
+    const rows = Math.ceil(map.height / CELL);
     for (const o of map.objects) {
+      byId.set(o.id, o);
+      const kindList = byKind.get(o.kind);
+      if (kindList) kindList.push(o);
+      else byKind.set(o.kind, [o]);
       if (o.kind === 'rock') continue;
-      const grid = o.kind === 'tree' ? treeCells : cells;
-      const key = Math.floor(o.y / CELL) * cols + Math.floor(o.x / CELL);
-      const list = grid.get(key);
-      if (list) list.push(o);
-      else grid.set(key, [o]);
+      if (o.kind === 'tree') {
+        const key = Math.floor(o.y / CELL) * cols + Math.floor(o.x / CELL);
+        const list = treeCells.get(key);
+        if (list) list.push(o);
+        else treeCells.set(key, [o]);
+        continue;
+      }
+      const c0 = Math.max(0, Math.floor(o.x / CELL));
+      const c1 = Math.min(cols - 1, Math.floor((o.x + Math.max(1, o.w) - 1) / CELL));
+      const r0 = Math.max(0, Math.floor(o.y / CELL));
+      const r1 = Math.min(rows - 1, Math.floor((o.y + Math.max(1, o.h) - 1) / CELL));
+      for (let r = r0; r <= r1; r++) {
+        for (let col = c0; col <= c1; col++) {
+          const key = r * cols + col;
+          const list = cells.get(key);
+          if (list) list.push(o);
+          else cells.set(key, [o]);
+        }
+      }
     }
-    c = { walk: buildWalkability(map), byId, cells, treeCells };
+    c = { walk: buildWalkability(map), byId, byKind, cells, treeCells };
     caches.set(map, c);
   }
   return c;
@@ -63,15 +107,20 @@ export function moveCost(map: WorldMap): (x: number, y: number) => number {
 export function objectsNear(map: WorldMap, p: Point, radius: number): MapObject[] {
   const { cells } = mapCache(map);
   const cols = Math.ceil(map.width / CELL);
+  const rows = Math.ceil(map.height / CELL);
   const out: MapObject[] = [];
-  const c0 = Math.floor((p.x - radius - 4) / CELL);
-  const c1 = Math.floor((p.x + radius) / CELL);
-  const r0 = Math.floor((p.y - radius - 4) / CELL);
-  const r1 = Math.floor((p.y + radius) / CELL);
-  for (let r = Math.max(0, r0); r <= r1; r++) {
-    for (let c = Math.max(0, c0); c <= Math.min(cols - 1, c1); c++) {
+  const seen = new Set<MapObject>();
+  const c0 = Math.max(0, Math.floor((p.x - radius) / CELL));
+  const c1 = Math.min(cols - 1, Math.floor((p.x + radius) / CELL));
+  const r0 = Math.max(0, Math.floor((p.y - radius) / CELL));
+  const r1 = Math.min(rows - 1, Math.floor((p.y + radius) / CELL));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
       for (const o of cells.get(r * cols + c) ?? []) {
-        if (distanceToObject(o, p) <= radius) out.push(o);
+        if (!seen.has(o) && distanceToObject(o, p) <= radius) {
+          seen.add(o);
+          out.push(o);
+        }
       }
     }
   }
@@ -82,17 +131,14 @@ export function objectsNear(map: WorldMap, p: Point, radius: number): MapObject[
 export function treesNear(map: WorldMap, p: Point, radius: number): MapObject[] {
   const { treeCells } = mapCache(map);
   const cols = Math.ceil(map.width / CELL);
+  const rows = Math.ceil(map.height / CELL);
   const out: MapObject[] = [];
-  for (
-    let r = Math.max(0, Math.floor((p.y - radius) / CELL));
-    r <= Math.floor((p.y + radius) / CELL);
-    r++
-  ) {
-    for (
-      let c = Math.max(0, Math.floor((p.x - radius) / CELL));
-      c <= Math.min(cols - 1, Math.floor((p.x + radius) / CELL));
-      c++
-    ) {
+  const r0 = Math.max(0, Math.floor((p.y - radius) / CELL));
+  const r1 = Math.min(rows - 1, Math.floor((p.y + radius) / CELL));
+  const c0 = Math.max(0, Math.floor((p.x - radius) / CELL));
+  const c1 = Math.min(cols - 1, Math.floor((p.x + radius) / CELL));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
       for (const o of treeCells.get(r * cols + c) ?? []) {
         if (Math.abs(o.x - p.x) <= radius && Math.abs(o.y - p.y) <= radius) out.push(o);
       }
@@ -134,12 +180,7 @@ export function isAt(p: Point, tiles: Point[]): boolean {
 /** Can someone standing here drink (next to the river or at the well)? */
 export function isDrinkSpot(map: WorldMap, p: Point): boolean {
   if (!isWalkable(map, p.x, p.y)) return false;
-  for (const [dx, dy] of [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ] as const) {
+  for (const [dx, dy] of DIRS) {
     const x = p.x + dx;
     const y = p.y + dy;
     if (x < 0 || y < 0 || x >= map.width || y >= map.height) continue;
@@ -156,25 +197,35 @@ export function nearestWalkable(
   maxDist = 80,
 ): Point | null {
   const { width, height } = map;
-  const seen = new Uint8Array(width * height);
+  if (
+    !Number.isInteger(start.x) ||
+    !Number.isInteger(start.y) ||
+    start.x < 0 ||
+    start.y < 0 ||
+    start.x >= width ||
+    start.y >= height
+  ) {
+    return null;
+  }
+  const { walk } = mapCache(map);
+  const { seen, gen } = acquireBfsSeen(width * height);
   let frontier: Point[] = [start];
-  seen[start.y * width + start.x] = 1;
+  seen[start.y * width + start.x] = gen;
   for (let d = 0; d <= maxDist && frontier.length; d++) {
     const next: Point[] = [];
     for (const p of frontier) {
-      if (test(p)) return p;
-      for (const [dx, dy] of [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-      ] as const) {
+      const curWalkable = walk[p.y * width + p.x] === 1;
+      if (curWalkable && test(p)) return p;
+      for (const [dx, dy] of DIRS) {
         const x = p.x + dx;
         const y = p.y + dy;
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
         const i = y * width + x;
-        if (seen[i] || !isWalkable(map, x, y)) continue;
-        seen[i] = 1;
+        if (seen[i] === gen) continue;
+        // Once on walkable ground only step to walkable tiles; from an unwalkable start allow
+        // stepping out of multi-tile obstacles until walkable ground is reached.
+        if (curWalkable && walk[i] !== 1) continue;
+        seen[i] = gen;
         next.push({ x, y });
       }
     }

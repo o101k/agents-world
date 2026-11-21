@@ -230,7 +230,8 @@ describe('one person per tile outdoors', () => {
     rester.x = 12;
     rester.y = 10;
     const plans: Record<string, Intent[]> = { [rester.id]: [{ type: 'rest', minutes: 600 }] };
-    for (const a of walkers) plans[a.id] = [{ type: 'go_to', target: { x: 20 - (5 - a.x), y: 10 } }];
+    for (const a of walkers)
+      plans[a.id] = [{ type: 'go_to', target: { x: 20 - (5 - a.x), y: 10 } }];
     tick(s, plans);
     for (let t = 0; t < 40; t++) {
       tick(s);
@@ -241,4 +242,3 @@ describe('one person per tile outdoors', () => {
     expect(rester.action?.type).toBe('rest');
   });
 });
-

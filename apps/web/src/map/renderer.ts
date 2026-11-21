@@ -1,4 +1,12 @@
-import { Application, Container, Graphics, Rectangle, Texture, TextureStyle } from 'pixi.js';
+import {
+  Application,
+  CanvasSource,
+  Container,
+  Graphics,
+  Rectangle,
+  Texture,
+  TextureStyle,
+} from 'pixi.js';
 import {
   Tile,
   objectContains,
@@ -94,7 +102,11 @@ export class WorldRenderer {
   /** Screen-space labels and speech bubbles. */
   private readonly overlay = new Container({ isRenderGroup: true });
   private layers: Layers | null = null;
+  private atlasSource: CanvasSource | null = null;
+  private atlasTextures: Texture[] = [];
   private map: WorldMap | null = null;
+  /** Latest agents received, re-applied to objectLayer.placeIndoors whenever the map updates. */
+  private lastAgents: AgentView[] = [];
   /** Resource amounts by object id, kept until the layers exist. */
   private resources: Record<string, number> = {};
   private tick = 0;
@@ -110,6 +122,8 @@ export class WorldRenderer {
   private selectionKey = '';
   private effectsDrawn = false;
   private animating = false;
+  private contextLost = false;
+  private appInitialized = false;
   private ready = false;
   private destroyed = false;
   private selected: MapSelection | null = null;
@@ -133,52 +147,62 @@ export class WorldRenderer {
       eventMode: 'none',
       eventFeatures: { move: false, globalMove: false, click: false, wheel: false },
     });
+    this.appInitialized = true;
     if (this.destroyed) {
-      this.app.destroy(true, { children: true });
+      this.teardownResources();
       return;
     }
-    this.app.ticker.stop();
-    this.host = host;
-    host.appendChild(this.app.canvas);
-    this.app.canvas.style.display = 'block';
-    this.app.canvas.style.touchAction = 'none';
+    try {
+      this.app.ticker.stop();
+      this.host = host;
+      host.appendChild(this.app.canvas);
+      this.app.canvas.style.display = 'block';
+      this.app.canvas.style.touchAction = 'none';
 
-    const atlas = buildAtlas();
-    const base = Texture.from(atlas.canvas);
-    const textures = Object.fromEntries(
-      Object.entries(atlas.frames).map(([name, f]) => [
-        name,
-        new Texture({ source: base.source, frame: new Rectangle(f.x, f.y, f.w, f.h) }),
-      ]),
-    ) as Record<SpriteName, Texture>;
-    const ground = new GroundLayer(atlas, textures);
-    ground.container.isRenderGroup = true;
-    const objects = new ObjectLayer(this.under, this.over, textures);
-    objects.setResources(this.resources);
-    this.under.addChild(this.graves);
-    this.layers = {
-      ground,
-      objects,
-      people: new PeopleLayer(this.people, this.graves, this.overlay, textures),
-    };
+      const atlas = buildAtlas();
+      const source = new CanvasSource({ resource: atlas.canvas });
+      this.atlasSource = source;
+      const entries = Object.entries(atlas.frames).map(([name, f]) => {
+        const tex = new Texture({ source, frame: new Rectangle(f.x, f.y, f.w, f.h) });
+        return [name, tex] as const;
+      });
+      this.atlasTextures = entries.map(([, t]) => t);
+      const textures = Object.fromEntries(entries) as unknown as Record<SpriteName, Texture>;
+      const ground = new GroundLayer(atlas);
+      ground.container.isRenderGroup = true;
+      const objects = new ObjectLayer(this.under, this.over, textures);
+      objects.setResources(this.resources, true);
+      this.under.addChild(this.graves);
+      this.layers = {
+        ground,
+        objects,
+        people: new PeopleLayer(this.people, this.graves, this.overlay, textures),
+      };
 
-    this.scene.addChild(
-      ground.container,
-      this.under,
-      this.people,
-      this.over,
-      this.fires,
-      this.night,
-      this.hoverBox,
-      this.selectBox,
-    );
-    this.app.stage.addChild(this.scene, this.rain, this.overlay);
+      this.scene.addChild(
+        ground.container,
+        this.under,
+        this.people,
+        this.over,
+        this.fires,
+        this.night,
+        this.hoverBox,
+        this.selectBox,
+      );
+      this.app.stage.addChild(this.scene, this.rain, this.overlay);
 
-    this.resizeObserver = new ResizeObserver(() => this.handleResize());
-    this.resizeObserver.observe(host);
-    this.bindInput(this.app.canvas);
-    this.ready = true;
-    if (this.map) this.buildScene(false);
+      this.resizeObserver = new ResizeObserver(() => this.handleResize());
+      this.resizeObserver.observe(host);
+      this.watchDevicePixelRatio();
+      this.bindContextEvents(this.app.canvas);
+      this.bindInput(this.app.canvas);
+      this.ready = true;
+      if (this.map) this.buildScene(false);
+    } catch (err) {
+      this.destroyed = true;
+      this.teardownResources();
+      throw err;
+    }
   }
 
   /** Show a map. `keepCamera` for live updates (e.g. a house going up) so the view doesn't jump. */
@@ -223,14 +247,16 @@ export class WorldRenderer {
     return this.conditions.some((c) => c.kind === 'storm' || c.kind === 'fire');
   }
 
-  setResources(changes: Record<string, number>): void {
-    Object.assign(this.resources, changes);
+  setResources(changes: Record<string, number>, replace = false): void {
+    if (replace) this.resources = { ...changes };
+    else Object.assign(this.resources, changes);
     if (!this.layers) return;
-    this.layers.objects.setResources(changes);
+    this.layers.objects.setResources(changes, replace);
     this.requestRender();
   }
 
   setAgents(views: AgentView[]): void {
+    this.lastAgents = views;
     const layers = this.layers;
     if (!this.ready || !layers) return;
     layers.people.setAgents(views, layers.objects.placeIndoors(views));
@@ -248,6 +274,7 @@ export class WorldRenderer {
     this.drawSelection();
     if (focus && sel) {
       if (sel.kind === 'agent') {
+        if (this.followId && this.followId !== sel.id) this.breakFollow();
         const a = this.layers?.people.agents.get(sel.id);
         if (a)
           this.setCamera(
@@ -281,6 +308,7 @@ export class WorldRenderer {
   }
 
   focusTile(tile: Point): void {
+    this.breakFollow();
     const center = { x: (tile.x + 0.5) * TILE_PX, y: (tile.y + 0.5) * TILE_PX };
     this.setCamera(centerOn(center.x, center.y, Math.max(this.cam.zoom, 3), this.screenSize()));
   }
@@ -295,11 +323,28 @@ export class WorldRenderer {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    if (!this.ready) return; // init() finishes the teardown
+    if (!this.appInitialized) return; // init() finishes the teardown once app.init() resolves
+    this.teardownResources();
+  }
+
+  private teardownResources(): void {
     this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     for (const fn of this.cleanup) fn();
+    this.cleanup.length = 0;
     this.layers?.people.destroy();
-    this.app.destroy(true, { children: true, texture: true, textureSource: true });
+    this.layers = null;
+    for (const t of this.atlasTextures) t.destroy(false);
+    this.atlasTextures = [];
+    this.atlasSource?.destroy();
+    this.atlasSource = null;
+    this.app.destroy(true, {
+      children: true,
+      texture: true,
+      textureSource: true,
+      context: true,
+      style: true,
+    });
   }
 
   // ------------------------------------------------------------------ scene
@@ -312,6 +357,9 @@ export class WorldRenderer {
     const start = performance.now();
     layers.ground.setMap(map);
     layers.objects.setMap(map);
+    if (this.lastAgents.length > 0) {
+      layers.people.setAgents(this.lastAgents, layers.objects.placeIndoors(this.lastAgents));
+    }
     this.viewDirty = true;
 
     if (!keepCamera) this.cam = fitCamera(this.worldSize(), this.screenSize());
@@ -320,6 +368,9 @@ export class WorldRenderer {
     this.drawHover();
     this.applyCamera();
     performance.measure('aw:setMap', { start });
+    if (performance.getEntriesByName('aw:setMap').length > 200) {
+      performance.clearMeasures('aw:setMap');
+    }
   }
 
   private startAnimating(): void {
@@ -328,7 +379,7 @@ export class WorldRenderer {
     const loop = () => {
       if (this.destroyed) return;
       const busy = this.frame(performance.now());
-      if (busy || this.followId || this.hasMotion()) requestAnimationFrame(loop);
+      if (busy || this.hasMotion()) requestAnimationFrame(loop);
       else this.animating = false;
     };
     requestAnimationFrame(loop);
@@ -337,16 +388,19 @@ export class WorldRenderer {
   /** Updates everything for one animation frame and draws it; true while anything moves. */
   private frame(now: number): boolean {
     const layers = this.layers;
-    if (!layers) return false;
+    if (!layers || this.contextLost) return false;
     if (this.followId) {
       // Follow the person where they will be drawn this frame.
       const a = layers.people.agents.get(this.followId);
       if (a) {
         const p = layers.people.positionAt(a, now);
         const target = centerOn(p.x, p.y - 8, this.cam.zoom, this.screenSize());
-        this.cam = clampCamera(target, this.worldSize(), this.screenSize());
-        this.applyTransform();
-        this.viewDirty = true;
+        const clamped = clampCamera(target, this.worldSize(), this.screenSize());
+        if (clamped.x !== this.cam.x || clamped.y !== this.cam.y) {
+          this.cam = clamped;
+          this.applyTransform();
+          this.viewDirty = true;
+        }
       }
     }
     const selectedId = this.selected?.kind === 'agent' ? this.selected.id : null;
@@ -421,13 +475,15 @@ export class WorldRenderer {
     const storm = this.level('storm');
     if (storm > 0) {
       const { width, height } = this.screenSize();
+      const spanW = width + 60;
+      const spanH = height + 40;
       const drops = Math.round(80 + 220 * storm);
       const speed = now / 2.2;
       for (let i = 0; i < drops; i++) {
         const x = (hash(i, 7) % 10007) / 10007;
         const y0 = (hash(i, 13) % 10007) / 10007;
-        const px = (x * (width + 60) - speed * 0.25 + 10000) % (width + 60);
-        const py = (y0 * (height + 40) + speed) % (height + 40);
+        const px = (((x * spanW - speed * 0.25) % spanW) + spanW) % spanW;
+        const py = (y0 * spanH + speed) % spanH;
         r.moveTo(px, py - 20).lineTo(px - 4, py - 8);
       }
       r.stroke({ width: 1, color: 0xb8cce0, alpha: 0.35 + 0.25 * storm });
@@ -479,11 +535,49 @@ export class WorldRenderer {
   }
 
   private requestRender(): void {
-    if (this.renderQueued || !this.ready || this.animating) return;
+    if (this.renderQueued || !this.ready || this.animating || this.contextLost) return;
     this.renderQueued = true;
     requestAnimationFrame(() => {
       this.renderQueued = false;
       if (!this.destroyed) this.frame(performance.now());
+    });
+  }
+
+  private watchDevicePixelRatio(): void {
+    if (typeof window.matchMedia !== 'function') return;
+    let mql: MediaQueryList | null = null;
+    const onChange = () => {
+      if (this.destroyed) return;
+      this.handleResize();
+      arm();
+    };
+    const arm = () => {
+      mql?.removeEventListener('change', onChange);
+      mql = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mql.addEventListener('change', onChange, { once: true });
+    };
+    arm();
+    this.cleanup.push(() => mql?.removeEventListener('change', onChange));
+  }
+
+  private bindContextEvents(canvas: HTMLCanvasElement): void {
+    const onLost = () => {
+      this.contextLost = true;
+    };
+    const onRestored = () => {
+      this.contextLost = false;
+      this.tintKey = '';
+      this.selectionKey = '';
+      this.drawNight();
+      this.drawSelection();
+      this.drawHover();
+      this.requestRender();
+    };
+    canvas.addEventListener('webglcontextlost', onLost);
+    canvas.addEventListener('webglcontextrestored', onRestored);
+    this.cleanup.push(() => {
+      canvas.removeEventListener('webglcontextlost', onLost);
+      canvas.removeEventListener('webglcontextrestored', onRestored);
     });
   }
 
@@ -492,8 +586,12 @@ export class WorldRenderer {
     this.app.renderer.resize(
       Math.max(1, this.host.clientWidth),
       Math.max(1, this.host.clientHeight),
+      window.devicePixelRatio || 1,
     );
-    this.setCamera(this.cam);
+    this.cam = clampCamera(this.cam, this.worldSize(), this.screenSize());
+    this.applyTransform();
+    this.viewDirty = true;
+    this.drawHover();
     // Resizing clears the canvas, and ResizeObserver runs after this frame's animation callbacks,
     // so draw now rather than leave a blank (black) frame on screen.
     if (this.ready && this.layers) this.frame(performance.now());

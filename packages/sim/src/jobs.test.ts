@@ -153,4 +153,36 @@ describe('jobs', () => {
     expect(employer.recent.some((r) => r.text.includes('too young to work for me'))).toBe(true);
     expect(s.requests.some((r) => r.kind === 'job')).toBe(false);
   });
+
+  it('end_job guards dead counterpart and jobsFor excludes dead or expired contracts', async () => {
+    const { jobsFor } = await import('./jobs.ts');
+    const { s, employer, worker } = fresh();
+    s.contracts.push({
+      id: 'j-expired',
+      employer: employer.id,
+      worker: worker.id,
+      wage: 5,
+      startTick: 0,
+      endTick: s.tick,
+      lastPaidDay: 0,
+    });
+    expect(jobsFor(s, employer)).toEqual([]);
+    s.contracts = [
+      {
+        id: 'j-dead',
+        employer: employer.id,
+        worker: worker.id,
+        wage: 5,
+        startTick: s.tick,
+        endTick: s.tick + TICKS_PER_DAY,
+        lastPaidDay: 0,
+      },
+    ];
+    worker.alive = false;
+    expect(jobsFor(s, employer)).toEqual([]);
+    const deadMemories = worker.memories.length;
+    advance(s, 2, { [employer.id]: [{ type: 'end_job', agentId: worker.id }] }, () => null);
+    expect(s.contracts).toHaveLength(0);
+    expect(worker.memories.length).toBe(deadMemories);
+  });
 });

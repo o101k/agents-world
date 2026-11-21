@@ -143,9 +143,7 @@ describe('construction', () => {
         },
       ]);
     fire(stoneHouse.id);
-    expect(s.conditions.some((c) => c.kind === 'fire' && c.targetId === stoneHouse.id)).toBe(
-      false,
-    );
+    expect(s.conditions.some((c) => c.kind === 'fire' && c.targetId === stoneHouse.id)).toBe(false);
     fire(woodHouse.id);
     expect(s.conditions.some((c) => c.kind === 'fire' && c.targetId === woodHouse.id)).toBe(true);
   });
@@ -189,5 +187,65 @@ describe('construction', () => {
     expect(house.name).toBe(`House ${house.id.slice('house-'.length)}`);
     expect(house.progress).toBeUndefined();
     expect(house.door).toEqual({ x: house.x + 1, y: house.y + 2 });
+  });
+
+  it('interrupting a build stretch does not destroy materials or increment workDone', () => {
+    const s = fresh();
+    const a = placeAt(s, 'a1', 'market');
+    a.skills.building = 60;
+    a.inventory = { planks: 20, stone: 10 };
+    // Start site and walk to it until build action starts.
+    let started = false;
+    let first = true;
+    for (let i = 0; i < 300; i++) {
+      const inputs: TickInput[] = [];
+      for (const ag of s.agents) {
+        if (!ag.alive) continue;
+        if (ag.id === 'a1' && first) {
+          inputs.push({
+            kind: 'decision',
+            agentId: 'a1',
+            decision: { thought: '', goal: '', plan: [{ type: 'build', building: 'house' }] },
+          });
+        } else if (ag.awaiting) {
+          inputs.push({
+            kind: 'decision',
+            agentId: ag.id,
+            decision: { thought: '', goal: '', plan: [{ type: 'rest', minutes: 600 }] },
+          });
+        }
+      }
+      first = false;
+      step(s, inputs);
+      if (a.action?.type === 'build') {
+        started = true;
+        break;
+      }
+    }
+    expect(started).toBe(true);
+    const site = newest(s, 'house');
+    // Interrupt mid-stretch: materials and workDone must be untouched.
+    a.action = null;
+    expect(a.inventory.planks).toBe(20);
+    expect(a.inventory.stone).toBe(10);
+    expect(site.workDone).toBe(0);
+    expect(site.stoneWork).toBe(0);
+  });
+
+  it('rebuilding a burnt bakery via build_house uses bakery material costs (siteInfo)', () => {
+    const s = fresh();
+    const bakery = s.map.objects.find((o) => o.kind === 'bakery')!;
+    const a = s.agents.find((x) => x.id === 'a3')!;
+    s.owners[bakery.id] = [a.id];
+    bakery.progress = 0.5;
+    bakery.burntTick = s.tick;
+    a.x = bakery.door!.x;
+    a.y = bakery.door!.y + 1;
+    a.indoorsId = null;
+    // Bakery requires 3 planks per stretch whereas house requires 2 planks.
+    a.inventory = { planks: 2 };
+    run(s, a.id, [{ type: 'build_house' }], 20);
+    expect(a.recent.some((r) => r.text.includes('3 planks'))).toBe(true);
+    expect(a.inventory.planks).toBe(2);
   });
 });

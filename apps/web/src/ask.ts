@@ -1,4 +1,5 @@
 import {
+  TICKS_PER_DAY,
   formatClock,
   type InterviewView,
   type RecordEntry,
@@ -7,8 +8,6 @@ import {
 } from '@aw/shared';
 
 /** Pure helpers for asking about a villager (no React, so they're unit-tested in node). */
-
-const TICKS_PER_DAY = 1440;
 
 export function pronounsFor(sex: Sex): { subj: string; obj: string; poss: string } {
   return sex === 'female'

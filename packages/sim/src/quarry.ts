@@ -1,13 +1,6 @@
 import type { Intent, MapObject, Point, WorldMap } from '@aw/shared';
 import { fullName, remember, type Agent, type TaskAction } from './agent.ts';
-import {
-  emit,
-  facingTo,
-  fail,
-  objName,
-  useTools,
-  type Ctx,
-} from './engine.ts';
+import { emit, facingTo, fail, objName, useTools, type Ctx } from './engine.ts';
 import { observeWork, train } from './life.ts';
 import { interactionTiles, isAt, mapCache } from './spatial.ts';
 import type { WorldState } from './world.ts';
@@ -28,8 +21,7 @@ function rockGrid(map: WorldMap): { cols: number; cells: Map<number, MapObject[]
   if (!g) {
     const cols = Math.ceil(map.width / CELL);
     const cells = new Map<number, MapObject[]>();
-    for (const o of map.objects) {
-      if (o.kind !== 'rock') continue;
+    for (const o of mapCache(map).byKind.get('rock') ?? []) {
       const key = Math.floor(o.y / CELL) * cols + Math.floor(o.x / CELL);
       const list = cells.get(key);
       if (list) list.push(o);

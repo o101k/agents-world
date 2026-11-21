@@ -95,7 +95,7 @@ export const DECIDE_SCHEMA = {
             type: 'string',
             enum: ITEMS,
             description:
-              'For eat / buy / sell / give / steal / sow / stock_stall / take_from_stall / buy_from_stall: which item.',
+              'For eat / feed / buy / sell / give / steal / sow / stock_stall / take_from_stall / buy_from_stall: which item.',
           },
           quantity: {
             type: 'integer',
@@ -231,6 +231,14 @@ const asCount = (v: unknown): number => {
   const n = Math.floor(Number(v));
   return Number.isFinite(n) && n > 0 ? Math.min(n, 999) : 0;
 };
+const asCoins = (v: unknown): number => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 100_000) : 0;
+};
+const asDelta = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(-3, Math.min(3, n)) : 0;
+};
 function bundle(item: unknown, quantity: unknown, coins: unknown): Bundle {
   const b: Bundle = {};
   const i = asItem(item);
@@ -239,7 +247,7 @@ function bundle(item: unknown, quantity: unknown, coins: unknown): Bundle {
     b.item = i;
     b.quantity = q;
   }
-  const c = asCount(coins);
+  const c = asCoins(coins);
   if (c) b.coins = c;
   return b;
 }
@@ -516,7 +524,7 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
         break;
       }
       case 'pay_from_treasury': {
-        const coins = asCount(step.coins);
+        const coins = asCoins(step.coins);
         if (target && coins) plan.push({ type: 'pay_from_treasury', agentId: target, coins });
         break;
       }
@@ -537,34 +545,68 @@ export function parseDecision(raw: unknown, perception: Perception): Decision {
     if (beliefs.length) decision.beliefs = beliefs;
   }
   if (Array.isArray(obj.feelings)) {
-    decision.feelings = (obj.feelings as Record<string, unknown>[])
-      .filter((f) => f && typeof f.target === 'string')
+    const feelings = (obj.feelings as Record<string, unknown>[])
+      .filter((f) => f && typeof f.target === 'string' && f.target.trim().length > 0)
       .slice(0, 10)
       .map((f) => ({
-        agentId: String(f.target),
-        affection: Number(f.affection) || 0,
-        trust: Number(f.trust) || 0,
-        romance: Number(f.romance) || 0,
+        agentId: String(f.target).trim(),
+        affection: asDelta(f.affection),
+        trust: asDelta(f.trust),
+        romance: asDelta(f.romance),
       }));
+    if (feelings.length) decision.feelings = feelings;
   }
   const r = obj.remember as { text?: unknown; importance?: unknown } | undefined;
   if (r && typeof r.text === 'string' && r.text.trim()) {
+    const imp = Number(r.importance);
     decision.remember = {
       text: r.text.trim().slice(0, 500),
-      importance: Math.min(10, Math.max(1, Number(r.importance) || 3)),
+      importance: Number.isFinite(imp) ? Math.min(10, Math.max(1, imp)) : 3,
     };
   }
   return decision;
 }
 
-/** Pull a JSON object out of free text (for models that answer in text instead of calling the tool). */
-export function extractJson(text: string): unknown {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
+function tryParseObject(s: string): unknown {
   try {
-    return JSON.parse(text.slice(start, end + 1));
+    const parsed = JSON.parse(s);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/** Pull a JSON object out of free text (for models that answer in text instead of calling the tool). */
+export function extractJson(text: string): unknown {
+  for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    const parsed = tryParseObject(m[1]!.trim());
+    if (parsed) return parsed;
+  }
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    if (text.indexOf('}', i) < 0) break;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j]!;
+      if (inString) {
+        if (escape) escape = false;
+        else if (ch === '\\') escape = true;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          const parsed = tryParseObject(text.slice(i, j + 1));
+          if (parsed) return parsed;
+          break;
+        }
+      }
+    }
+  }
+  return null;
 }

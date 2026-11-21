@@ -4,6 +4,7 @@ import { describeBrain, formatCount } from '../brainLabels.ts';
 import { useSettings } from '../settingsStore.ts';
 import { BrainFields } from './BrainEditor.tsx';
 import { formatUsd } from './SpendMeter.tsx';
+import { useDialog } from './useDialog.ts';
 
 /** One person in the dialog. */
 export interface BrainsModalRow {
@@ -72,23 +73,26 @@ export function BrainsModal({
 }) {
   const providers = useSettings((s) => s.settings?.providers);
   const idPrefix = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const bulkRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showDead, setShowDead] = useState(false);
   const [bulk, setBulk] = useState(defaultBrain);
+  const wasLoading = useRef(Boolean(loading));
   const [busy, setBusy] = useState<'apply' | 'default' | 'primary' | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingDefault, setEditingDefault] = useState<BrainConfig | null>(null);
 
-  // Escape closes, unless the settings dialog is open on top of this one.
+  // Sync the bulk picker once when initial async load resolves, without remounting the dialog.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !useSettings.getState().open) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    if (wasLoading.current && !loading) {
+      wasLoading.current = false;
+      setBulk(defaultBrain);
+    }
+  }, [loading, defaultBrain]);
+
+  useDialog(dialogRef, onClose, { disabled: busy !== null });
 
   const dead = people.filter((p) => !p.alive).length;
   const visible = showUsage && !showDead ? people.filter((p) => p.alive) : people;
@@ -142,8 +146,10 @@ export function BrainsModal({
   const defaultSummary = describeBrain(defaultBrain, providers);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={() => busy === null && onClose()}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel brains-modal"
         role="dialog"
         aria-modal="true"
@@ -152,7 +158,13 @@ export function BrainsModal({
       >
         <div className="modal-head">
           <h2 id="brains-title">{title}</h2>
-          <button className="btn btn-ghost" onClick={onClose} aria-label="Close">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={busy !== null}
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>

@@ -13,6 +13,7 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
 
 /** "5m 20s", "45s", "2h 5m". */
 export function formatWait(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '0s';
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s}s`;
   const h = Math.floor(s / 3600);

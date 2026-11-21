@@ -88,16 +88,62 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
   let currentAction: string | null = null;
   const a = agent.action;
   if (a) {
-    if (a.type === 'walk')
-      currentAction = a.then ? `Walking → ${describeIntent(a.then, name)}` : 'Walking';
-    else if (a.type === 'gather') currentAction = `Gathering at ${name(a.objectId)}`;
-    else if (a.type === 'eat') currentAction = `Eating ${a.item}`;
-    else if (a.type === 'drink') currentAction = 'Drinking';
-    else if (a.type === 'chop') currentAction = 'Chopping wood';
-    else if (a.type === 'craft') currentAction = `Making ${a.recipe}`;
-    else if (a.type === 'build') currentAction = `Building ${name(a.objectId)}`;
-    else if (a.type === 'sleep') currentAction = 'Sleeping';
-    else currentAction = 'Resting';
+    switch (a.type) {
+      case 'walk':
+        currentAction = a.then ? `Walking → ${describeIntent(a.then, name)}` : 'Walking';
+        break;
+      case 'gather':
+        currentAction = `Gathering at ${name(a.objectId)}`;
+        break;
+      case 'eat':
+        currentAction = `Eating ${a.item}`;
+        break;
+      case 'drink':
+        currentAction = 'Drinking';
+        break;
+      case 'chop':
+        currentAction = 'Chopping wood';
+        break;
+      case 'craft':
+        currentAction = `Making ${a.recipe}`;
+        break;
+      case 'build':
+        currentAction = `Building ${name(a.objectId)}`;
+        break;
+      case 'task':
+        switch (a.task) {
+          case 'clear_field':
+            currentAction = `Clearing ${name(a.objectId)}`;
+            break;
+          case 'sow':
+            currentAction = `Sowing ${name(a.objectId)}`;
+            break;
+          case 'quarry':
+            currentAction = `Quarrying ${name(a.objectId)}`;
+            break;
+          case 'tend_animals':
+            currentAction = `Tending ${name(a.objectId)}`;
+            break;
+          default: {
+            const unhandled: never = a.task;
+            void unhandled;
+            currentAction = 'Working';
+          }
+        }
+        break;
+      case 'sleep':
+        currentAction = 'Sleeping';
+        break;
+      case 'rest':
+        currentAction = 'Resting';
+        break;
+      default: {
+        // Compile-time exhaustiveness; an unknown action in an old save falls back safely.
+        const unhandled: never = a;
+        void unhandled;
+        currentAction = 'Resting';
+      }
+    }
   }
   const home = agent.homeId ? cache.byId.get(agent.homeId) : undefined;
   return {
@@ -148,7 +194,12 @@ export function agentDetail(state: WorldState, agent: Agent): AgentDetail {
         ...(p.role ? { role: p.role } : {}),
         lastSeenTick: p.lastSeenTick,
       }))
-      .sort((a, b) => (b.role ? 1 : 0) - (a.role ? 1 : 0) || b.familiarity - a.familiarity),
+      .sort(
+        (a, b) =>
+          (b.role ? 1 : 0) - (a.role ? 1 : 0) ||
+          b.familiarity - a.familiarity ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      ),
     family: {
       mother: person(state, agent.motherId),
       father: person(state, agent.fatherId),
@@ -219,39 +270,38 @@ export function villageView(state: WorldState): VillageResponse {
       placeName: placeName(m.placeId),
       startTick: m.startTick,
       endTick: m.endTick,
-      proposals: m.proposals.map((p) => ({
-        id: p.id,
-        text: p.text,
-        byName: who(p.by),
-        yes: Object.values(p.votes).filter(Boolean).length,
-        no: Object.values(p.votes).filter((v) => !v).length,
-      })),
+      proposals: m.proposals.map((p) => {
+        const liveVotes = Object.entries(p.votes).filter(([id]) => findAgent(state, id)?.alive);
+        return {
+          id: p.id,
+          text: p.text,
+          byName: who(p.by),
+          yes: liveVotes.filter(([, v]) => v === true).length,
+          no: liveVotes.filter(([, v]) => v === false).length,
+        };
+      }),
     })),
-    stalls: state.map.objects
-      .filter((o) => o.kind === 'stall')
-      .map((o) => ({
+    stalls: (cache.byKind.get('stall') ?? []).map((o) => ({
+      id: o.id,
+      name: placeName(o.id),
+      owners: owners(o.id),
+      stock: Object.entries(state.stalls[o.id]?.stock ?? {})
+        .filter(([, l]) => (l?.quantity ?? 0) > 0)
+        .map(([item, l]) => ({ item, quantity: l!.quantity, price: l!.price })),
+    })),
+    pens: (cache.byKind.get('pen') ?? []).map((o) => {
+      const pen = state.pens[o.id];
+      return {
         id: o.id,
         name: placeName(o.id),
         owners: owners(o.id),
-        stock: Object.entries(state.stalls[o.id]?.stock ?? {})
-          .filter(([, l]) => (l?.quantity ?? 0) > 0)
-          .map(([item, l]) => ({ item, quantity: l!.quantity, price: l!.price })),
-      })),
-    pens: state.map.objects
-      .filter((o) => o.kind === 'pen')
-      .map((o) => {
-        const pen = state.pens[o.id];
-        return {
-          id: o.id,
-          name: placeName(o.id),
-          owners: owners(o.id),
-          hens: pen?.hens ?? 0,
-          sheep: pen?.sheep ?? 0,
-          wool: Math.floor(pen?.wool ?? 0),
-        };
-      }),
-    fields: state.map.objects
-      .filter((o) => o.kind === 'field' && state.owners[o.id]?.length)
+        hens: pen?.hens ?? 0,
+        sheep: pen?.sheep ?? 0,
+        wool: Math.floor(pen?.wool ?? 0),
+      };
+    }),
+    fields: (cache.byKind.get('field') ?? [])
+      .filter((o) => state.owners[o.id]?.length)
       .map((o) => ({
         id: o.id,
         name: placeName(o.id),

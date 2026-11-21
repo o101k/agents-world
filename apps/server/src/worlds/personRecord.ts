@@ -450,14 +450,21 @@ export function buildDigest(
     .map((e) => ({ ...e, text: clip(e.text, e.kind === 'diary' ? DIARY_CAP : DIGEST_CAP) }));
   const chars = (list: { text: string }[]) => list.reduce((sum, l) => sum + l.text.length, 0);
   while (chars(lines) > quota.chars) {
-    const sizes = new Map<RecordKind, number>();
-    for (const l of lines) sizes.set(l.kind, (sizes.get(l.kind) ?? 0) + l.text.length);
-    const biggest = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const byKind = new Map<RecordKind, { chars: number; count: number }>();
+    for (const l of lines) {
+      const cur = byKind.get(l.kind) ?? { chars: 0, count: 0 };
+      cur.chars += l.text.length;
+      cur.count++;
+      byKind.set(l.kind, cur);
+    }
+    const biggest = [...byKind]
+      .filter(([, stat]) => stat.count > 1)
+      .sort((a, b) => b[1].chars - a[1].chars)[0]?.[0];
     if (!biggest) break;
     const group = lines.filter((l) => l.kind === biggest);
-    if (group.length <= 1) break;
     const keep = new Set(sampleEvenly(group, group.length - 1));
     const drop = group.find((l) => !keep.has(l));
+    if (!drop) break;
     lines = lines.filter((l) => l !== drop);
   }
 

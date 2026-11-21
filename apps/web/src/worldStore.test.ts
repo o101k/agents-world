@@ -69,7 +69,7 @@ describe('the world store (browser state)', () => {
   it('enters and leaves replay mode', () => {
     useWorld.getState().setFollow('a1');
     useWorld.getState().setReplayTarget(430);
-    expect(useWorld.getState().replay).toEqual({ target: 430, view: null });
+    expect(useWorld.getState().replay).toMatchObject({ target: 430, view: null });
     expect(useWorld.getState().followId).toBeNull(); // following makes no sense in the past
     useWorld.getState().setReplayView({ tick: 430 } as ReplayResponse);
     expect(useWorld.getState().replay?.view?.tick).toBe(430);

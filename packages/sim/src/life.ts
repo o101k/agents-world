@@ -17,6 +17,7 @@ import { fullName, remember, type Agent, type PersonKnowledge } from './agent.ts
 import { GREY_HAIR, HAIR_COLORS, PANTS_COLORS, SHIRT_COLORS, languageBaseline } from './cast.ts';
 import { usable } from './conditions.ts';
 import { approach, emit, fail, meet, type Ctx } from './engine.ts';
+import { syncOccupant } from './occupancy.ts';
 import { nameAsKnown } from './perception.ts';
 import { mapCache } from './spatial.ts';
 import { findAgent, type WorldState } from './world.ts';
@@ -281,6 +282,7 @@ export function lifeTick(ctx: Ctx, agent: Agent, ageStep: number): void {
         agent.x = home.door.x;
         agent.y = home.door.y;
       }
+      syncOccupant(state, agent);
     }
     agent.action =
       agent.action?.type === 'sleep'
@@ -573,11 +575,13 @@ function giveBirth(ctx: Ctx, mother: Agent): void {
   mother.needs.energy = Math.max(0, mother.needs.energy - 40);
   if (rng.chance(0.03)) mother.health = Math.max(1, mother.health - 50);
   for (const p of parents) {
+    if (!p.alive) continue;
     remember(p, state.tick, `Our child was born — ${label}!`, 10, 'experience', [
       child.id,
       ...parents.filter((q) => q !== p).map((q) => q.id),
     ]);
-    if (!p.awaiting) p.awaiting = { kind: 'child_born', childId: child.id, childLabel: label };
+    if (!p.awaiting && !p.asleep)
+      p.awaiting = { kind: 'child_born', childId: child.id, childLabel: label };
   }
 }
 
@@ -802,7 +806,7 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
       }
       // Moving in together: whoever has no home joins the other's.
       const moved = moveIn(state, agent, other);
-      const home = moved ? state.map.objects.find((o) => o.id === moved.homeId) : undefined;
+      const home = moved ? mapCache(state.map).byId.get(moved.homeId) : undefined;
       const movedNote = moved
         ? ` ${fullName(moved.mover)} moved into ${home?.name ?? 'their home'}.`
         : '';
@@ -874,6 +878,8 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
       const who = nameAsKnown(agent, other);
       if (agent.partnerId !== other.id || other.partnerId !== agent.id)
         return fail(ctx, agent, `${who} and I aren't partners.`);
+      if (tick - agent.lastChildTry < TICKS_PER_DAY || tick - other.lastChildTry < TICKS_PER_DAY)
+        return fail(ctx, agent, 'We just tried for a child — let us wait another day.');
       if (!approach(ctx, agent, other, intent, 1, 'be with')) return;
       state.requests = state.requests.filter(
         (r) => !(r.kind === 'child_request' && r.from === agent.id),
@@ -927,6 +933,10 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
         );
         return;
       }
+      if (agent.partnerId !== other.id || other.partnerId !== agent.id)
+        return fail(ctx, agent, `${who} and I are no longer partners.`);
+      if (tick - agent.lastChildTry < TICKS_PER_DAY || tick - other.lastChildTry < TICKS_PER_DAY)
+        return fail(ctx, agent, 'We just tried for a child — let us wait another day.');
       if (Math.max(Math.abs(other.x - agent.x), Math.abs(other.y - agent.y)) > 2) {
         return fail(ctx, agent, `${who} had gone off by the time I answered.`);
       }
@@ -961,12 +971,26 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
           Math.min(mother.health, father.health)) /
         100;
       if (rng.chance(chance)) mother.pregnancy = { fatherId: father.id, progress: 0, known: false };
+      const home = agent.homeId ? mapCache(state.map).byId.get(agent.homeId) : undefined;
       agent.action = { type: 'sleep', since: tick };
       agent.asleep = true;
+      agent.plan = [];
+      if (
+        home?.door &&
+        Math.max(Math.abs(agent.x - home.door.x), Math.abs(agent.y - home.door.y)) <= 1 &&
+        usable(state, home.id)
+      ) {
+        agent.x = home.door.x;
+        agent.y = home.door.y;
+        agent.indoorsId = home.id;
+      } else {
+        agent.indoorsId = null;
+      }
+      syncOccupant(state, agent);
       return;
     }
     case 'name_child': {
-      if (!other) return fail(ctx, agent, "I can't find that child.");
+      if (!other || !other.alive) return fail(ctx, agent, "I can't find that child.");
       if (
         other.motherId !== agent.id &&
         other.fatherId !== agent.id &&
@@ -1086,7 +1110,8 @@ export function lifeAction(ctx: Ctx, agent: Agent, intent: LifeIntent): void {
       return;
     }
     case 'declare_will': {
-      if (!other || other === agent) return fail(ctx, agent, "I don't know who that is.");
+      if (!other || !other.alive || other === agent)
+        return fail(ctx, agent, "I don't know who that is.");
       agent.will = { heirId: other.id };
       emit(
         ctx,
@@ -1179,7 +1204,10 @@ function adopt(ctx: Ctx, adopter: Agent, child: Agent): void {
   // A new home. Babies are carried there (the infant rule keeps them indoors at home).
   child.homeId = adopter.homeId;
   if (adopter.homeId) child.knowledge[adopter.homeId] = { lastSeenTick: tick };
-  if (child.indoorsId && child.indoorsId !== adopter.homeId) child.indoorsId = null;
+  if (child.indoorsId && child.indoorsId !== adopter.homeId) {
+    child.indoorsId = null;
+    syncOccupant(state, child);
+  }
   state.requests = state.requests.filter((r) => !(r.kind === 'adoption' && r.to === child.id));
 
   const names = parents.map((p) => fullName(p)).join(' and ');
@@ -1320,7 +1348,8 @@ export function settleEstate(ctx: Ctx, dead: Agent): void {
 
   const owned = Object.entries(state.owners)
     .filter(([, ids]) => ids.includes(dead.id))
-    .map(([id]) => id);
+    .map(([id]) => id)
+    .sort();
   for (const id of owned) {
     const next = state.owners[id]!.filter((x) => x !== dead.id);
     for (const h of heirs) if (!next.includes(h.id)) next.push(h.id);
@@ -1334,11 +1363,11 @@ export function settleEstate(ctx: Ctx, dead: Agent): void {
   }
   dead.money = 0;
   let turn = 0;
-  for (const [item, n] of Object.entries(dead.inventory)) {
-    for (let k = 0; k < (n ?? 0); k++) {
+  for (const item of Object.keys(dead.inventory).sort() as (keyof Agent['inventory'])[]) {
+    const n = dead.inventory[item] ?? 0;
+    for (let k = 0; k < n; k++) {
       const h = heirs[turn++ % heirs.length]!;
-      h.inventory[item as keyof Agent['inventory']] =
-        (h.inventory[item as keyof Agent['inventory']] ?? 0) + 1;
+      h.inventory[item] = (h.inventory[item] ?? 0) + 1;
     }
   }
   dead.inventory = {};
@@ -1354,15 +1383,15 @@ export function settleEstate(ctx: Ctx, dead: Agent): void {
     4,
     owned,
   );
+  const cache = mapCache(state.map);
   for (const h of heirs) {
+    for (const id of owned) h.knowledge[id] ??= { lastSeenTick: state.tick };
     remember(h, state.tick, `I inherited what ${nameAsKnown(h, dead)} left me.`, 7, 'experience', [
       dead.id,
     ]);
-    if (
-      !h.homeId &&
-      owned.some((id) => state.map.objects.find((o) => o.id === id)?.kind === 'house')
-    ) {
-      h.homeId = owned.find((id) => state.map.objects.find((o) => o.id === id)?.kind === 'house')!;
+    if (!h.homeId) {
+      const houseId = owned.find((id) => cache.byId.get(id)?.kind === 'house');
+      if (houseId) h.homeId = houseId;
     }
   }
 }

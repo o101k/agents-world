@@ -78,7 +78,7 @@ function partOfDay(hour: number): string {
  * occupation), so providers can cache it across an agent's decisions.
  */
 const ACTION_HELP: Record<string, string> = {
-  go_to: 'go_to {target: place id or person id}',
+  go_to: 'go_to {target: place id or visible person id}',
   gather: 'gather {target: berry bush, field or fishing dock id}',
   eat: 'eat {item: berries | vegetables | fish | bread | eggs}',
   drink: 'drink {target: well or dock id, or omit to find the nearest water}',
@@ -114,7 +114,7 @@ const ACTION_HELP: Record<string, string> = {
     'build_house (start or continue building a house, or rebuild your burnt one; each stretch uses 3 planks)',
   tend: 'tend {target: a sick person id} (nurse them: they recover faster; you may catch it)',
   build:
-    'build {building: house | bakery | workshop | well | pen | stall} (start or continue building one; each hour-long stretch uses planks, a well uses stone; 2 extra stone in a stretch makes it stonework, and stone buildings cannot burn)',
+    'build {building: house | bakery | workshop | well | pen | stall} (start or continue building one; each hour-long stretch uses planks, a well uses stone; 2 extra stone in at least half of the stretches makes it stonework, and stone buildings cannot burn)',
   clear_field:
     'clear_field (clear land near your home for a field of your own; takes several hour-long stretches; trees cleared give wood)',
   sow: 'sow {item: wheat | vegetables, target: optional field id} (sow your cleared field; uses 2 of that crop as seed)',
@@ -263,8 +263,10 @@ function triggerText(p: Perception): string {
       return t.accepted
         ? `${t.childName} said yes: they are your child now and will live in your home.`
         : `${t.childName} didn't want to be adopted.`;
-    case 'grew_up':
-      return `You have grown up a little: you are now ${t.stage === 'adult' ? 'an adult' : `a ${t.stage}`}.`;
+    case 'grew_up': {
+      const article = /^[aeiou]/i.test(t.stage) ? 'an' : 'a';
+      return `You have grown up a little: you are now ${article} ${t.stage}.`;
+    }
     case 'unwell':
       return 'You feel feverish, aching and weak: you are ill.';
     case 'world_event':
@@ -281,10 +283,23 @@ function triggerText(p: Perception): string {
       return `Your work agreement with ${t.byName} has ended: ${t.reason}`;
     case 'meeting_called':
       return `${t.byName} has called a village meeting at ${t.place} about “${t.topic}”, starting in about ${t.startsInMinutes} minutes.`;
-    case 'meeting_open':
-      return `The village meeting about “${t.topic}” has begun and you are there. You can propose rules (propose_rule) and vote on proposals (vote).`;
-    case 'rule_proposed':
-      return `At the meeting, ${t.byName} proposes: “${t.text}” (proposal ${t.proposalId}). Vote with vote, or not at all.`;
+    case 'meeting_open': {
+      const canPropose = p.canDo.includes('propose_rule');
+      const canVote = p.canDo.includes('vote');
+      const actions =
+        canPropose && canVote
+          ? ' You can propose rules (propose_rule) and vote on proposals (vote).'
+          : canPropose
+            ? ' You can propose rules (propose_rule).'
+            : canVote
+              ? ' You can vote on proposals (vote).'
+              : '';
+      return `The village meeting about “${t.topic}” has begun and you are there.${actions}`;
+    }
+    case 'rule_proposed': {
+      const canVote = p.canDo.includes('vote');
+      return `At the meeting, ${t.byName} proposes: “${t.text}” (proposal ${t.proposalId}).${canVote ? ' Vote with vote, or not at all.' : ''}`;
+    }
     case 'check_in':
       return 'A few hours have passed. Take stock of your situation.';
   }
@@ -367,9 +382,7 @@ export function userPrompt(p: Perception): string {
   const bag = Object.entries(s.inventory)
     .filter(([, n]) => (n ?? 0) > 0)
     .map(([k, n]) => `${n} ${ITEM_LABELS[k as keyof typeof ITEM_LABELS].toLowerCase()}`);
-  lines.push(
-    `You carry: ${bag.length ? bag.join(', ') : 'nothing to eat'}. Money: ${s.money} coins.`,
-  );
+  lines.push(`You carry: ${bag.length ? bag.join(', ') : 'nothing'}. Money: ${s.money} coins.`);
   lines.push(
     `Your skills (0–100): ${Object.entries(s.skills)
       .map(([k, v]) => `${k} ${v}`)

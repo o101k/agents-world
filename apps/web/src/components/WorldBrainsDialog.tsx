@@ -1,28 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { STAGE_LABELS, type BrainConfig, type BrainsResponse } from '@aw/shared';
+import {
+  STAGE_LABELS,
+  type BrainConfig,
+  type BrainsResponse,
+  type WorldSettings,
+} from '@aw/shared';
 import { api } from '../api.ts';
 import { BrainsModal, type BrainsModalRow } from './BrainsModal.tsx';
 
-/** Shown for the instant before the first answer arrives; the dialog restarts with the real one. */
+/** Shown for the instant before the first answer arrives. */
 const PLACEHOLDER: BrainConfig = { provider: 'mock', model: '', effort: 'frugal' };
 
 /**
  * Observer power: see what each villager's AI has spent and change who thinks with what, one
  * person or many at once. Nobody's decisions are touched; only the model behind them.
  */
-export function WorldBrainsDialog({ worldId, onClose }: { worldId: string; onClose: () => void }) {
+export function WorldBrainsDialog({
+  worldId,
+  onClose,
+  onSettingsUpdated,
+}: {
+  worldId: string;
+  onClose: () => void;
+  onSettingsUpdated?: (settings: WorldSettings) => void;
+}) {
   const [data, setData] = useState<BrainsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const latest = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     const mine = ++latest.current;
     try {
       const next = await api.brains(worldId);
-      if (mine === latest.current) setData(next);
-      setLoadError(null);
+      if (mounted.current && mine === latest.current) {
+        setData(next);
+        setLoadError(null);
+      }
     } catch (e) {
-      setLoadError((e as Error).message);
+      if (mounted.current && mine === latest.current) setLoadError((e as Error).message);
     }
   }, [worldId]);
 
@@ -55,7 +78,6 @@ export function WorldBrainsDialog({ worldId, onClose }: { worldId: string; onClo
 
   return (
     <BrainsModal
-      key={data ? 'ready' : 'loading'}
       title="Brains and spending"
       intro="Who thinks with which AI, and what each person has used so far. A change takes effect the next time that person decides something."
       people={rows}
@@ -67,10 +89,11 @@ export function WorldBrainsDialog({ worldId, onClose }: { worldId: string; onClo
       onApply={async (ids, brain) => {
         const next = await api.setBrains(worldId, { agentIds: ids, brain });
         latest.current++;
-        setData(next);
+        if (mounted.current) setData(next);
       }}
       onApplyDefault={async (brain) => {
-        await api.setDefaultBrain(worldId, brain, false);
+        const settings = await api.setDefaultBrain(worldId, brain, false);
+        onSettingsUpdated?.(settings);
         await refresh();
       }}
       primaryLabel="Done"

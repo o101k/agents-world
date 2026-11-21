@@ -155,7 +155,7 @@ describe('farming', () => {
     const field = addField(s, 'a1');
     s.resources[field.id] = { amount: 10, max: 14, regenPerDay: 6, item: 'wheat' };
     const owner = s.agents.find((x) => x.id === 'a1')!;
-    const thief = s.agents.find((x) => x.id === 'a2')!;
+    const thief = s.agents.find((x) => x.id === 'a3')!;
     thief.needs = { food: 100, water: 100, energy: 100, warmth: 100 };
     thief.x = owner.x + 1;
     thief.y = owner.y;
@@ -164,7 +164,7 @@ describe('farming', () => {
     const before = owner.people[thief.id]?.trust ?? 0;
     runUntil(
       s,
-      'a2',
+      'a3',
       [{ type: 'gather', objectId: field.id }],
       () => thief.recent.some((m) => m.text.includes('from')),
       400,
@@ -174,6 +174,84 @@ describe('farming', () => {
     ).toBe(true);
     expect(owner.people[thief.id]!.trust).toBeLessThan(before);
     expect(thief.recent.some((m) => m.text.includes('field'))).toBe(true);
+  });
+
+  it('housemates and active contracted workers may harvest an owned field without penalty', () => {
+    const s = fresh();
+    placeNearMarket(s, 'a1');
+    const field = addField(s, 'a1');
+    s.resources[field.id] = { amount: 12, max: 14, regenPerDay: 6, item: 'wheat' };
+    const owner = s.agents.find((x) => x.id === 'a1')!;
+    const housemate = s.agents.find((x) => x.id === 'a2')!;
+    const worker = s.agents.find((x) => x.id === 'a3')!;
+    housemate.x = owner.x + 1;
+    housemate.y = owner.y;
+    housemate.indoorsId = null;
+    worker.x = owner.x - 1;
+    worker.y = owner.y;
+    worker.indoorsId = null;
+    s.contracts.push({
+      id: 'j1',
+      employer: owner.id,
+      worker: worker.id,
+      wage: 5,
+      startTick: s.tick,
+      endTick: s.tick + 1000,
+      lastPaidDay: 0,
+    });
+    const trustHousemate = owner.people[housemate.id]?.trust ?? 0;
+    const trustWorker = owner.people[worker.id]?.trust ?? 0;
+    runUntil(
+      s,
+      housemate.id,
+      [{ type: 'gather', objectId: field.id }],
+      () => (housemate.inventory.wheat ?? 0) > 0,
+      400,
+    );
+    runUntil(
+      s,
+      worker.id,
+      [{ type: 'gather', objectId: field.id }],
+      () => (worker.inventory.wheat ?? 0) > 0,
+      400,
+    );
+    expect(owner.people[housemate.id]?.trust ?? 0).toBe(trustHousemate);
+    expect(owner.people[worker.id]?.trust ?? 0).toBe(trustWorker);
+    expect(owner.recent.some((m) => m.text.includes('from my field'))).toBe(false);
+  });
+
+  it('clear_field delays clearing trees and granting wood until the agent arrives at the plot', () => {
+    const s = fresh();
+    placeNearMarket(s, 'a1');
+    const a = s.agents.find((x) => x.id === 'a1')!;
+    a.inventory = {};
+    const home = s.map.objects.find((o) => o.id === a.homeId)!;
+    const spot = findFreePlot(s, { x: home.x, y: home.y }, 4, 3, false)!;
+    // Place a tree on the plot so clearing it yields wood.
+    const treeId = 'tree-test-delay';
+    s.map.objects.push({ id: treeId, kind: 'tree', x: spot.x, y: spot.y, w: 1, h: 1 });
+    invalidateMapCaches(s.map);
+    // Start clearing from far away: on tick 1 the agent begins walking, tree & wood untouched.
+    step(s, [
+      {
+        kind: 'decision',
+        agentId: a.id,
+        decision: { thought: '', goal: '', plan: [{ type: 'clear_field' }] },
+      },
+    ]);
+    expect(a.action?.type).toBe('walk');
+    expect(s.map.objects.some((o) => o.id === treeId)).toBe(true);
+    expect(a.inventory.wood ?? 0).toBe(0);
+    // Once the agent reaches the plot and begins the clear_field task, the tree is cleared and wood granted.
+    runUntil(
+      s,
+      a.id,
+      [{ type: 'clear_field' }],
+      () => a.action?.type === 'task' && a.action.task === 'clear_field',
+      400,
+    );
+    expect(s.map.objects.some((o) => o.id === treeId)).toBe(false);
+    expect(a.inventory.wood ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it('a child cannot clear land', () => {

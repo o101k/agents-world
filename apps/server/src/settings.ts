@@ -1,5 +1,17 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 import {
   AGY_PLAN_DEFAULT_MODEL,
   AgyPlanProvider,
@@ -18,6 +30,7 @@ import {
   type ClaudeCliStatus,
 } from '@aw/brain';
 import type { ModelPrice, ProviderStatus, ProviderUpdate, SettingsResponse } from '@aw/shared';
+import { ValidationError } from './worlds/worldManager.ts';
 
 type ProviderKey = ProviderStatus['id'];
 
@@ -55,6 +68,46 @@ const DEFAULT_MODELS: Record<ProviderKey, string> = {
   agy_plan: AGY_PLAN_DEFAULT_MODEL,
 };
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const ALLOWED_CLI_BASENAMES: Record<'claude_plan' | 'agy_plan', Set<string>> = {
+  claude_plan: new Set(['claude', 'claude.exe', 'claude.cmd']),
+  agy_plan: new Set(['agy', 'agy.exe', 'agy.cmd']),
+};
+
+function isLocalUrl(url: string | null): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return LOCAL_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function validateCliPath(cliPath: string, id: 'claude_plan' | 'agy_plan'): void {
+  const expected = id === 'agy_plan' ? 'agy' : 'claude';
+  if (!isAbsolute(cliPath)) {
+    throw new ValidationError('CLI path must be an absolute path.');
+  }
+  if (!ALLOWED_CLI_BASENAMES[id].has(basename(cliPath).toLowerCase())) {
+    throw new ValidationError(`CLI executable must be named "${expected}".`);
+  }
+  let st;
+  try {
+    st = statSync(cliPath);
+  } catch {
+    throw new ValidationError('CLI path does not exist.');
+  }
+  if (!st.isFile()) {
+    throw new ValidationError('CLI path must point to a regular file.');
+  }
+  try {
+    accessSync(cliPath, constants.X_OK);
+  } catch {
+    throw new ValidationError('CLI path is not executable.');
+  }
+}
 
 /**
  * API keys live in <dataDir>/secrets.json (readable only by you) or environment variables; they are
@@ -74,6 +127,7 @@ export class SettingsStore {
     readonly dataDir: string,
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.secretsPath = join(dataDir, 'secrets.json');
     this.settingsPath = join(dataDir, 'settings.json');
     this.secrets = readJson<Secrets>(this.secretsPath, { apiKeys: {} });
@@ -98,6 +152,7 @@ export class SettingsStore {
   }
 
   private baseUrl(id: ProviderKey): string | null {
+    if (id === 'openai') return null;
     if (id === 'openai_compatible') return this.settings.baseUrls[id] || DEFAULT_BASE_URL;
     return this.settings.baseUrls[id] || null;
   }
@@ -167,14 +222,13 @@ export class SettingsStore {
         };
       const { key, source } = this.key(id);
       // A local server (Ollama, LM Studio) needs no key; a base URL on localhost counts as configured.
-      const local =
-        id === 'openai_compatible' && /\/\/(localhost|127\.0\.0\.1)/.test(this.baseUrl(id) ?? '');
+      const local = id === 'openai_compatible' && isLocalUrl(this.baseUrl(id));
       return {
         id,
         kind: 'api',
         label: LABELS[id],
         configured: Boolean(key) || local,
-        keyHint: key ? `${key.slice(0, 3)}…${key.slice(-4)}` : null,
+        keyHint: key ? (key.length <= 10 ? '••••' : `${key.slice(0, 3)}…${key.slice(-4)}`) : null,
         keySource: source,
         baseUrl: this.baseUrl(id),
         defaultModel: this.defaultModel(id),
@@ -184,26 +238,39 @@ export class SettingsStore {
   }
 
   updateProvider(id: ProviderKey, update: ProviderUpdate): void {
+    // Validate settings fields before writing secrets or mutating state.
+    const trimmedBaseUrl = update.baseUrl !== undefined ? update.baseUrl.trim() : undefined;
+    if (trimmedBaseUrl !== undefined && id === 'openai' && trimmedBaseUrl) {
+      throw new ValidationError(
+        'Custom base URL is not allowed for OpenAI; use OpenAI-compatible for custom endpoints.',
+      );
+    }
+    const trimmedCliPath = update.cliPath !== undefined ? update.cliPath.trim() : undefined;
+    if (trimmedCliPath !== undefined) {
+      if (id !== 'claude_plan' && id !== 'agy_plan') {
+        throw new ValidationError('CLI path can only be set for subscription providers.');
+      }
+      if (trimmedCliPath) validateCliPath(trimmedCliPath, id);
+    }
+
     // Subscription providers use their CLI's own login, never an API key.
     if (update.apiKey !== undefined && id !== 'claude_plan' && id !== 'agy_plan') {
       if (update.apiKey.trim()) this.secrets.apiKeys[id] = update.apiKey.trim();
       else delete this.secrets.apiKeys[id];
-      writeFileSync(this.secretsPath, JSON.stringify(this.secrets, null, 2), { mode: 0o600 });
-      chmodSync(this.secretsPath, 0o600);
+      writeJsonAtomic(this.secretsPath, this.secrets, 0o600);
     }
-    if (update.baseUrl !== undefined) {
-      if (update.baseUrl.trim()) this.settings.baseUrls[id] = update.baseUrl.trim();
+    if (trimmedBaseUrl !== undefined) {
+      if (trimmedBaseUrl) this.settings.baseUrls[id] = trimmedBaseUrl;
       else delete this.settings.baseUrls[id];
     }
     if (update.defaultModel !== undefined)
       this.settings.defaultModels[id] = update.defaultModel.trim();
-    if (update.cliPath !== undefined) {
-      const path = update.cliPath.trim();
+    if (trimmedCliPath !== undefined) {
       if (id === 'agy_plan') {
-        if (path) this.settings.agyCliPath = path;
+        if (trimmedCliPath) this.settings.agyCliPath = trimmedCliPath;
         else delete this.settings.agyCliPath;
       } else {
-        if (path) this.settings.claudeCliPath = path;
+        if (trimmedCliPath) this.settings.claudeCliPath = trimmedCliPath;
         else delete this.settings.claudeCliPath;
       }
     }
@@ -246,7 +313,23 @@ export class SettingsStore {
   }
 
   private saveSettings(): void {
-    writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2));
+    writeJsonAtomic(this.settingsPath, this.settings);
+  }
+}
+
+function writeJsonAtomic(path: string, data: unknown, mode?: number): void {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2), mode !== undefined ? { mode } : undefined);
+    if (mode !== undefined) chmodSync(tmp, mode);
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // ignore cleanup error
+    }
+    throw err;
   }
 }
 
