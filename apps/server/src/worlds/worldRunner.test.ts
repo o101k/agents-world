@@ -224,6 +224,33 @@ describe('Claude subscription limit', () => {
     runner.setRunning(false);
     await wm.closeAll();
   });
+
+  it('auto-resumes agy_plan after 30 minutes when no reset time is given', async () => {
+    const plan = {
+      id: 'agy_plan' as const,
+      decide: async () => {
+        throw new RateLimitError('Quota exhausted');
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([plan]) });
+    const w = await wm.create({ name: 'AgyPlan', seed: 'agyplan', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'agy_plan', model: 'gemini-3.8-flash-low', effort: 'standard' },
+      applyToAll: true,
+    });
+    const before = Date.now();
+    runner.setRunning(true);
+    for (let i = 0; i < 300 && !runner.status().rateLimit; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const status = runner.status();
+    expect(status.running).toBe(false);
+    expect(status.rateLimit?.provider).toBe('agy_plan');
+    expect(status.rateLimit?.resumeAt).toBeGreaterThanOrEqual(before + 29 * 60_000);
+    await wm.closeAll();
+  });
 });
 
 describe('Claude plan costs', () => {

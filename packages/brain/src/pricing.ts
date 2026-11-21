@@ -32,6 +32,11 @@ export const DEFAULT_PRICES: Record<string, ModelPrice> = {
   'gpt-4o-mini': { input: 0.15, output: 0.6, cachedInput: 0.075 },
   o3: { input: 2, output: 8, cachedInput: 0.5 },
   'o4-mini': { input: 1.1, output: 4.4, cachedInput: 0.275 },
+  // Google (Gemini)
+  'gemini-3.8-flash': { input: 0.15, output: 0.6 },
+  'gemini-4-argon': { input: 1.25, output: 10 },
+  'gemini-4-neon': { input: 2.5, output: 15 },
+  'gemini-4-hydrogen': { input: 2.5, output: 15 },
 };
 
 /** Deliberately pessimistic, so unknown models can't sneak past the spending cap. */

@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 import type { DecisionRequest, Perception } from '@aw/shared';
 import { AnthropicProvider } from './anthropic.ts';
 import {
+  AgyPlanProvider,
+  checkAgyCli,
+  findAgyCli,
+  parseAgyModels,
+} from './agyCli.ts';
+import {
   checkClaudeCli,
   ClaudePlanProvider,
   findClaudeCli,
@@ -936,6 +942,208 @@ describe('Claude plan usage', () => {
       costUsd: 0,
       coveredByPlan: true,
     });
+  });
+});
+
+/**
+ * A stand-in for the `agy` command: records how it was called, then answers like
+ * `agy --output-format json --print ...` would (FAKE_MODE: ok | err_with_usage | limit | logged_out).
+ */
+function fakeAgy(): { dir: string; command: string; calls: () => Record<string, unknown>[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-fake-agy-'));
+  const log = join(dir, 'calls.jsonl');
+  const command = join(dir, 'agy');
+  writeFileSync(
+    command,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const mode = process.env.FAKE_MODE || 'ok';
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({
+  args,
+  geminiKey: process.env.GEMINI_API_KEY ?? null,
+  googleKey: process.env.GOOGLE_API_KEY ?? null,
+}) + '\\n');
+if (args[0] === '--version') return console.log('1.5.13');
+if (args[0] === 'models') {
+  if (mode === 'logged_out') {
+    console.error('Not signed in. Please run agy to authenticate.');
+    process.exit(1);
+  }
+  process.stdout.write('\\r⠋ Fetching available models...\\rgemini-3.8-flash-low   Gemini 3.8 Flash (Low)\\ngemini-4-neon-medium   Gemini 4 Neon (Medium)\\n');
+  process.exit(0);
+}
+if (mode === 'limit') {
+  console.log(JSON.stringify({
+    conversation_id: 'c1',
+    status: 'ERROR',
+    response: '',
+    error: 'RESOURCE_EXHAUSTED: usage limit reached|1759780800',
+    finished_reason: 'error',
+    usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 },
+  }));
+  process.exit(1);
+}
+if (mode === 'err_with_usage') {
+  console.log(JSON.stringify({
+    conversation_id: 'c1',
+    status: 'ERROR',
+    response: '',
+    error: 'Model failed after thinking',
+    finished_reason: 'error',
+    usage: { input_tokens: 2000, output_tokens: 50, thinking_tokens: 20, cache_read_tokens: 1000, total_tokens: 2070 },
+  }));
+  process.exit(1);
+}
+const pIdx = args.indexOf('--print');
+const prompt = pIdx >= 0 ? args[pIdx + 1] : '';
+const isGenerate = prompt.includes('Describe this');
+console.log(JSON.stringify({
+  conversation_id: 'c1',
+  status: 'SUCCESS',
+  response: isGenerate ? '{"label":"Baker"}' : '{"thought":"Thirsty.","goal":"Drink","plan":[{"action":"drink"}]}',
+  duration_seconds: 1.2,
+  num_turns: 1,
+  structured_output: isGenerate
+    ? { label: 'Baker' }
+    : { thought: 'Thirsty.', goal: 'Drink', plan: [{ action: 'drink' }] },
+  usage: { input_tokens: 3000, output_tokens: 100, thinking_tokens: 50, cache_read_tokens: 1000, total_tokens: 3150 },
+}));
+`,
+  );
+  chmodSync(command, 0o755);
+  const calls = () =>
+    readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  return { dir, command, calls };
+}
+
+describe('Gemini subscription (Antigravity CLI / agy)', () => {
+  const baseEnv = {
+    PATH: process.env.PATH,
+    GEMINI_API_KEY: 'gm-should-not-be-used',
+    GOOGLE_API_KEY: 'gg-should-not-be-used',
+  };
+
+  it('decides through `agy --print` with schema, effort, stripped keys, and estimated usage', async () => {
+    const fake = fakeAgy();
+    const provider = new AgyPlanProvider(fake.command, 'gemini-3.8-flash-low', baseEnv, () => DEFAULT_PRICES);
+    const p = perception();
+    const res = await provider.decide(request(p), {
+      provider: 'agy_plan',
+      model: '',
+      effort: 'deep',
+    });
+    expect(res.decision.goal).toBe('Drink');
+    expect(res.trace?.model).toBe('gemini-3.8-flash-low');
+    // gemini-3.8-flash: input 0.15/M (2000 uncached + 1000 cached @ 10% = 0.015/M), output 0.6/M (100 + 50 thinking)
+    expect(res.usage?.inputTokens).toBe(3000);
+    expect(res.usage?.outputTokens).toBe(150);
+    expect(res.usage?.cachedInputTokens).toBe(1000);
+    expect(res.usage?.coveredByPlan).toBe(true);
+    expect(res.usage?.costUsd).toBeCloseTo(0.000405, 8);
+
+    const [call] = fake.calls();
+    const args = call!.args as string[];
+    expect(args.slice(0, 2)).toEqual(['--output-format', 'json']);
+    expect(JSON.parse(args[args.indexOf('--json-schema') + 1]!)).toHaveProperty('properties.plan');
+    expect(args[args.indexOf('--model') + 1]).toBe('gemini-3.8-flash-low');
+    expect(args).toContain('--disable-slash-commands');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    const pIdx = args.indexOf('--print');
+    expect(pIdx).toBeGreaterThan(-1);
+    expect(args[pIdx + 1]).toContain(systemPrompt(p));
+    expect(args[pIdx + 1]).toContain(userPrompt(p));
+    expect(call!.geminiKey).toBeNull();
+    expect(call!.googleKey).toBeNull();
+  });
+
+  it('supports free-form generate calls', async () => {
+    const fake = fakeAgy();
+    const provider = new AgyPlanProvider(fake.command, 'gemini-3.8-flash-low', baseEnv, () => DEFAULT_PRICES);
+    const out = await provider.generate({
+      model: 'gemini-4-neon-medium',
+      system: 'Describe this person.',
+      user: 'A baker.',
+      toolName: 'person',
+      toolDescription: 'Describe',
+      schema: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] },
+      maxTokens: 200,
+    });
+    expect(out.output).toEqual({ label: 'Baker' });
+    expect(out.model).toBe('gemini-4-neon-medium');
+    expect(out.usage?.coveredByPlan).toBe(true);
+  });
+
+  it('keeps the tokens and cost of a failed call that used tokens', async () => {
+    const fake = fakeAgy();
+    const provider = new AgyPlanProvider(
+      fake.command,
+      'gemini-3.8-flash-low',
+      { ...baseEnv, FAKE_MODE: 'err_with_usage' },
+      () => DEFAULT_PRICES,
+    );
+    const router = new BrainRouter([provider]);
+    const out = await router.decide(request(perception()), {
+      provider: 'agy_plan',
+      model: '',
+      effort: 'frugal',
+    });
+    expect(out.result?.decision.goal).toBe('Pause');
+    expect(out.error).toContain('Model failed after thinking');
+    expect(out.result?.usage?.inputTokens).toBe(2000);
+    expect(out.result?.usage?.outputTokens).toBe(70);
+    expect(out.result?.usage?.coveredByPlan).toBe(true);
+  });
+
+  it('reports a used-up plan limit to the router with its reset time', async () => {
+    const fake = fakeAgy();
+    const provider = new AgyPlanProvider(
+      fake.command,
+      'gemini-3.8-flash-low',
+      { ...baseEnv, FAKE_MODE: 'limit' },
+      () => DEFAULT_PRICES,
+    );
+    const router = new BrainRouter([provider]);
+    const out = await router.decide(request(perception()), {
+      provider: 'agy_plan',
+      model: '',
+      effort: 'standard',
+    });
+    expect(out.result).toBeNull();
+    expect(out.limit?.resetsAt).toBe(1759780800_000);
+    expect(out.limit?.limit).toBe('plan usage limit');
+  });
+
+  it('checks that agy is installed, signed in, and lists models cleanly', async () => {
+    const fake = fakeAgy();
+    const ready = await checkAgyCli(fake.command, baseEnv);
+    expect(ready.usesPlan).toBe(true);
+    expect(ready.version).toBe('1.5.13');
+    expect(ready.models).toEqual([
+      { id: 'gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (Low)' },
+      { id: 'gemini-4-neon-medium', label: 'Gemini 4 Neon (Medium)' },
+    ]);
+
+    const out = await checkAgyCli(fake.command, { ...baseEnv, FAKE_MODE: 'logged_out' });
+    expect(out.loggedIn).toBe(false);
+    expect(out.usesPlan).toBe(false);
+    expect(out.message).toMatch(/not signed in/i);
+
+    expect((await checkAgyCli(null, baseEnv)).message).toMatch(/not installed/);
+    expect(findAgyCli({ PATH: fake.dir })).toBe(fake.command);
+    expect(findAgyCli({})).toBeNull();
+
+    expect(
+      parseAgyModels(
+        '\r\x1b[36m⠋ Fetching...\x1b[0m\rgemini-4-neon-high   Gemini 4 Neon (High)\r\ngemini-3.8-flash-low Gemini 3.8 Flash (Low)\r\n',
+      ),
+    ).toEqual([
+      { id: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)' },
+      { id: 'gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (Low)' },
+    ]);
   });
 });
 

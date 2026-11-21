@@ -100,6 +100,9 @@ test('observer powers: spawn a person and set up AI settings', async ({ page }) 
   await expect(page.locator('.provider-card', { hasText: 'Claude subscription' })).toContainText(
     'Not set up',
   );
+  await expect(page.locator('.provider-card', { hasText: 'Gemini subscription' })).toContainText(
+    'Not set up',
+  );
   await page.getByRole('button', { name: 'Close' }).click();
 
   await createWorld(page, 'Spawn Village');

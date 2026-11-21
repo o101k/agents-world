@@ -162,8 +162,9 @@ const CONCURRENCY: Record<ProviderId, number> = {
   anthropic: 6,
   openai: 6,
   openai_compatible: 2,
-  // Each call starts a `claude` process, and a subscription is for one person's use.
+  // Each call starts a CLI process, and a subscription is for one person's use.
   claude_plan: 3,
+  agy_plan: 3,
 };
 
 export class BrainRouter {

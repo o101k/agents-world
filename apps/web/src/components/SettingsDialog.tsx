@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ModelPrice, ProviderStatus } from '@aw/shared';
 import { api } from '../api.ts';
-import { PLAN_MODELS } from '../planModels.ts';
+import { planModelsFor } from '../planModels.ts';
 import { useSettings } from '../settingsStore.ts';
 import { useDialog } from './useDialog.ts';
 
@@ -46,9 +46,9 @@ export function SettingsDialog() {
           </button>
         </div>
         <p className="muted small">
-          Use your Claude subscription, or API keys. Keys are stored only on this computer
-          {settings?.dataDir ? ` (${settings.dataDir}/secrets.json)` : ''} and are never sent to the
-          browser. Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+          Use your Claude or Gemini (<code>agy</code>) subscription, or API keys. Keys are stored
+          only on this computer{settings?.dataDir ? ` (${settings.dataDir}/secrets.json)` : ''} and
+          are never sent to the browser. Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY,
           OPENAI_COMPATIBLE_API_KEY) also work.
         </p>
         {error && (
@@ -76,7 +76,7 @@ export function SettingsDialog() {
   );
 }
 
-/** The Claude subscription: set up by signing in to Claude Code, so there's no key here. */
+/** Subscription plans: set up by signing in to the local CLI (`claude` or `agy`), so there's no key here. */
 function PlanCard({
   provider,
   onSaved,
@@ -84,6 +84,9 @@ function PlanCard({
   provider: ProviderStatus;
   onSaved: (s: Awaited<ReturnType<typeof api.settings>>) => void;
 }) {
+  const isAgy = provider.id === 'agy_plan';
+  const cliName = isAgy ? 'Antigravity CLI' : 'Claude Code';
+  const models = planModelsFor(provider);
   const [model, setModel] = useState(provider.defaultModel);
   const [cliPath, setCliPath] = useState(provider.cliPath ?? '');
   const [howOpen, setHowOpen] = useState(!provider.configured);
@@ -99,7 +102,7 @@ function PlanCard({
   const act = async (fn: () => ReturnType<typeof api.settings>, done: string) => {
     setBusy(true);
     setIsError(false);
-    setStatus('Checking Claude Code…');
+    setStatus(`Checking ${cliName}…`);
     try {
       const next = await fn();
       onSaved(next);
@@ -127,61 +130,116 @@ function PlanCard({
         open={howOpen}
         onToggle={(e) => setHowOpen((e.currentTarget as HTMLDetailsElement).open)}
       >
-        <summary>How to use your Claude subscription</summary>
-        <ol>
-          <li>
-            Install Claude Code on this Mac. In Terminal, run{' '}
-            <code>curl -fsSL https://claude.ai/install.sh | bash</code>
-          </li>
-          <li>
-            Run <code>claude</code> in Terminal once and log in with the Claude account that has
-            your Pro or Max plan. Then you can close it.
-          </li>
-          <li>
-            Press <strong>Check</strong> below. It should say Ready.
-          </li>
-          <li>
-            Choose <strong>Claude subscription</strong> as the provider when you pick brains for a
-            new world, or later with the <strong>🧠 Brains</strong> button (one person or the whole
-            village at once), then pick a model and an effort.
-          </li>
-        </ol>
-        <ul className="muted small">
-          <li>
-            Villagers use your plan’s 5-hour and weekly limits, the same allowance as your own
-            Claude chats and Claude Code. It costs no extra money, but each call’s API-price value
-            (Claude Code’s own estimate) counts toward the world’s spending cap, so raise the cap to
-            let plan villagers run longer.
-          </li>
-          <li>When the limit runs out, time pauses and resumes by itself when the limit resets.</li>
-          <li>
-            Effort: Frugal, Standard and Deep set how much each villager thinks (and Claude’s effort
-            low, medium or high). Haiku with Frugal makes the limits last longest.
-          </li>
-          <li>
-            Agents World never sees your Claude login: it only runs the <code>claude</code> command,
-            which Anthropic allows for your own projects. API keys below remain a separate option.
-          </li>
-        </ul>
+        <summary>
+          {isAgy ? 'How to use your Gemini subscription (agy)' : 'How to use your Claude subscription'}
+        </summary>
+        {isAgy ? (
+          <>
+            <ol>
+              <li>
+                Install the Antigravity CLI (<code>agy</code>) on this Mac so the <code>agy</code>{' '}
+                command is available.
+              </li>
+              <li>
+                Run <code>agy</code> in Terminal once and log in with your Google account. Then you
+                can close it.
+              </li>
+              <li>
+                Press <strong>Check</strong> below. It should say Ready.
+              </li>
+              <li>
+                Choose <strong>Gemini subscription (agy)</strong> as the provider when you pick
+                brains for a new world, or later with the <strong>🧠 Brains</strong> button (one
+                person or the whole village at once), then pick a model and an effort.
+              </li>
+            </ol>
+            <ul className="muted small">
+              <li>
+                Villagers use your Antigravity subscription quota, the same allowance as your own
+                Antigravity sessions. It costs no extra money, but each call’s estimated API-price
+                value counts toward the world’s spending cap, so raise the cap to let plan
+                villagers run longer.
+              </li>
+              <li>
+                When a limit runs out, time pauses and resumes by itself when the limit resets.
+              </li>
+              <li>
+                Effort: Frugal, Standard and Deep set how much each villager thinks (and{' '}
+                <code>agy</code> effort low, medium or high). Gemini 3.8 Flash (Low) with Frugal
+                stretches limits furthest.
+              </li>
+              <li>
+                Agents World never sees your Google login: it only runs the <code>agy</code> command
+                you signed in to yourself. API keys below remain a separate option.
+              </li>
+            </ul>
+          </>
+        ) : (
+          <>
+            <ol>
+              <li>
+                Install Claude Code on this Mac. In Terminal, run{' '}
+                <code>curl -fsSL https://claude.ai/install.sh | bash</code>
+              </li>
+              <li>
+                Run <code>claude</code> in Terminal once and log in with the Claude account that has
+                your Pro or Max plan. Then you can close it.
+              </li>
+              <li>
+                Press <strong>Check</strong> below. It should say Ready.
+              </li>
+              <li>
+                Choose <strong>Claude subscription</strong> as the provider when you pick brains for
+                a new world, or later with the <strong>🧠 Brains</strong> button (one person or the
+                whole village at once), then pick a model and an effort.
+              </li>
+            </ol>
+            <ul className="muted small">
+              <li>
+                Villagers use your plan’s 5-hour and weekly limits, the same allowance as your own
+                Claude chats and Claude Code. It costs no extra money, but each call’s API-price
+                value (Claude Code’s own estimate) counts toward the world’s spending cap, so raise
+                the cap to let plan villagers run longer.
+              </li>
+              <li>
+                When the limit runs out, time pauses and resumes by itself when the limit resets.
+              </li>
+              <li>
+                Effort: Frugal, Standard and Deep set how much each villager thinks (and Claude’s
+                effort low, medium or high). Haiku with Frugal makes the limits last longest.
+              </li>
+              <li>
+                Agents World never sees your Claude login: it only runs the <code>claude</code>{' '}
+                command, which Anthropic allows for your own projects. API keys below remain a
+                separate option.
+              </li>
+            </ul>
+          </>
+        )}
       </details>
       <div className="provider-grid">
         <label>
           Default model
           <select value={model} onChange={(e) => setModel(e.target.value)}>
-            {PLAN_MODELS.map((m) => (
+            {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
             ))}
-            {!PLAN_MODELS.some((m) => m.id === model) && <option value={model}>{model}</option>}
+            {!models.some((m) => m.id === model) && <option value={model}>{model}</option>}
           </select>
         </label>
         <label>
-          Claude Code location (optional)
+          {cliName} location (optional)
           <input
             value={cliPath}
             onChange={(e) => setCliPath(e.target.value)}
-            placeholder={provider.cliPath ?? 'Found automatically, e.g. ~/.local/bin/claude'}
+            placeholder={
+              provider.cliPath ??
+              (isAgy
+                ? 'Found automatically, e.g. ~/.local/bin/agy'
+                : 'Found automatically, e.g. ~/.local/bin/claude')
+            }
           />
         </label>
       </div>
@@ -207,7 +265,7 @@ function PlanCard({
           type="button"
           className="btn btn-small"
           disabled={busy}
-          onClick={() => void act(api.checkClaudePlan, 'Ready.')}
+          onClick={() => void act(() => api.checkPlan(provider.id as 'claude_plan' | 'agy_plan'), 'Ready.')}
         >
           Check
         </button>

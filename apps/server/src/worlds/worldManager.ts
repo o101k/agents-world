@@ -294,6 +294,7 @@ export class WorldManager {
       'openai',
       'openai_compatible',
       'claude_plan',
+      'agy_plan',
     ];
     const provider = order.find((p) => this.brains.has(p));
     if (!provider) return { cast, spentUsd: 0, planUsd: 0 };

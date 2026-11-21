@@ -30,8 +30,9 @@ export default defineConfig({
       AGENTS_WORLD_HOME: dataDir,
       AW_NO_OPEN: '1',
       AW_PORT: String(PORT),
-      // Never reach a real Claude subscription from tests, even where Claude Code is installed.
+      // Never reach real subscriptions from tests, even where the CLIs are installed.
       AW_CLAUDE_CLI: 'off',
+      AW_AGY_CLI: 'off',
     },
   },
 });

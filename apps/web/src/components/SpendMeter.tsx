@@ -90,7 +90,7 @@ export function SpendMeter({ worldId }: { worldId: string }) {
       className={`spend-meter linkish ${capReached ? 'is-capped' : ''}`}
       title={
         planned
-          ? `AI spending in this world vs its cap, including ${formatUsd(planUsd)} of Claude plan use priced at API rates (your plan covers it, so it isn’t billed). Click to change the cap.`
+          ? `AI spending in this world vs its cap, including ${formatUsd(planUsd)} of subscription plan use priced at API rates (your plan covers it, so it isn’t billed). Click to change the cap.`
           : 'AI spending in this world vs its cap. Click to change the cap.'
       }
       onClick={() => {

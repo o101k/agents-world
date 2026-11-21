@@ -48,6 +48,7 @@ const server = spawn('npm', ['run', 'start', '-w', '@aw/server'], {
     AW_NO_OPEN: '1',
     AW_PORT: String(PORT),
     AW_CLAUDE_CLI: 'off',
+    AW_AGY_CLI: 'off',
   },
   stdio: ['ignore', 'ignore', 'inherit'],
   detached: true,

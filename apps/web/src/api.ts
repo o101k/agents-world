@@ -121,6 +121,8 @@ export const api = {
     request<SettingsResponse>('GET', '/api/settings', undefined, signal),
   updateProvider: (provider: string, update: ProviderUpdate) =>
     request<SettingsResponse>('PUT', `/api/settings/providers/${enc(provider)}`, update),
+  checkPlan: (provider: 'claude_plan' | 'agy_plan') =>
+    request<SettingsResponse>('POST', `/api/settings/providers/${enc(provider)}/check`),
   checkClaudePlan: () =>
     request<SettingsResponse>('POST', '/api/settings/providers/claude_plan/check'),
   updatePrices: (prices: Record<string, ModelPrice | null>) =>
