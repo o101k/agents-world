@@ -11,10 +11,11 @@ export function reply(_p: Perception, _roll: number): Decision | null {
 
 /** Now and then, choose to do this feature's work. null = not now. */
 export function plan(p: Perception, roll: number): Decision | null {
-  const mine = p.knownPlaces.filter((k) => k.kind === 'field' && k.owner === 'you');
+  const allMine = p.knownPlaces.filter((k) => k.kind === 'field' && k.owner === 'you');
+  const mine = allMine.filter((k) => !k.burnt && !k.unreachable);
   const unfinished = mine.find((k) => k.progress !== undefined);
   if (unfinished) {
-    if (roll < 0.5) {
+    if (p.canDo.includes('clear_field') && roll < 0.5) {
       return {
         thought: 'My field is not cleared yet. I should keep clearing it.',
         goal: 'Clear my field',
@@ -26,7 +27,7 @@ export function plan(p: Perception, roll: number): Decision | null {
 
   const ready = mine.find((k) => k.progress === undefined && !k.produce);
   const inv = p.self.inventory;
-  if (ready) {
+  if (ready && p.canDo.includes('sow')) {
     const item = (inv.wheat ?? 0) >= 2 ? 'wheat' : (inv.vegetables ?? 0) >= 2 ? 'vegetables' : null;
     if (item) {
       return {
@@ -37,7 +38,12 @@ export function plan(p: Perception, roll: number): Decision | null {
     }
   }
 
-  if (mine.length === 0 && p.self.occupation.toLowerCase().includes('farm') && roll < 0.08) {
+  if (
+    allMine.length === 0 &&
+    p.canDo.includes('clear_field') &&
+    p.self.occupation.toLowerCase().includes('farm') &&
+    roll < 0.08
+  ) {
     return {
       thought: 'I need land of my own. I will clear a field.',
       goal: 'Clear a field',

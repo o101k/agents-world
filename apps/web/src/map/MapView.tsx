@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { WorldMap } from '@aw/shared';
 import { useWorld } from '../worldStore.ts';
 import { WorldRenderer } from './renderer.ts';
@@ -13,6 +13,7 @@ const PAN_STEP = 96;
 /** Hosts the PixiJS renderer and feeds it live world state from the store (outside React renders). */
 export function MapView({ map, rendererRef }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -22,22 +23,30 @@ export function MapView({ map, rendererRef }: Props) {
     renderer.onFollowBroken = () => useWorld.getState().setFollow(null);
     rendererRef.current = renderer;
     let cancelled = false;
-    void renderer.init(host).then(() => {
-      if (cancelled) return;
-      const s = useWorld.getState();
-      renderer.setResources(s.resources);
-      renderer.setAgents(s.agents);
-      renderer.setClock(s.tick);
-      renderer.setFollow(s.followId);
-      renderer.setConditions(s.conditions);
-      if (s.calendar) renderer.setSeason(s.calendar.season);
-    });
+    renderer
+      .init(host)
+      .then(() => {
+        if (cancelled) return;
+        setInitError(null);
+        const s = useWorld.getState();
+        const src = s.replay?.view ?? s;
+        renderer.setResources(src.resources, true);
+        renderer.setAgents(src.agents);
+        renderer.setClock(src.tick);
+        renderer.setFollow(s.followId);
+        renderer.setConditions(src.conditions);
+        if (src.calendar) renderer.setSeason(src.calendar.season);
+        if (s.selection) renderer.select(s.selection);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setInitError(err.message || 'Could not initialize the map renderer.');
+      });
     const unsub = useWorld.subscribe((s, prev) => {
       const past = s.replay?.view;
       if (past) {
         // Replay: show the past moment; live updates wait.
         if (past !== prev.replay?.view) {
-          renderer.setResources(past.resources);
+          renderer.setResources(past.resources, true);
           renderer.setAgents(past.agents);
           renderer.setClock(past.tick);
           renderer.setConditions(past.conditions);
@@ -45,7 +54,7 @@ export function MapView({ map, rendererRef }: Props) {
         }
       } else if (prev.replay?.view) {
         // Back to live: catch up with everything at once.
-        renderer.setResources(s.resources);
+        renderer.setResources(s.resources, true);
         renderer.setAgents(s.agents);
         renderer.setClock(s.tick);
         renderer.setConditions(s.conditions);
@@ -77,11 +86,17 @@ export function MapView({ map, rendererRef }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"]')) return;
       const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+      )
+        return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const r = rendererRef.current;
       if (!r) return;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const actions: Record<string, () => void> = {
         ArrowLeft: () => r.panBy(-PAN_STEP, 0),
         ArrowRight: () => r.panBy(PAN_STEP, 0),
@@ -98,7 +113,7 @@ export function MapView({ map, rendererRef }: Props) {
         '0': () => r.fit(),
         Escape: () => r.clearSelection(),
       };
-      const action = actions[e.key];
+      const action = actions[key];
       if (action) {
         e.preventDefault();
         action();
@@ -108,5 +123,14 @@ export function MapView({ map, rendererRef }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [rendererRef]);
 
-  return <div className="map-host" ref={hostRef} data-testid="map" />;
+  return (
+    <div className="map-host" ref={hostRef} data-testid="map">
+      {initError && (
+        <div className="splash" role="alert">
+          <div className="selection-title">Map unavailable</div>
+          <p className="muted">{initError}</p>
+        </div>
+      )}
+    </div>
+  );
 }

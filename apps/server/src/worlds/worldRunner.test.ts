@@ -545,3 +545,159 @@ describe('what each brain has used', () => {
     file.close();
   });
 });
+
+describe('WorldRunner concurrency and edge-case hardening', () => {
+  it('serializes concurrent paused submit and advance calls without overlapping tickOnce', async () => {
+    let activeBatches = 0;
+    let maxConcurrentTicks = 0;
+    let currentTickSeen = -1;
+    const slowBrain = {
+      id: 'anthropic' as const,
+      decide: async (req: DecisionRequest) => {
+        if (req.tick !== currentTickSeen) {
+          currentTickSeen = req.tick;
+          activeBatches++;
+          maxConcurrentTicks = Math.max(maxConcurrentTicks, activeBatches);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+        if (req.tick === currentTickSeen) activeBatches = Math.max(0, activeBatches - 1);
+        return {
+          decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 5 }] },
+          usage: { inputTokens: 10, outputTokens: 10, costUsd: 0 },
+        };
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([slowBrain]) });
+    const w = await wm.create({ name: 'Serial', seed: 'serial', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_brain',
+      agentId: 'a1',
+      brain: { provider: 'anthropic', model: 'm', effort: 'standard' },
+    });
+    const startTick = runner.state.tick;
+    await Promise.all([
+      runner.advance(3),
+      runner.submit({ kind: 'set_days_per_year', value: 10 }),
+      runner.advance(2),
+    ]);
+    expect(runner.state.tick).toBe(startTick + 6);
+    expect(maxConcurrentTicks).toBeLessThanOrEqual(1);
+    await wm.closeAll();
+  });
+
+  it('does not freeze when switching speed from 0 (unlimited) to a finite speed', async () => {
+    const wm = new WorldManager(dir);
+    const w = await wm.create({ name: 'Speed', seed: 'speed', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    await new Promise((r) => setTimeout(r, 60));
+    runner.setSpeed(30);
+    const afterSwitch = runner.state.tick;
+    await new Promise((r) => setTimeout(r, 250));
+    runner.setRunning(false);
+    expect(runner.state.tick).toBeGreaterThan(afterSwitch);
+    await wm.closeAll();
+  });
+
+  it('does not auto-resume when rate-limited while paused, and stops advance() when cap is reached', async () => {
+    let mode: 'limit' | 'cost' = 'limit';
+    const provider = {
+      id: 'openai' as const,
+      decide: async () => {
+        if (mode === 'limit') {
+          throw new RateLimitError('Limited', { status: 429, resetsAt: Date.now() + 50 });
+        }
+        return {
+          decision: { thought: 'ok', goal: 'rest', plan: [{ type: 'rest' as const, minutes: 5 }] },
+          usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.1 },
+        };
+      },
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([provider]) });
+    const w = await wm.create({ name: 'PausedLimit', seed: 'pl', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'openai', model: 'gpt-5-mini', effort: 'standard' },
+      applyToAll: true,
+    });
+
+    // Hit rate limit during paused advance(): must remain paused even after resetsAt passes.
+    await runner.advance(5);
+    expect(runner.status().rateLimit).not.toBeNull();
+    expect(runner.status().running).toBe(false);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(runner.status().running).toBe(false);
+
+    // Clear rate limit by switching mode and verifying cap stops advance() cleanly.
+    mode = 'cost';
+    runner.setCap(0.05);
+    runner.setRunning(true);
+    runner.setRunning(false);
+    const beforeCapTick = runner.state.tick;
+    await runner.advance(50);
+    expect(runner.status().capReached).toBe(true);
+    expect(runner.state.tick).toBeLessThan(beforeCapTick + 50);
+
+    // Non-finite or negative spend is ignored.
+    const spentBefore = runner.status().spentUsd;
+    runner.addSpend(Number.NaN);
+    runner.addSpend(Number.POSITIVE_INFINITY);
+    runner.addSpend(-5);
+    expect(runner.status().spentUsd).toBe(spentBefore);
+    await wm.closeAll();
+  });
+
+  it('aborts in-flight decisions on stop() and resets Replayer state on error', async () => {
+    let observedAbort = false;
+    const hangingProvider = {
+      id: 'anthropic' as const,
+      decide: async (_req: DecisionRequest, _cfg: unknown, signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            observedAbort = true;
+            reject(new Error('aborted'));
+          });
+        }),
+    };
+    const wm = new WorldManager(dir, { brains: new BrainRouter([hangingProvider]) });
+    const w = await wm.create({ name: 'Abort', seed: 'abort', mapSize: 'small' });
+    await wm.activate(w.id);
+    const runner = wm.active!;
+    await runner.submit({
+      kind: 'set_default_brain',
+      brain: { provider: 'anthropic', model: 'm', effort: 'standard' },
+      applyToAll: true,
+    });
+    const tickBefore = runner.state.tick;
+    runner.setSpeed(0);
+    runner.setRunning(true);
+    await new Promise((r) => setTimeout(r, 30));
+    await wm.closeAll();
+    expect(observedAbort).toBe(true);
+    expect(runner.state.tick).toBeLessThanOrEqual(tickBefore + 1);
+
+    // Verify Replayer recovers after a mid-replay error.
+    const file = WorldFile.open(join(dir, 'worlds', `${w.id}.sqlite`));
+    const replayer = new Replayer(file);
+    const origRead = file.readInputsBetween.bind(file);
+    let failOnce = true;
+    file.readInputsBetween = (...args) => {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error('simulated read failure');
+      }
+      return origRead(...args);
+    };
+    const first = replayer.at(file.firstSnapshotTick());
+    expect(first.tick).toBe(file.firstSnapshotTick());
+    expect(() => replayer.at(first.tick + 5)).toThrow(/simulated read failure/);
+    expect(replayer.at(first.tick + 5).tick).toBe(first.tick + 5);
+    file.close();
+  });
+});

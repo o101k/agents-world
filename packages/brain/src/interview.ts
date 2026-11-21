@@ -85,7 +85,10 @@ function clipWords(text: string, max: number): string {
 
 /** "a (34 times), b (8) and c (5)". */
 function tally(items: { label: string; count: number }[]): string {
-  const parts = items.map((it, i) => `${it.label} (${i === 0 ? `${it.count} times` : it.count})`);
+  const parts = items.map(
+    (it, i) =>
+      `${it.label} (${i === 0 ? `${it.count} ${it.count === 1 ? 'time' : 'times'}` : it.count})`,
+  );
   if (parts.length <= 1) return parts.join('');
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
@@ -201,7 +204,9 @@ export function mockInterview(digest: PersonDigest, question: string): string {
   const period = digest.period;
   const doing = (() => {
     const lead = period.wholeLife
-      ? `Over ${her} whole life so far`
+      ? digest.alive
+        ? `Over ${her} whole life so far`
+        : `Over ${her} whole life`
       : `From ${formatClock(period.fromTick)} to ${formatClock(period.toTick)}`;
     const top = digest.activity.slice(0, 3);
     const parts = top.length ? [`${lead}, ${name} spent most of ${her} time ${tally(top)}.`] : [];
@@ -368,7 +373,7 @@ export async function askAboutPerson(
   // What a paid call cost is kept with the free summary that answers instead.
   const trace = {
     prompt: `${system}\n\n---\n\n${user}`,
-    response: r.text || (r.output == null ? '' : JSON.stringify(r.output)),
+    response: r.output != null ? JSON.stringify(r.output) : (r.text ?? ''),
     latencyMs: r.latencyMs,
   };
   const withCall = (result: InterviewResult): InterviewResult => {

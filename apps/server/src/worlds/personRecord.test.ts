@@ -151,4 +151,44 @@ describe('buildDigest', () => {
       file.close();
     }
   });
+
+  it('keeps trimming multi-item kinds even when the single biggest kind has only 1 entry', async () => {
+    const wm = new WorldManager(dir);
+    const meta = await wm.create({ name: 'Budget', seed: 'budget', mapSize: 'small' });
+    await wm.activate(meta.id);
+    const runner = wm.active!;
+    const agent = runner.state.agents[0]!;
+    const file = WorldFile.open(join(dir, 'worlds', `${meta.id}.sqlite`));
+    try {
+      const base = runner.state.tick;
+      // 1 very long diary entry (600 chars) + 40 notable events (~280 chars each = ~11,200 chars),
+      // exceeding the frugal character budget (9,000 chars).
+      const events = [
+        {
+          tick: base + 5,
+          kind: 'reflected' as const,
+          actors: [agent.id],
+          text: `${fullName(agent)}'s diary: “${'D'.repeat(590)}”`,
+          importance: 5,
+        },
+        ...Array.from({ length: 40 }, (_, i) => ({
+          tick: base + 10 + i,
+          kind: 'built' as const,
+          actors: [agent.id],
+          text: `Notable event #${i}: ${'E'.repeat(260)}`,
+          importance: 4,
+        })),
+      ];
+      file.appendWorldEvents(events);
+      runner.state.tick = base + 100;
+      const digest = buildDigest(file, runner.state, agent, base, base + 100, 'frugal');
+      const totalChars = digest.entries.reduce((s, e) => s + e.text.length, 0);
+      expect(totalChars).toBeLessThanOrEqual(9_000);
+      expect(digest.entries.some((e) => e.kind === 'diary')).toBe(true);
+      expect(digest.entries.filter((e) => e.kind === 'event').length).toBeLessThan(40);
+    } finally {
+      file.close();
+      await wm.closeAll();
+    }
+  });
 });

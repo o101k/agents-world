@@ -102,6 +102,14 @@ export function encodeMap(map: WorldMap): WireMap {
 }
 
 export function decodeMap(wire: WireMap): WorldMap {
+  if (
+    !Number.isInteger(wire.width) ||
+    !Number.isInteger(wire.height) ||
+    wire.width <= 0 ||
+    wire.height <= 0
+  ) {
+    throw new Error(`Invalid map dimensions: ${wire.width}×${wire.height}`);
+  }
   const tiles = base64ToBytes(wire.tiles);
   if (tiles.length !== wire.width * wire.height) {
     throw new Error(

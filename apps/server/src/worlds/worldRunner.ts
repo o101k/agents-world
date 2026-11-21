@@ -17,6 +17,7 @@ import {
   fullName,
   pendingRequests,
   step,
+  type AgentSpec,
   type TickInput,
   type WorldState,
   resourceAmount,
@@ -52,8 +53,15 @@ export class WorldRunner {
   private running: boolean;
   private speed: number;
   private stopped = false;
+  private closed = false;
+  private stopPromise: Promise<void> | null = null;
   private loopDone: Promise<void> | null = null;
   private wakeLoop: (() => void) | null = null;
+  private readonly abortController = new AbortController();
+
+  /** Serializes tick-advancing and persistence operations so tickOnce() can never run re-entrantly. */
+  private lock: Promise<void> = Promise.resolve();
+  private inExclusive = 0;
 
   /** Inputs for the next tick (already written to the batch log). */
   private pending: TickInput[] = [];
@@ -112,7 +120,7 @@ export class WorldRunner {
 
   status(): RunnerStatus {
     const now = performance.now();
-    this.tickTimes = this.tickTimes.filter((t) => now - t < 1000);
+    this.pruneTickTimes(now);
     return {
       running: this.running,
       speed: this.speed,
@@ -143,11 +151,11 @@ export class WorldRunner {
 
   /** Record spending that happened outside decisions (e.g. drafting a spawned person). */
   addSpend(costUsd: number, coveredByPlan = false): void {
-    const cost = Math.max(0, costUsd);
+    if (!Number.isFinite(costUsd) || costUsd <= 0 || this.closed) return;
     this.meta = {
       ...this.meta,
-      spentUsd: this.meta.spentUsd + cost,
-      planUsd: this.meta.planUsd + (coveredByPlan ? cost : 0),
+      spentUsd: this.meta.spentUsd + costUsd,
+      planUsd: this.meta.planUsd + (coveredByPlan ? costUsd : 0),
     };
     this.file.writeMeta({ spentUsd: this.meta.spentUsd, planUsd: this.meta.planUsd });
     // The spending meter shows it even while paused.
@@ -156,6 +164,7 @@ export class WorldRunner {
   }
 
   setCap(capUsd: number): void {
+    if (!Number.isFinite(capUsd) || this.closed) return;
     this.meta = { ...this.meta, capUsd: Math.max(0, capUsd) };
     this.file.writeMeta({ capUsd: this.meta.capUsd });
     if (this.meta.spentUsd < this.meta.capUsd) this.capReached = false;
@@ -172,13 +181,21 @@ export class WorldRunner {
     this.running = running;
     this.meta = { ...this.meta, running };
     this.file.writeMeta({ running });
-    if (!running) this.saveNow();
+    if (!running) {
+      if (this.inExclusive === 0) this.saveNow();
+      else {
+        void this.runExclusive(() => {
+          if (!this.closed && !this.running) this.saveNow();
+        });
+      }
+    }
     this.wakeLoop?.();
     this.hooks.onStatus?.(this.currentMeta());
     this.emitFrame(true);
   }
 
   setSpeed(speed: number): void {
+    if (!Number.isFinite(speed) || this.closed) return;
     this.speed = Math.max(0, Math.round(speed));
     this.meta = { ...this.meta, speed: this.speed };
     this.file.writeMeta({ speed: this.speed });
@@ -192,41 +209,120 @@ export class WorldRunner {
    * If time is paused, the world advances one tick so the command takes effect now.
    */
   async submit(input: TickInput): Promise<void> {
-    this.enqueue(input);
-    if (!this.running && !this.stopped) {
-      await this.tickOnce();
-      this.flush();
-      this.emitFrame(true);
+    if (this.stopped) return;
+    if (this.running) {
+      this.enqueue(input);
+      return;
     }
+    await this.runExclusive(async () => {
+      if (this.stopped) return;
+      this.enqueue(input);
+      if (!this.running) {
+        await this.tickOnce();
+        this.flush();
+        this.emitFrame(true);
+      }
+    });
+  }
+
+  /**
+   * Queue a spawn_agent input and return the exact agent id it will receive,
+   * avoiding races with concurrent spawns or running ticks.
+   */
+  async spawnAgent(spec: AgentSpec): Promise<string> {
+    if (this.stopped) return `a${this.state.nextAgentNum}`;
+    if (this.running) {
+      const pendingSpawns = this.pending.filter((i) => i.kind === 'spawn_agent').length;
+      const agentId = `a${this.state.nextAgentNum + pendingSpawns}`;
+      this.enqueue({ kind: 'spawn_agent', spec });
+      return agentId;
+    }
+    return this.runExclusive(async () => {
+      if (this.stopped) return `a${this.state.nextAgentNum}`;
+      const pendingSpawns = this.pending.filter((i) => i.kind === 'spawn_agent').length;
+      const expectedId = `a${this.state.nextAgentNum + pendingSpawns}`;
+      const beforeLen = this.state.agents.length;
+      this.enqueue({ kind: 'spawn_agent', spec });
+      if (!this.running) {
+        await this.tickOnce();
+        this.flush();
+        this.emitFrame(true);
+        const added = this.state.agents.slice(beforeLen).find((a) => a.id === expectedId);
+        if (added) return added.id;
+      }
+      return expectedId;
+    });
   }
 
   /** Advance exactly `ticks` ticks while paused (used by tests and the "step" control). */
   async advance(ticks: number): Promise<void> {
     if (this.running || this.stopped) return;
-    for (let i = 0; i < ticks && !this.rateLimit; i++) {
-      await this.tickOnce();
-      if (i % 200 === 199) this.flush();
-    }
-    this.flush();
-    this.emitFrame(true);
+    await this.runExclusive(async () => {
+      if (this.running || this.stopped) return;
+      for (
+        let i = 0;
+        i < ticks && !this.running && !this.stopped && !this.rateLimit && !this.capReached;
+        i++
+      ) {
+        await this.tickOnce();
+        if (i % 200 === 199) this.flush();
+      }
+      this.flush();
+      this.emitFrame(true);
+    });
   }
 
   /** Write everything logged so far (so readers of the file, like replay, see it all). */
   persist(): void {
+    if (this.closed) return;
     this.flush();
   }
 
   /** Stop the loop and write a final snapshot. */
   async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.clearRateLimit();
-    this.wakeLoop?.();
-    await this.loopDone;
-    this.saveNow();
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = (async () => {
+      this.stopped = true;
+      this.abortController.abort();
+      this.clearRateLimit();
+      this.wakeLoop?.();
+      await this.loopDone;
+      await this.runExclusive(() => {
+        if (!this.closed) {
+          this.saveNow();
+          this.closed = true;
+        }
+      });
+    })();
+    return this.stopPromise;
   }
 
   // ------------------------------------------------------------------ internals
+
+  private runExclusive<T>(fn: () => Promise<T> | T): Promise<T> {
+    const run = async () => {
+      this.inExclusive++;
+      try {
+        return await fn();
+      } finally {
+        this.inExclusive--;
+      }
+    };
+    const next = this.lock.then(run, run);
+    this.lock = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private pruneTickTimes(now: number): void {
+    const cutoff = now - 1000;
+    if (this.tickTimes.length === 0 || this.tickTimes[0]! >= cutoff) return;
+    let i = 0;
+    while (i < this.tickTimes.length && this.tickTimes[i]! < cutoff) i++;
+    if (i > 0) this.tickTimes.splice(0, i);
+  }
 
   private enqueue(input: TickInput): void {
     this.pending.push(input);
@@ -237,46 +333,80 @@ export class WorldRunner {
   private async loop(): Promise<void> {
     let last = performance.now();
     let carry = 0;
-    while (!this.stopped) {
-      if (!this.running) {
-        await new Promise<void>((resolve) => (this.wakeLoop = resolve));
+    let lastSpeed = this.speed;
+    try {
+      while (!this.stopped) {
+        if (!this.running) {
+          await new Promise<void>((resolve) => (this.wakeLoop = resolve));
+          this.wakeLoop = null;
+          last = performance.now();
+          carry = 0;
+          lastSpeed = this.speed;
+          continue;
+        }
+        const speed = this.speed;
+        if (speed !== lastSpeed) {
+          carry = 0;
+          lastSpeed = speed;
+        }
+        const now = performance.now();
+        let due: number;
+        if (speed === 0) {
+          due = Number.POSITIVE_INFINITY;
+        } else {
+          carry += ((now - last) * speed) / 1000;
+          carry = Math.min(carry, Math.max(1, speed * 0.25)); // no catch-up bursts after a stall
+          due = Math.floor(carry);
+        }
+        last = now;
+        const sliceStart = performance.now();
+        let done = 0;
+        if (due > 0) {
+          await this.runExclusive(async () => {
+            while (
+              done < due &&
+              this.running &&
+              !this.stopped &&
+              this.speed === speed &&
+              performance.now() - sliceStart < SLICE_MS
+            ) {
+              await this.tickOnce();
+              done++;
+            }
+            this.flush();
+          });
+        } else {
+          await this.runExclusive(() => this.flush());
+        }
+        if (speed !== 0) carry = Math.max(0, carry - done);
+        if (this.speed !== speed) {
+          carry = 0;
+          lastSpeed = this.speed;
+        }
+        const curSpeed = this.speed;
+        const wait = curSpeed === 0 ? 0 : Math.max(4, Math.min(50, 1000 / curSpeed));
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, wait);
+          this.wakeLoop = () => {
+            clearTimeout(t);
+            resolve();
+          };
+        });
         this.wakeLoop = null;
-        last = performance.now();
-        carry = 0;
-        continue;
       }
-      const now = performance.now();
-      let due: number;
-      if (this.speed === 0) {
-        due = Number.POSITIVE_INFINITY;
-      } else {
-        carry += ((now - last) * this.speed) / 1000;
-        carry = Math.min(carry, Math.max(1, this.speed * 0.25)); // no catch-up bursts after a stall
-        due = Math.floor(carry);
+    } catch (err) {
+      console.error(`World runner ${this.meta.id} error:`, err);
+      if (!this.stopped && this.running) {
+        this.running = false;
+        this.meta = { ...this.meta, running: false };
+        try {
+          this.file.writeMeta({ running: false });
+        } catch {
+          // ignore secondary persistence error
+        }
+        this.hooks.onStatus?.(this.currentMeta());
+        this.emitFrame(true);
       }
-      last = now;
-      const sliceStart = performance.now();
-      let done = 0;
-      while (
-        done < due &&
-        this.running &&
-        !this.stopped &&
-        performance.now() - sliceStart < SLICE_MS
-      ) {
-        await this.tickOnce();
-        done++;
-      }
-      if (this.speed !== 0) carry -= done;
-      this.flush();
-      const wait = this.speed === 0 ? 0 : Math.max(4, Math.min(50, 1000 / this.speed));
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, wait);
-        this.wakeLoop = () => {
-          clearTimeout(t);
-          resolve();
-        };
-      });
-      this.wakeLoop = null;
     }
   }
 
@@ -365,10 +495,11 @@ export class WorldRunner {
       importance: 5,
     });
     this.batch.dirty = true;
-    if (this.running) this.setRunning(false);
+    const wasRunning = this.running;
     this.clearRateLimit();
     this.rateLimit = notice;
-    if (resumeAt !== null)
+    if (wasRunning) this.setRunning(false);
+    if (wasRunning && resumeAt !== null && !this.stopped)
       this.limitTimer = setTimeout(
         () => {
           if (this.rateLimit && !this.stopped) this.setRunning(true);
@@ -385,17 +516,22 @@ export class WorldRunner {
   }
 
   private async tickOnce(): Promise<void> {
+    if (this.stopped) return;
     if (this.outstanding.length > 0) {
       if (this.needsPaidCall(this.outstanding) && this.enforceCap()) return;
       // Decisions that hit a rate limit stay outstanding and are asked again when time resumes;
       // the tick doesn't advance without them.
       this.outstanding = await this.resolve(this.outstanding);
+      if (this.stopped) return;
       if (this.outstanding.length > 0) return;
     }
+    if (this.stopped) return;
     const inputs = this.pending;
     this.pending = [];
     const res = step(this.state, inputs);
-    this.tickTimes.push(performance.now());
+    const now = performance.now();
+    this.tickTimes.push(now);
+    this.pruneTickTimes(now);
     this.outstanding = res.requests;
     if (res.events.length) this.batch.events.push(...res.events);
     for (const id of res.changedResources) this.changedResources.add(id);
@@ -411,18 +547,39 @@ export class WorldRunner {
     this.thinking = requests.length;
     if (requests.length > 1 || this.speed <= 20) this.emitFrame(false);
     const byId = new Map(this.state.agents.map((a) => [a.id, a]));
-    const results = await Promise.all(
-      requests.map(async (request) => {
-        const agent = byId.get(request.agentId);
-        const routed = await this.brains.decide(request, agent!.brain, DECISION_TIMEOUT_MS);
-        return { request, routed };
-      }),
-    );
-    const limited: { request: DecisionRequest; routed: (typeof results)[number]['routed'] }[] = [];
-    for (const { request, routed } of results) {
+    let results: ({
+      request: DecisionRequest;
+      routed: Awaited<ReturnType<BrainRouter['decide']>>;
+    } | null)[];
+    try {
+      results = await Promise.all(
+        requests.map(async (request) => {
+          const agent = byId.get(request.agentId);
+          if (!agent) return null;
+          const routed = await this.brains.decide(
+            request,
+            agent.brain,
+            DECISION_TIMEOUT_MS,
+            this.abortController.signal,
+          );
+          return { request, routed };
+        }),
+      );
+    } finally {
+      this.thinking = 0;
+    }
+    if (this.stopped) return requests;
+    const limited: {
+      request: DecisionRequest;
+      routed: Awaited<ReturnType<BrainRouter['decide']>>;
+    }[] = [];
+    for (const entry of results) {
+      if (!entry) continue;
+      const { request, routed } = entry;
       if (routed.limit) limited.push({ request, routed });
       const usage = routed.result?.usage;
-      const cost = usage?.costUsd ?? 0;
+      const rawCost = usage?.costUsd ?? 0;
+      const cost = Number.isFinite(rawCost) && rawCost > 0 ? rawCost : 0;
       const plan = Boolean(usage?.coveredByPlan);
       if (cost > 0)
         this.meta = {
@@ -469,7 +626,6 @@ export class WorldRunner {
         });
       else if (!routed.limit) this.enqueue({ kind: 'decision_timeout', agentId: request.agentId });
     }
-    this.thinking = 0;
     const first = limited[0];
     if (first)
       this.pauseForRateLimit(

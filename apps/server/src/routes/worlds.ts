@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import {
+  AgingRequest,
   AskRequest,
   BrainConfigSchema,
   CapRequest,
   CastPreviewRequest,
   ControlRequest,
+  DefaultBrainRequest,
   EventsQuery,
   ObjectHistoryQuery,
   SetBrainsRequest,
@@ -52,10 +54,17 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
     if (err instanceof ConflictError) return reply.code(409).send({ error: err.message });
     if (err instanceof ValidationError) return reply.code(400).send({ error: err.message });
     app.log.error(err);
-    const status = (err as { statusCode?: number }).statusCode ?? 500;
+    const rawStatus = (err as { statusCode?: unknown }).statusCode;
+    const status =
+      typeof rawStatus === 'number' &&
+      Number.isInteger(rawStatus) &&
+      rawStatus >= 400 &&
+      rawStatus <= 599
+        ? rawStatus
+        : 500;
     return reply
       .code(status)
-      .send({ error: status === 500 ? 'Internal error' : (err as Error).message });
+      .send({ error: status >= 400 && status < 500 ? (err as Error).message : 'Internal error' });
   });
 
   app.get('/api/worlds', async (): Promise<WorldsResponse> => snapshot());
@@ -103,8 +112,11 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
   type AgentParams = { Params: { id: string; agentId: string } };
 
   app.put<AgentParams>('/api/worlds/:id/agents/:agentId/brain', async (req) => {
-    await worlds.setBrain(req.params.id, req.params.agentId, BrainConfigSchema.parse(req.body));
-    return { agent: worlds.agent(req.params.id, req.params.agentId) };
+    const brain = BrainConfigSchema.parse(req.body);
+    await worlds.setBrain(req.params.id, req.params.agentId, brain);
+    return {
+      agent: { ...worlds.agent(req.params.id, req.params.agentId), brain: { ...brain } },
+    };
   });
 
   app.get<AgentParams>(
@@ -124,28 +136,20 @@ export function registerWorldRoutes(app: FastifyInstance, worlds: WorldManager, 
   });
 
   app.put<IdParams>('/api/worlds/:id/default-brain', async (req) => {
-    const body = (req.body ?? {}) as { brain?: unknown; applyToAll?: unknown };
-    await worlds.setDefaultBrain(
-      req.params.id,
-      BrainConfigSchema.parse(body.brain),
-      body.applyToAll === true,
-    );
-    return worlds.view(req.params.id).settings;
+    const { brain, applyToAll } = DefaultBrainRequest.parse(req.body ?? {});
+    await worlds.setDefaultBrain(req.params.id, brain, applyToAll);
+    return { ...worlds.view(req.params.id).settings, defaultBrain: { ...brain } };
   });
 
   app.put<IdParams>('/api/worlds/:id/cap', async (req) => {
     worlds.setCap(req.params.id, CapRequest.parse(req.body).capUsd);
-    notifyChanged();
     return { runner: worlds.active!.status() };
   });
 
   app.put<IdParams>('/api/worlds/:id/aging', async (req) => {
-    const { daysPerYear } = (req.body ?? {}) as { daysPerYear?: unknown };
-    const value = Number(daysPerYear);
-    if (!Number.isFinite(value) || value < 1 || value > 60)
-      throw new ValidationError('Days per year must be between 1 and 60.');
-    await worlds.setAging(req.params.id, value);
-    return worlds.view(req.params.id).settings;
+    const { daysPerYear } = AgingRequest.parse(req.body ?? {});
+    await worlds.setAging(req.params.id, daysPerYear);
+    return { ...worlds.view(req.params.id).settings, daysPerYear };
   });
 
   app.get<{ Params: { id: string; agentId: string } }>(

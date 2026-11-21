@@ -235,8 +235,13 @@ export function remember(
   const memory: Memory = { tick, text, importance: imp, kind, people, strength: imp };
   if (agent.age < 3) memory.early = true;
   agent.memories.push(memory);
-  if (agent.memories.length > MEMORY_LIMIT) {
-    let weakest = 0;
+  trimMemories(agent);
+}
+
+/** Enforce MEMORY_LIMIT by forgetting the faintest non-chapter memories first. */
+export function trimMemories(agent: Agent): void {
+  while (agent.memories.length > MEMORY_LIMIT) {
+    let weakest = -1;
     let weakestScore = Infinity;
     for (let i = 0; i < agent.memories.length; i++) {
       const m = agent.memories[i]!;
@@ -248,6 +253,7 @@ export function remember(
         weakest = i;
       }
     }
+    if (weakest < 0) break;
     forgetMemory(agent, weakest);
   }
 }

@@ -4,6 +4,7 @@ import { interactionTiles } from './spatial.ts';
 import { step, type TickInput } from './engine.ts';
 import { createWorldState, type WorldState } from './world.ts';
 import { readNoticeBoard, villageKnowledge } from './governance.ts';
+import { villageView } from './views.ts';
 
 /** Ask one person to act on a plan right now (other people get no decisions). */
 function act(state: WorldState, agentId: string, plan: Intent[]): void {
@@ -185,5 +186,43 @@ describe('governance: the purse', () => {
     expect(k.rules).toEqual(['Keep the well clean.']);
     expect(k.treasury).toBe(12);
     expect(k.leader?.id).toBe('a2');
+  });
+
+  it('excludes teens (<18) from meetings, excludes dead voters in villageView, and clears leaderId on leader death', () => {
+    const s = fresh();
+    onlyPeople(s, ['a1', 'a2', 'a3']);
+    atMarket(s, 'a1', 0);
+    atMarket(s, 'a2', 1);
+    atMarket(s, 'a3', 2);
+    const a1 = s.agents.find((a) => a.id === 'a1')!;
+    const a2 = s.agents.find((a) => a.id === 'a2')!;
+    const a3 = s.agents.find((a) => a.id === 'a3')!;
+    a3.age = 15;
+    a3.lastStage = 'teen'; // already a teen, so no grew_up prompt
+    // teen: must not get meeting_called or be counted as attendee
+    act(s, 'a1', [{ type: 'call_meeting', topic: 'Rules' }]);
+    expect(a2.awaiting?.kind).toBe('meeting_called');
+    expect(a3.awaiting?.kind).not.toBe('meeting_called');
+    const m = s.meetings[0]!;
+    until(s, () => s.tick >= m.startTick);
+    expect(m.attendees).not.toContain('a3');
+    act(s, 'a1', [{ type: 'propose_rule', text: 'Test rule.' }]);
+    const p = m.proposals[0]!;
+    act(s, 'a2', [{ type: 'vote', proposalId: p.id, accept: true }]);
+    expect(villageView(s).meetings[0]!.proposals[0]!.yes).toBe(2);
+    // Kill a2: villageView must exclude dead voter immediately to match closeMeeting.
+    a2.alive = false;
+    expect(villageView(s).meetings[0]!.proposals[0]!.yes).toBe(1);
+    // Skipping past endTick still closes the meeting.
+    s.tick = m.endTick + 5;
+    step(s);
+    expect(s.meetings).toHaveLength(0);
+    // Leader dying clears state.leaderId.
+    s.leaderId = a1.id;
+    a1.health = 0.01;
+    a1.needs.water = 0;
+    step(s);
+    expect(a1.alive).toBe(false);
+    expect(s.leaderId).toBeNull();
   });
 });

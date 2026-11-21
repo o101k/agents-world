@@ -26,8 +26,9 @@ export interface GameClock {
 }
 
 export function tickToClock(tick: number): GameClock {
-  const day = Math.floor(tick / TICKS_PER_DAY);
-  const minuteOfDay = (tick - day * TICKS_PER_DAY) * MINUTES_PER_TICK;
+  const safe = Number.isFinite(tick) ? Math.max(0, Math.floor(tick)) : 0;
+  const day = Math.floor(safe / TICKS_PER_DAY);
+  const minuteOfDay = (safe - day * TICKS_PER_DAY) * MINUTES_PER_TICK;
   return { day: day + 1, hour: Math.floor(minuteOfDay / 60), minute: minuteOfDay % 60 };
 }
 

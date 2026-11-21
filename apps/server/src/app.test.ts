@@ -332,4 +332,73 @@ describe('HTTP API', () => {
         .brain,
     ).toEqual(claude);
   });
+
+  it('returns updated brain and settings immediately while running and validates default-brain/aging', async () => {
+    const created = await app.server.inject({
+      method: 'POST',
+      url: '/api/worlds',
+      headers: HOST,
+      payload: { name: 'RunningUpdates', seed: 'ru', mapSize: 'small' },
+    });
+    const id = created.json().world.id as string;
+    await app.server.inject({ method: 'POST', url: `/api/worlds/${id}/activate`, headers: HOST });
+    // Start running slowly so queued inputs haven't been stepped yet when PUT returns.
+    await app.server.inject({
+      method: 'POST',
+      url: `/api/worlds/${id}/control`,
+      headers: HOST,
+      payload: { running: true, speed: 1 },
+    });
+
+    const newBrain = { provider: 'anthropic', model: 'claude-haiku-4-5', effort: 'standard' };
+    const brainRes = await app.server.inject({
+      method: 'PUT',
+      url: `/api/worlds/${id}/agents/a1/brain`,
+      headers: HOST,
+      payload: newBrain,
+    });
+    expect(brainRes.statusCode).toBe(200);
+    expect(brainRes.json().agent.brain).toEqual(newBrain);
+
+    const defRes = await app.server.inject({
+      method: 'PUT',
+      url: `/api/worlds/${id}/default-brain`,
+      headers: HOST,
+      payload: { brain: newBrain, applyToAll: false },
+    });
+    expect(defRes.statusCode).toBe(200);
+    expect(defRes.json().defaultBrain).toEqual(newBrain);
+
+    const agingRes = await app.server.inject({
+      method: 'PUT',
+      url: `/api/worlds/${id}/aging`,
+      headers: HOST,
+      payload: { daysPerYear: 12 },
+    });
+    expect(agingRes.statusCode).toBe(200);
+    expect(agingRes.json().daysPerYear).toBe(12);
+
+    const badAging = await app.server.inject({
+      method: 'PUT',
+      url: `/api/worlds/${id}/aging`,
+      headers: HOST,
+      payload: { daysPerYear: 999 },
+    });
+    expect(badAging.statusCode).toBe(400);
+
+    const badDef = await app.server.inject({
+      method: 'PUT',
+      url: `/api/worlds/${id}/default-brain`,
+      headers: HOST,
+      payload: { brain: newBrain, applyToAll: 'yes' },
+    });
+    expect(badDef.statusCode).toBe(400);
+
+    await app.server.inject({
+      method: 'POST',
+      url: `/api/worlds/${id}/control`,
+      headers: HOST,
+      payload: { running: false },
+    });
+  });
 });

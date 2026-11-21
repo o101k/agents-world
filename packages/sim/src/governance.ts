@@ -33,7 +33,7 @@ const awareAt = (a: Agent) => a.alive && !a.asleep && !a.indoorsId;
 const canTrigger = (a: Agent) => a.alive && !a.awaiting && !a.asleep;
 
 function findMarket(state: WorldState): MapObject | undefined {
-  return state.map.objects.find((o) => o.kind === 'market');
+  return mapCache(state.map).byKind.get('market')?.[0];
 }
 
 function marketOf(state: WorldState, meeting: Meeting): MapObject | undefined {
@@ -106,7 +106,14 @@ function callMeeting(ctx: Ctx, agent: Agent, topic: string): void {
     if (a !== agent && !(awareAt(a) && cheb(a, agent) <= CALL_RANGE)) continue;
     if (!a.knownMeetings.includes(meeting.id)) a.knownMeetings.push(meeting.id);
     if (a === agent) {
-      remember(a, tick, `I called a village meeting at the market about “${topic}”, in an hour.`, 4, 'experience', [agent.id]);
+      remember(
+        a,
+        tick,
+        `I called a village meeting at the market about “${topic}”, in an hour.`,
+        4,
+        'experience',
+        [agent.id],
+      );
       continue;
     }
     remember(
@@ -117,7 +124,7 @@ function callMeeting(ctx: Ctx, agent: Agent, topic: string): void {
       'experience',
       [agent.id],
     );
-    if (a.age >= 13 && canTrigger(a)) {
+    if (a.age >= 18 && canTrigger(a)) {
       a.awaiting = {
         kind: 'meeting_called',
         byName: nameAsKnown(a, agent),
@@ -127,7 +134,10 @@ function callMeeting(ctx: Ctx, agent: Agent, topic: string): void {
       };
     }
   }
-  agent.speech = { text: `A village meeting about ${topic}, at the market in an hour!`, until: tick + 30 };
+  agent.speech = {
+    text: `A village meeting about ${topic}, at the market in an hour!`,
+    until: tick + 30,
+  };
   emit(
     ctx,
     'meeting',
@@ -141,7 +151,7 @@ function callMeeting(ctx: Ctx, agent: Agent, topic: string): void {
 
 /** Attendance: alive, awake, outdoors, grown enough, and within reach of the market. */
 function isAttendee(a: Agent, market: MapObject): boolean {
-  return a.age >= 13 && awareAt(a) && distanceToObject(market, a) <= SPOT_RANGE;
+  return a.age >= 18 && awareAt(a) && distanceToObject(market, a) <= SPOT_RANGE;
 }
 
 /** Once a tick: meetings opening and closing (votes counted), and the daily levy. */
@@ -158,7 +168,7 @@ export function governanceTick(ctx: Ctx): void {
       if (tick === m.startTick) startMeeting(ctx, m, market);
       else if (tick > m.startTick && tick < m.endTick && (tick - m.startTick) % JOIN_EVERY === 0)
         joinNewcomers(state, m, market);
-      else if (tick === m.endTick) closeMeeting(ctx, m);
+      else if (tick >= m.endTick) closeMeeting(ctx, m);
     }
   }
   if (tick % TICKS_PER_DAY === LEVY_TICK) levy(ctx);
@@ -168,9 +178,12 @@ function startMeeting(ctx: Ctx, m: Meeting, market: MapObject): void {
   const { state } = ctx;
   const attendees = state.agents.filter((a) => isAttendee(a, market));
   if (attendees.length < 2) {
-    emit(ctx, 'meeting', [m.caller], `Nobody came to the meeting about ${m.topic}.`, 2, [m.placeId]);
+    emit(ctx, 'meeting', [m.caller], `Nobody came to the meeting about ${m.topic}.`, 2, [
+      m.placeId,
+    ]);
     const caller = findAgent(state, m.caller);
-    if (caller) remember(caller, state.tick, `Nobody came to my meeting about “${m.topic}”.`, 4);
+    if (caller?.alive)
+      remember(caller, state.tick, `Nobody came to my meeting about “${m.topic}”.`, 4);
     removeMeeting(state, m);
     return;
   }
@@ -259,7 +272,11 @@ function levy(ctx: Ctx): void {
   if (paid > 0) emit(ctx, 'treasury', [], `${paid} people paid the levy (${total} coins).`, 2);
 }
 
-function proposeRule(ctx: Ctx, agent: Agent, intent: Extract<Intent, { type: 'propose_rule' }>): void {
+function proposeRule(
+  ctx: Ctx,
+  agent: Agent,
+  intent: Extract<Intent, { type: 'propose_rule' }>,
+): void {
   const { state } = ctx;
   const tick = state.tick;
   const meeting = openMeetingNear(state, agent);

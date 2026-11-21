@@ -69,9 +69,9 @@ export function toRateLimitError(err: unknown, now = Date.now()): unknown {
   let retryAfterSec: number | undefined;
   const ms = get('retry-after-ms');
   const ra = get('retry-after');
-  if (ms && Number.isFinite(Number(ms))) retryAfterSec = Number(ms) / 1000;
+  if (ms && /^\d+(\.\d+)?$/.test(ms.trim())) retryAfterSec = Number(ms.trim()) / 1000;
   else if (ra) {
-    if (/^\d+(\.\d+)?$/.test(ra.trim())) retryAfterSec = Number(ra);
+    if (/^\d+(\.\d+)?$/.test(ra.trim())) retryAfterSec = Number(ra.trim());
     else if (!Number.isNaN(Date.parse(ra)))
       retryAfterSec = Math.max(0, (Date.parse(ra) - now) / 1000);
   }
@@ -95,8 +95,12 @@ export function toRateLimitError(err: unknown, now = Date.now()): unknown {
     const reset = get('x-ratelimit-reset'); // OpenRouter
     if (reset) resetsAt = parseReset(reset, now);
   }
-  if (e.code === 'insufficient_quota') limit = 'quota used up (check billing)';
   if (retryAfterSec !== undefined) resetsAt = now + retryAfterSec * 1000;
+  if (e.code === 'insufficient_quota') {
+    limit = 'quota used up (check billing)';
+    resetsAt = undefined;
+    retryAfterSec = undefined;
+  }
   return new RateLimitError(messageOf(e).slice(0, 300), {
     status: 429,
     limit,

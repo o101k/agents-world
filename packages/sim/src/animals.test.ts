@@ -155,4 +155,34 @@ describe('animals', () => {
     expect(a.inventory.wool).toBeUndefined();
     expect(a.inventory.clothes).toBe(1);
   });
+
+  it('frequent re-tending does not reset lastTendedTick or grant farming XP', () => {
+    const s = fresh();
+    const a = placeAt(s, 'a1', 'market');
+    const penId = addPen(s, 'a1');
+    const initialTick = s.tick - 2 * TICKS_PER_HOUR;
+    s.pens[penId] = { hens: 8, sheep: 0, wool: 0, lastTendedTick: initialTick };
+    const skillBefore = a.skills.farming;
+    run(s, 'a1', [{ type: 'tend_animals', objectId: penId }], 800);
+    expect(s.pens[penId]!.lastTendedTick).toBe(initialTick);
+    expect(a.skills.farming).toBe(skillBefore);
+    // Advance past 6 hours since initialTick: now tending produces eggs and updates lastTendedTick.
+    s.tick = initialTick + 6 * TICKS_PER_HOUR + 1;
+    a.inventory = { vegetables: 1 };
+    run(s, 'a1', [{ type: 'tend_animals', objectId: penId }], 800);
+    expect(s.pens[penId]!.lastTendedTick).toBeGreaterThan(initialTick);
+    expect(a.inventory.eggs ?? 0).toBeGreaterThan(0);
+    expect(a.skills.farming).toBeGreaterThan(skillBefore);
+  });
+
+  it('animalsTick skips burnt or unfinished pens', () => {
+    const s = fresh();
+    const penId = addPen(s, 'a1');
+    const penObj = s.map.objects.find((o) => o.id === penId)!;
+    penObj.progress = 0.3;
+    penObj.burntTick = s.tick;
+    s.pens[penId] = { hens: 2, sheep: 0, wool: 0, lastTendedTick: s.tick - 5 * TICKS_PER_DAY };
+    nextMorning(s);
+    expect(penAnimals(s, penId)).toEqual({ hens: 2, sheep: 0 });
+  });
 });

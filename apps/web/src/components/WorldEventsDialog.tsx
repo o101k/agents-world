@@ -1,7 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { OBJECT_LABELS, type ActiveCondition, type WorldMap } from '@aw/shared';
 import { api } from '../api.ts';
+import { useThrottledWorld } from '../useThrottledWorld.ts';
 import { useWorld } from '../worldStore.ts';
+import { useDialog } from './useDialog.ts';
 
 type Kind = ActiveCondition['kind'];
 
@@ -49,13 +51,16 @@ export function WorldEventsDialog({
   map: WorldMap | null;
   onClose: () => void;
 }) {
-  const agents = useWorld((s) => s.agents);
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const agents = useThrottledWorld((s) => s.agents, 500);
   const [kind, setKind] = useState<Kind>('storm');
   const [intensity, setIntensity] = useState(0.6);
   const [hours, setHours] = useState(12);
   const [targetId, setTargetId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useDialog(dialogRef, onClose, { disabled: busy });
 
   const buildings = (map?.objects ?? []).filter(
     (o) =>
@@ -68,6 +73,7 @@ export function WorldEventsDialog({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -92,8 +98,10 @@ export function WorldEventsDialog({
       : `${hours} hour${hours === 1 ? '' : 's'}`;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
       <form
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal panel"
         role="dialog"
         aria-modal="true"
@@ -179,9 +187,13 @@ export function WorldEventsDialog({
             </select>
           </label>
         )}
-        {error && <p className="warn small">{error}</p>}
+        {error && (
+          <p className="warn small" role="alert">
+            {error}
+          </p>
+        )}
         <div className="modal-actions">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
             Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
@@ -204,10 +216,32 @@ export function ConditionsBar({
 }) {
   const past = useWorld((s) => s.replay?.view);
   const liveConditions = useWorld((s) => s.conditions);
-  const liveTick = useWorld((s) => s.tick);
   const conditions = past?.conditions ?? liveConditions;
-  const tick = past?.tick ?? liveTick;
   if (conditions.length === 0) return null;
+  return (
+    <ConditionsBarActive
+      conditions={conditions}
+      pastTick={past?.tick}
+      map={map}
+      onPickObject={onPickObject}
+    />
+  );
+}
+
+function ConditionsBarActive({
+  conditions,
+  pastTick,
+  map,
+  onPickObject,
+}: {
+  conditions: ActiveCondition[];
+  pastTick?: number;
+  map: WorldMap | null;
+  onPickObject: (id: string) => void;
+}) {
+  // Quantized to 5 in-game minutes when live so we don't re-render on every simulation frame.
+  const liveBucket = useWorld((s) => Math.floor(s.tick / 5) * 5);
+  const tick = pastTick ?? liveBucket;
   const left = (c: ActiveCondition) => {
     const m = Math.max(0, c.endTick - tick);
     if (m < 60) return `${m} min left`;
@@ -231,6 +265,7 @@ export function ConditionsBar({
         );
         return target ? (
           <button
+            type="button"
             key={c.id}
             className={`condition condition-${c.kind} linkish`}
             title={`${info.blurb} Click to see ${target.name ?? 'the building'}.`}

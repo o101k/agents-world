@@ -92,12 +92,7 @@ export interface PersonDigest {
 
 /** Why the free summary answered instead of the person's AI. */
 export type InterviewFallback =
-  | 'mock_brain'
-  | 'not_set_up'
-  | 'cap_reached'
-  | 'rate_limit'
-  | 'error'
-  | 'refused';
+  'mock_brain' | 'not_set_up' | 'cap_reached' | 'rate_limit' | 'error' | 'refused';
 
 /** One question asked about a person and its answer, as saved in the world file. */
 export interface InterviewView {
@@ -150,15 +145,17 @@ export interface InterviewsResponse {
   daysPerYear: number;
 }
 
+const emptyToUndefined = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
+
 export const RecordQuery = z.object({
   /** Period start (omitted = their first tick). */
-  from: z.coerce.number().int().min(0).optional(),
+  from: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
   /** Period end (omitted = now, or their death). */
-  to: z.coerce.number().int().min(0).optional(),
+  to: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
   /** Comma-separated record kinds to include (omitted = all). */
   kinds: z.string().max(100).optional(),
-  limit: z.coerce.number().int().min(1).max(500).default(100),
-  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(500).default(100)),
+  offset: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).default(0)),
 });
 export type RecordQuery = z.input<typeof RecordQuery>;
 

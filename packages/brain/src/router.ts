@@ -76,19 +76,39 @@ export class PrioritySemaphore {
   get waiting(): number {
     return this.queue.length;
   }
-  async run<T>(fn: () => Promise<T>, priority = 2): Promise<T> {
-    if (this.active >= this.limit) {
-      await new Promise<void>((go) => {
-        this.queue.push({ priority, seq: this.seq++, go });
+  async run<T>(fn: () => Promise<T>, priority = 2, signal?: AbortSignal): Promise<T> {
+    const abortError = () =>
+      signal?.reason instanceof Error ? signal.reason : new Error('aborted');
+    if (signal?.aborted) throw abortError();
+    if (this.active < this.limit) {
+      this.active++;
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const entry = {
+          priority,
+          seq: this.seq++,
+          go: () => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          },
+        };
+        const onAbort = () => {
+          const idx = this.queue.indexOf(entry);
+          if (idx >= 0) this.queue.splice(idx, 1);
+          reject(abortError());
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        this.queue.push(entry);
         this.queue.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
       });
     }
-    this.active++;
     try {
+      if (signal?.aborted) throw abortError();
       return await fn();
     } finally {
-      this.active--;
-      this.queue.shift()?.go();
+      const next = this.queue.shift();
+      if (next) next.go();
+      else this.active--;
     }
   }
 }
@@ -101,6 +121,7 @@ export function priorityOf(trigger: DecisionTrigger): number {
     case 'proposal':
     case 'child_request':
     case 'adoption_offer':
+    case 'job_offer':
     case 'attacked':
     case 'robbed':
       return 0;
@@ -111,6 +132,8 @@ export function priorityOf(trigger: DecisionTrigger): number {
     case 'action_failed':
     case 'child_born':
     case 'orphaned':
+    case 'meeting_open':
+    case 'rule_proposed':
       return 1;
     case 'reflect':
       return 3;
@@ -179,53 +202,76 @@ export class BrainRouter {
   async generate(
     config: BrainConfig,
     req: GenerateRequest,
-    opts: { priority?: number; timeoutMs?: number } = {},
+    opts: { priority?: number; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<RoutedGenerate> {
-    const { priority = 1, timeoutMs = 90_000 } = opts;
+    const { priority = 1, timeoutMs = 90_000, signal } = opts;
+    const model = req.model || config.model;
     const provider = this.providers.get(config.provider);
     // Nothing is sent to the mock brain or to a provider that can't do free-form calls.
     if (config.provider === 'mock' || !provider?.generate) {
       return {
         provider: config.provider,
-        model: config.model,
+        model,
         output: null,
         latencyMs: 0,
         notSetUp: true,
       };
     }
+    if (signal?.aborted) {
+      return {
+        provider: provider.id,
+        model,
+        output: null,
+        latencyMs: 0,
+        error: 'aborted',
+      };
+    }
     let sem = this.limits.get(provider.id);
     if (!sem) this.limits.set(provider.id, (sem = new PrioritySemaphore(CONCURRENCY[provider.id])));
 
-    const controller = new AbortController();
+    const timeoutController = new AbortController();
+    const combinedSignal = signal
+      ? AbortSignal.any([timeoutController.signal, signal])
+      : timeoutController.signal;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<'timeout'>((resolve) => {
+    let onAbort: (() => void) | undefined;
+    const abortRace = new Promise<'timeout' | 'aborted'>((resolve) => {
       timer = setTimeout(() => {
-        controller.abort();
         resolve('timeout');
+        timeoutController.abort();
       }, timeoutMs);
+      if (signal) {
+        onAbort = () => resolve('aborted');
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
     });
     const started = performance.now();
     const latency = () => Math.round(performance.now() - started);
+    const task = sem.run<GenerateResult>(
+      // A request that timed out or aborted while still queued is dropped, never sent (and never paid for).
+      () => provider.generate!({ ...req, model }, combinedSignal),
+      priority,
+      combinedSignal,
+    );
+    task.catch(() => {});
     try {
-      const out = await Promise.race([
-        sem.run<GenerateResult | 'timeout'>(
-          // A request that timed out while still queued is dropped, never sent (and never paid for).
-          () =>
-            controller.signal.aborted
-              ? Promise.resolve('timeout')
-              : provider.generate!({ ...req, model: req.model || config.model }, controller.signal),
-          priority,
-        ),
-        timeout,
-      ]);
+      const out = await Promise.race([task, abortRace]);
       if (out === 'timeout')
         return {
           provider: provider.id,
-          model: config.model,
+          model,
           output: null,
           latencyMs: latency(),
           timedOut: true,
           error: 'timed out',
+        };
+      if (out === 'aborted')
+        return {
+          provider: provider.id,
+          model,
+          output: null,
+          latencyMs: latency(),
+          error: 'aborted',
         };
       return {
         provider: provider.id,
@@ -236,11 +282,28 @@ export class BrainRouter {
         latencyMs: latency(),
       };
     } catch (err) {
+      if (timeoutController.signal.aborted)
+        return {
+          provider: provider.id,
+          model,
+          output: null,
+          latencyMs: latency(),
+          timedOut: true,
+          error: 'timed out',
+        };
+      if (signal?.aborted)
+        return {
+          provider: provider.id,
+          model,
+          output: null,
+          latencyMs: latency(),
+          error: 'aborted',
+        };
       const message = (err as Error).message ?? String(err);
       if (err instanceof RateLimitError)
         return {
           provider: provider.id,
-          model: config.model,
+          model,
           output: null,
           latencyMs: latency(),
           error:
@@ -253,7 +316,7 @@ export class BrainRouter {
       if (err instanceof RefusalError)
         return {
           provider: provider.id,
-          model: config.model,
+          model,
           output: null,
           latencyMs: latency(),
           refused: true,
@@ -263,7 +326,7 @@ export class BrainRouter {
       if (err instanceof NoDecisionError)
         return {
           provider: provider.id,
-          model: config.model,
+          model,
           output: null,
           latencyMs: latency(),
           usage: err.usage,
@@ -271,13 +334,14 @@ export class BrainRouter {
         };
       return {
         provider: provider.id,
-        model: config.model,
+        model,
         output: null,
         latencyMs: latency(),
         error: message.slice(0, 500),
       };
     } finally {
       clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -285,6 +349,7 @@ export class BrainRouter {
     request: DecisionRequest,
     config: BrainConfig,
     timeoutMs = 60_000,
+    signal?: AbortSignal,
   ): Promise<RoutedResult> {
     const p = request.perception;
     if (config.provider !== 'mock' && instinctApplies(p)) {
@@ -309,29 +374,42 @@ export class BrainRouter {
         fallback: config.provider !== 'mock',
       };
     }
+    if (signal?.aborted) {
+      return {
+        result: null,
+        provider: provider.id,
+        model: config.model,
+        error: 'aborted',
+      };
+    }
     let sem = this.limits.get(provider.id);
     if (!sem) this.limits.set(provider.id, (sem = new PrioritySemaphore(CONCURRENCY[provider.id])));
 
-    const controller = new AbortController();
+    const timeoutController = new AbortController();
+    const combinedSignal = signal
+      ? AbortSignal.any([timeoutController.signal, signal])
+      : timeoutController.signal;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<'timeout'>((resolve) => {
+    let onAbort: (() => void) | undefined;
+    const abortRace = new Promise<'timeout' | 'aborted'>((resolve) => {
       timer = setTimeout(() => {
-        controller.abort();
         resolve('timeout');
+        timeoutController.abort();
       }, timeoutMs);
+      if (signal) {
+        onAbort = () => resolve('aborted');
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
     });
+    const task = sem.run<BrainResult>(
+      // A request that timed out or aborted while still queued is dropped, never sent (and never paid for).
+      () => provider.decide(request, config, combinedSignal),
+      priorityOf(p.trigger),
+      combinedSignal,
+    );
+    task.catch(() => {});
     try {
-      const out = await Promise.race([
-        sem.run<BrainResult | 'timeout'>(
-          // A request that timed out while still queued is dropped, never sent (and never paid for).
-          () =>
-            controller.signal.aborted
-              ? Promise.resolve('timeout')
-              : provider.decide(request, config, controller.signal),
-          priorityOf(p.trigger),
-        ),
-        timeout,
-      ]);
+      const out = await Promise.race([task, abortRace]);
       if (out === 'timeout')
         return {
           result: null,
@@ -340,8 +418,30 @@ export class BrainRouter {
           timedOut: true,
           error: 'timed out',
         };
+      if (out === 'aborted')
+        return {
+          result: null,
+          provider: provider.id,
+          model: config.model,
+          error: 'aborted',
+        };
       return { result: out, provider: provider.id, model: out.trace?.model ?? config.model };
     } catch (err) {
+      if (timeoutController.signal.aborted)
+        return {
+          result: null,
+          provider: provider.id,
+          model: config.model,
+          timedOut: true,
+          error: 'timed out',
+        };
+      if (signal?.aborted)
+        return {
+          result: null,
+          provider: provider.id,
+          model: config.model,
+          error: 'aborted',
+        };
       if (err instanceof RateLimitError)
         return {
           result: null,
@@ -375,6 +475,7 @@ export class BrainRouter {
       };
     } finally {
       clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     }
   }
 }

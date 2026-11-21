@@ -29,7 +29,6 @@ let installed = false;
 /** Installs the four map fonts. Only the first call does anything. */
 export function ensureMapFonts(): void {
   if (installed) return;
-  installed = true;
   const resolution = Math.max(2, window.devicePixelRatio || 1);
   const install = (name: string, style: TextStyleOptions): void => {
     // No kerning: Pixi measures it pair by pair (about 18,000 text measurements per font, a
@@ -67,4 +66,5 @@ export function ensureMapFonts(): void {
     stroke: { color: OUTLINE_COLOR, width: OUTLINE_WIDTH },
   });
   install(BUBBLE_FONT, { fontFamily: SANS, fontSize: 12, fill: '#1a1a1a' });
+  installed = true;
 }

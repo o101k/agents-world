@@ -11,12 +11,22 @@ import { fullName, remember, type Agent } from './agent.ts';
 import { emit, fail, type Ctx } from './engine.ts';
 import { clearPlot, findFreePlot, nextObjectId } from './land.ts';
 import { observeWork, train } from './life.ts';
-import { interactionTiles, invalidateMapCaches, isAt } from './spatial.ts';
+import { occupies, syncOccupant } from './occupancy.ts';
+import {
+  interactionTiles,
+  invalidateMapCaches,
+  isAt,
+  isWalkable,
+  mapCache,
+  nearestWalkable,
+} from './spatial.ts';
 import { findAgent } from './world.ts';
 
 // ------------------------------------------------------------------ building
 
 type BuildIntent = Extract<Intent, { type: 'build' | 'build_house' }>;
+
+const BUILDING_KINDS = Object.keys(BUILDINGS) as BuildingKind[];
 
 /** Building skill needed to start a new site, by kind (finishing one needs none). */
 function skillToStart(kind: BuildingKind): number {
@@ -31,12 +41,13 @@ function takeItem(agent: Agent, item: 'planks' | 'stone', n: number): void {
 /** Where a new building goes: a pen by the owner's home, everything else by the town market. */
 function siteAnchor(ctx: Ctx, agent: Agent, kind: BuildingKind): Point {
   const { state } = ctx;
+  const cache = mapCache(state.map);
   if (kind === 'pen') {
-    const home = agent.homeId ? state.map.objects.find((o) => o.id === agent.homeId) : undefined;
+    const home = agent.homeId ? cache.byId.get(agent.homeId) : undefined;
     if (home) return { x: home.x, y: home.y };
     return { x: agent.x, y: agent.y };
   }
-  const market = state.map.objects.find((o) => o.kind === 'market');
+  const market = cache.byKind.get('market')?.[0];
   return market ? { x: market.x, y: market.y } : { x: agent.x, y: agent.y };
 }
 
@@ -51,25 +62,32 @@ function findSite(
   anyBurnt: boolean,
 ): MapObject | undefined {
   const { state } = ctx;
-  return state.map.objects.find(
-    (o) =>
-      o.kind in BUILDINGS &&
-      (o.progress ?? 1) < 1 &&
-      (state.owners[o.id]?.includes(agent.id) ?? false) &&
-      (o.kind === kind || (anyBurnt && o.burntTick !== undefined)),
-  );
+  const { byKind } = mapCache(state.map);
+  const kinds = anyBurnt ? BUILDING_KINDS : [kind];
+  for (const k of kinds) {
+    for (const o of byKind.get(k) ?? []) {
+      if (
+        (o.progress ?? 1) < 1 &&
+        (state.owners[o.id]?.includes(agent.id) ?? false) &&
+        (o.kind === kind || (anyBurnt && o.burntTick !== undefined))
+      ) {
+        return o;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function startBuild(ctx: Ctx, agent: Agent, intent: BuildIntent, arrived: boolean): void {
   const { state } = ctx;
   const { map } = state;
   const kind: BuildingKind = intent.type === 'build_house' ? 'house' : intent.building;
-  const info = BUILDINGS[kind];
-  const label = info.label.toLowerCase();
   // Carry on first: an unfinished or burnt building of this kind (build_house also takes any
   // burnt building of one's own).
   let site = findSite(ctx, agent, kind, intent.type === 'build_house');
   if (!site) {
+    const info = BUILDINGS[kind];
+    const label = info.label.toLowerCase();
     if (agent.skills.building < skillToStart(kind))
       return fail(ctx, agent, `I don't know enough about building to start a ${label}.`);
     if ((agent.inventory.planks ?? 0) < info.planks)
@@ -99,21 +117,65 @@ export function startBuild(ctx: Ctx, agent: Agent, intent: BuildIntent, arrived:
     state.owners[id] = [agent.id];
     agent.knowledge[id] = { lastSeenTick: state.tick };
     invalidateMapCaches(map);
+    // Safety net: evacuate any outdoor agent standing on a newly blocked footprint tile.
+    for (const other of state.agents) {
+      if (!occupies(other)) continue;
+      if (
+        other.x >= site.x &&
+        other.x < site.x + site.w &&
+        other.y >= site.y &&
+        other.y < site.y + site.h &&
+        !isWalkable(map, other.x, other.y)
+      ) {
+        const safe = nearestWalkable(map, other, () => true, 12);
+        if (safe) {
+          other.x = safe.x;
+          other.y = safe.y;
+          syncOccupant(state, other);
+        }
+      }
+    }
     state.mapVersion += 1;
     emit(ctx, 'built', [agent.id], `${fullName(agent)} started building ${site.name}.`, 4, [
       site.id,
     ]);
     remember(agent, state.tick, `I started building ${site.name}.`, 7);
   }
+  const siteInfo = BUILDINGS[site.kind as BuildingKind];
   const tiles = site.door ? [{ x: site.door.x, y: site.door.y + 1 }] : interactionTiles(map, site);
   if (!arrived && !isAt(agent, tiles)) {
     ctx.walkTo(agent, tiles, intent, site.name ?? 'the building site');
     return;
   }
+  if (!isAt(agent, tiles)) {
+    return fail(ctx, agent, `I couldn't reach ${site.name ?? 'the building site'}.`);
+  }
+  if ((agent.inventory.planks ?? 0) < siteInfo.planks)
+    return fail(ctx, agent, `I need ${siteInfo.planks} planks for the next stretch of building.`);
+  if ((agent.inventory.stone ?? 0) < siteInfo.stone)
+    return fail(ctx, agent, `I need ${siteInfo.stone} stone for the next stretch of building.`);
+  agent.facing = 'up';
+  agent.action = { type: 'build', objectId: site.id, until: state.tick + 60 };
+}
+
+export function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
+  const { state } = ctx;
+  agent.action = null;
+  const site = mapCache(state.map).byId.get(objectId);
+  if (!site || site.progress === undefined || !(site.kind in BUILDINGS)) return;
+  const info = BUILDINGS[site.kind as BuildingKind];
   if ((agent.inventory.planks ?? 0) < info.planks)
-    return fail(ctx, agent, `I need ${info.planks} planks for the next stretch of building.`);
+    return fail(
+      ctx,
+      agent,
+      `I ran out of planks while building ${site.name ?? info.label.toLowerCase()}.`,
+    );
   if ((agent.inventory.stone ?? 0) < info.stone)
-    return fail(ctx, agent, `I need ${info.stone} stone for the next stretch of building.`);
+    return fail(
+      ctx,
+      agent,
+      `I ran out of stone while building ${site.name ?? info.label.toLowerCase()}.`,
+    );
   if (info.planks) takeItem(agent, 'planks', info.planks);
   if (info.stone) takeItem(agent, 'stone', info.stone);
   // Stonework: a stretch of a wooden building built with spare stone.
@@ -122,16 +184,6 @@ export function startBuild(ctx: Ctx, agent: Agent, intent: BuildIntent, arrived:
     site.stoneWork = (site.stoneWork ?? 0) + 1;
   }
   site.workDone = (site.workDone ?? 0) + 1;
-  agent.facing = 'up';
-  agent.action = { type: 'build', objectId: site.id, until: state.tick + 60 };
-}
-
-export function finishBuild(ctx: Ctx, agent: Agent, objectId: string): void {
-  const { state } = ctx;
-  agent.action = null;
-  const site = state.map.objects.find((o) => o.id === objectId);
-  if (!site || site.progress === undefined || !(site.kind in BUILDINGS)) return;
-  const info = BUILDINGS[site.kind as BuildingKind];
   site.progress = Math.min(
     1,
     site.progress + (0.1 * (0.5 + agent.skills.building / 100)) / info.work,

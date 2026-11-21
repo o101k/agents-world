@@ -5,17 +5,18 @@ import {
   type ActiveCondition,
   type Intent,
   type MapObject,
+  type MapObjectKind,
   type Point,
 } from '@aw/shared';
 import { fullName, remember, type Agent } from './agent.ts';
 import { approach, emit, fail, wake, type Ctx } from './engine.ts';
 import { feel, train } from './life.ts';
+import { occupies, syncOccupant } from './occupancy.ts';
 import { describeSeason } from './seasons.ts';
 import { nameAsKnown } from './perception.ts';
 import {
   distanceToObject,
   isDrinkSpot,
-  isWalkable,
   mapCache,
   nearestWalkable,
   objectsNear,
@@ -41,9 +42,10 @@ export interface WorldEventSpec {
 export type Condition = ActiveCondition;
 
 const FIRE_TICKS = 60;
-const BURNABLE_KINDS = new Set(['house', 'bakery', 'workshop', 'pen', 'stall']);
+const BURNABLE_KINDS: readonly MapObjectKind[] = ['house', 'bakery', 'workshop', 'pen', 'stall'];
+const BURNABLE_SET = new Set<string>(BURNABLE_KINDS);
 /** Wooden buildings burn; stone-built ones don't. */
-const burnable = (o: MapObject) => BURNABLE_KINDS.has(o.kind) && !o.stone;
+const burnable = (o: MapObject) => BURNABLE_SET.has(o.kind) && !o.stone;
 /** How long someone who recovered can't catch the sickness again. */
 const IMMUNITY_TICKS = 30 * TICKS_PER_DAY;
 /** Symptoms show a few hours after catching it. */
@@ -86,8 +88,10 @@ const objLabel = (state: WorldState, id: string) => {
 
 export function startWorldEvent(ctx: Ctx, spec: WorldEventSpec): void {
   const { state, rng } = ctx;
-  const intensity = Math.min(1, Math.max(0.1, spec.intensity));
-  const hours = Math.min(24 * 30, Math.max(1, spec.hours));
+  const rawIntensity = Number.isFinite(spec.intensity) ? spec.intensity : 0.5;
+  const rawHours = Number.isFinite(spec.hours) ? spec.hours : 1;
+  const intensity = Math.min(1, Math.max(0.1, rawIntensity));
+  const hours = Math.min(24 * 30, Math.max(1, rawHours));
   const tick = state.tick;
   const add = (kind: Condition['kind'], endTick: number, targetId?: string) => {
     const c: Condition = {
@@ -137,7 +141,7 @@ export function startWorldEvent(ctx: Ctx, spec: WorldEventSpec): void {
       add('bumper_harvest', tick + hours * H);
       for (const id of Object.keys(state.resources).sort()) {
         const r = state.resources[id]!;
-        if (r.item === 'wood') continue;
+        if (r.item === 'wood' || r.item === 'stone') continue;
         r.amount = r.max;
         ctx.changed.add(id);
       }
@@ -164,18 +168,18 @@ export function startWorldEvent(ctx: Ctx, spec: WorldEventSpec): void {
     case 'fire': {
       const cache = mapCache(state.map);
       const pick = spec.targetId ? cache.byId.get(spec.targetId) : undefined;
-      const candidates = state.map.objects.filter(
-        (o) => burnable(o) && (o.progress ?? 1) >= 1 && !onFire(state, o.id),
-      );
+      const candidates: MapObject[] = [];
+      for (const kind of BURNABLE_KINDS) {
+        for (const o of cache.byKind.get(kind) ?? []) {
+          if (burnable(o) && (o.progress ?? 1) >= 1 && !onFire(state, o.id)) candidates.push(o);
+        }
+      }
+      const houses = candidates.filter((o) => o.kind === 'house');
       const target =
         pick && candidates.includes(pick)
           ? pick
           : candidates.length
-            ? rng.pick(
-                candidates.filter((o) => o.kind === 'house').length
-                  ? candidates.filter((o) => o.kind === 'house')
-                  : candidates,
-              )
+            ? rng.pick(houses.length ? houses : candidates)
             : undefined;
       if (!target) {
         emit(ctx, 'world_event', [], 'Sparks flew, but there was nothing to burn.', 3);
@@ -202,26 +206,33 @@ function igniteBuilding(ctx: Ctx, objectId: string, intensity: number): void {
   state.conditions.push(c);
   const name = objLabel(state, o.id);
   emit(ctx, 'fire', [], `${name} is on fire!`, 5, [o.id]);
+  // Track occupied outdoor tiles so evacuating residents don't stack on top of each other.
+  const { width } = state.map;
+  const taken = new Set<number>();
+  for (const other of state.agents) {
+    if (occupies(other)) taken.add(other.y * width + other.x);
+  }
   // Everyone inside gets out, burnt and frightened.
   for (const a of state.agents) {
     if (!a.alive || a.indoorsId !== o.id) continue;
     if (a.asleep) wake(ctx, a, false);
     a.indoorsId = null;
-    const out = nearestWalkable(
-      state.map,
-      { x: o.door?.x ?? o.x, y: (o.door?.y ?? o.y) + 1 },
-      (p) => isWalkable(state.map, p.x, p.y),
-      4,
-    );
+    const start = { x: o.door?.x ?? o.x, y: (o.door?.y ?? o.y) + 1 };
+    const out =
+      nearestWalkable(state.map, start, (p) => !taken.has(p.y * width + p.x), 8) ??
+      nearestWalkable(state.map, start, () => true, 8);
     if (out) {
       a.x = out.x;
       a.y = out.y;
+      taken.add(out.y * width + out.x);
     }
+    syncOccupant(state, a);
     a.health = Math.max(1, a.health - (10 + 20 * intensity));
     a.plan = [];
     a.action = null;
     remember(a, tick, `I woke to flames — ${name} was burning and I barely got out!`, 9);
-    if (!a.awaiting) a.awaiting = { kind: 'world_event', description: `${name} is on fire!` };
+    if (a.age >= 1 && !a.awaiting)
+      a.awaiting = { kind: 'world_event', description: `${name} is on fire!` };
   }
   // Those who see it.
   for (const a of state.agents) {
@@ -229,17 +240,20 @@ function igniteBuilding(ctx: Ctx, objectId: string, intensity: number): void {
     if (a.memories.some((m) => m.tick === tick && m.text.includes('flames'))) continue;
     const home = a.homeId === o.id || state.owners[o.id]?.includes(a.id);
     remember(a, tick, `${home ? 'My home' : name} caught fire!`, home ? 9 : 6);
-    if (!a.awaiting) a.awaiting = { kind: 'world_event', description: `${name} is on fire!` };
+    if (a.age >= 1 && !a.awaiting)
+      a.awaiting = { kind: 'world_event', description: `${name} is on fire!` };
   }
 }
 
 /** A fire has burnt out: the building is left a ruin to be rebuilt; it may have spread. */
 function burnDown(ctx: Ctx, fire: Condition): void {
   const { state, rng } = ctx;
-  const o = mapCache(state.map).byId.get(fire.targetId ?? '');
+  const cache = mapCache(state.map);
+  const o = cache.byId.get(fire.targetId ?? '');
   if (!o) return;
   o.burntTick = state.tick;
   o.progress = 0.3;
+  if (o.kind === 'stall' && state.stalls[o.id]) state.stalls[o.id]!.stock = {};
   state.mapVersion += 1;
   const name = objLabel(state, o.id);
   emit(ctx, 'fire', [], `${name} burnt down.`, 5, [o.id]);
@@ -249,17 +263,19 @@ function burnDown(ctx: Ctx, fire: Condition): void {
     remember(a, state.tick, `${name} burnt down.`, a.homeId === o.id ? 9 : 5);
   }
   if (conditionLevel(state, 'storm') >= 0.3) return; // the rain stops it spreading
-  for (const other of state.map.objects) {
-    if (other === o || !burnable(other) || (other.progress ?? 1) < 1) continue;
-    if (onFire(state, other.id)) continue;
-    const gap = Math.max(
-      other.x - (o.x + o.w - 1),
-      o.x - (other.x + other.w - 1),
-      other.y - (o.y + o.h - 1),
-      o.y - (other.y + other.h - 1),
-    );
-    if (gap <= 3 && rng.chance(0.25 * fire.intensity))
-      igniteBuilding(ctx, other.id, fire.intensity * 0.8);
+  for (const kind of BURNABLE_KINDS) {
+    for (const other of cache.byKind.get(kind) ?? []) {
+      if (other === o || !burnable(other) || (other.progress ?? 1) < 1) continue;
+      if (onFire(state, other.id)) continue;
+      const gap = Math.max(
+        other.x - (o.x + o.w - 1),
+        o.x - (other.x + other.w - 1),
+        other.y - (o.y + o.h - 1),
+        o.y - (other.y + other.h - 1),
+      );
+      if (gap <= 3 && rng.chance(0.25 * fire.intensity))
+        igniteBuilding(ctx, other.id, fire.intensity * 0.8);
+    }
   }
 }
 
@@ -342,6 +358,10 @@ export function sicknessTick(ctx: Ctx, agent: Agent): void {
   s.severity = Math.min(1, s.severity + change / H);
   agent.health = Math.max(0, agent.health - (2.5 * s.severity) / H);
   n.energy = Math.max(0, n.energy - (3 * s.severity) / H);
+  if (agent.health <= 0) {
+    ctx.die(agent, 'illness');
+    return;
+  }
   if (!s.known && state.tick - s.since >= INCUBATION_TICKS) {
     s.known = true;
     emit(ctx, 'fell_ill', [agent.id], `${fullName(agent)} has fallen ill.`, 3);

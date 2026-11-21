@@ -6,18 +6,31 @@ import { useWorld } from '../worldStore.ts';
 /** Live prices and stock at the town market (the observer sees everything; villagers only what they saw). */
 export function MarketPanel({ worldId }: { worldId: string }) {
   const [market, setMarket] = useState<MarketResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const hour = useWorld((s) => Math.floor(s.tick / 60));
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     api
-      .market(worldId)
-      .then((m) => !cancelled && setMarket(m))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+      .market(worldId, ac.signal)
+      .then((m) => {
+        if (ac.signal.aborted) return;
+        setMarket(m);
+        setError(null);
+      })
+      .catch((e: Error) => {
+        if (!ac.signal.aborted) setError(e.message);
+      });
+    return () => ac.abort();
   }, [worldId, hour]);
-  if (!market) return <p className="muted small">Loading market…</p>;
+  if (!market) {
+    return error ? (
+      <p className="warn small" role="alert">
+        {error}
+      </p>
+    ) : (
+      <p className="muted small">Loading market…</p>
+    );
+  }
   return (
     <div>
       <table className="price-table">

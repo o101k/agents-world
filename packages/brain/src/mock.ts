@@ -60,20 +60,29 @@ export function mockDecide(p: Perception): Decision {
   if (p.trigger.kind === 'spoken_to') {
     const t = p.trigger;
     const firstName = t.fromName.startsWith('a stranger') ? 'stranger' : t.fromName.split(' ')[0];
+    const questionReplies = [
+      `I'm getting by well enough, ${firstName}.`,
+      `Busy as ever, ${firstName}, though I can't complain.`,
+      `Doing alright today, ${firstName}. Hope the same for you.`,
+      `Not too bad, ${firstName} — keeping my hands full.`,
+      `Fair enough, ${firstName}. Much to see to before dusk.`,
+      `All quiet on my end, ${firstName}.`,
+    ];
     const replies = [
       `Good day, ${firstName}.`,
-      `Ah, ${firstName}. All well with you?`,
+      `Ah, ${firstName}. Good to cross paths.`,
       `Can't talk long, ${firstName} — lots to do.`,
       `Nice to see you, ${firstName}.`,
-      `Mm. If you say so, ${firstName}.`,
+      `Mm, if you say so, ${firstName}.`,
+      `Glad to hear it, ${firstName}.`,
+      `Take care out there, ${firstName}.`,
     ];
     const asked = t.message.trim().endsWith('?');
-    const reply = asked
-      ? `I'm getting by, ${firstName}. And you?`
-      : replies[Math.floor(roll * replies.length)]!;
+    const pool = asked ? questionReplies : replies;
+    const reply = pool[Math.floor(roll * 997) % pool.length]!;
     const rest = mockDecide({ ...p, trigger: { kind: 'plan_done' } });
     const chatty = p.personality.extraversion > 40 || asked;
-    if (needs.water < 15 || needs.food < 10 || !chatty) {
+    if (needs.water < 15 || needs.food < 10 || !chatty || !p.canDo.includes('talk_to')) {
       return {
         ...rest,
         thought: `${t.fromName} is talking to me, but I have other things on my mind. ${rest.thought}`,
@@ -491,8 +500,15 @@ function lifePlan(p: Perception, roll: number): Decision | null {
         ],
       };
     }
-    const market = p.knownPlaces.find((k) => k.kind === 'market');
-    if (market && p.self.money >= 8) {
+    const market = p.knownPlaces.find((k) => k.kind === 'market' && !k.burnt && !k.unreachable);
+    const marketOutOfBread = p.recent.some((r) => r.includes('market had no bread'));
+    if (
+      market &&
+      !marketOutOfBread &&
+      p.canDo.includes('buy') &&
+      p.canDo.includes('feed') &&
+      p.self.money >= knownBuyPrice(p, 'bread') * 2
+    ) {
       return {
         thought: `${hungryChild.name} is hungry and I have nothing. To the market.`,
         goal: 'Get food for my child',
@@ -594,15 +610,15 @@ function workPlan(p: Perception, roll: number): Decision | null {
   const inv = p.self.inventory;
   const have = (i: ItemName) => inv[i] ?? 0;
   // A burnt home (or workplace) of our own comes first: wood → planks → rebuild.
-  const ruin = p.knownPlaces.find((k) => k.burnt && k.owner === 'you');
-  if (ruin && p.stage !== 'child') {
+  const ruin = p.knownPlaces.find((k) => k.burnt && k.owner === 'you' && !k.unreachable);
+  if (ruin && p.stage !== 'child' && p.canDo.includes('build_house')) {
     if (have('planks') >= 3)
       return {
         thought: `${ruin.name} won't rebuild itself.`,
         goal: `Rebuild ${ruin.name}`,
         plan: [{ type: 'build_house' }],
       };
-    if (have('wood') >= 2)
+    if (have('wood') >= 2 && p.canDo.includes('craft'))
       return {
         thought: 'Planks for the rebuilding.',
         goal: 'Make planks',
@@ -611,17 +627,23 @@ function workPlan(p: Perception, roll: number): Decision | null {
           ...(have('wood') >= 4 ? [{ type: 'craft' as const, recipe: 'planks' as const }] : []),
         ],
       };
-    if (p.self.money >= knownBuyPrice(p, 'planks') * 3 && roll < 0.5)
+    if (
+      p.canDo.includes('buy') &&
+      p.knownPlaces.some((k) => k.kind === 'market' && !k.burnt && !k.unreachable) &&
+      p.self.money >= knownBuyPrice(p, 'planks') * 3 &&
+      roll < 0.5
+    )
       return {
         thought: 'I will buy planks and get on with rebuilding.',
         goal: `Rebuild ${ruin.name}`,
         plan: [{ type: 'buy', item: 'planks', quantity: 3 }, { type: 'build_house' }],
       };
-    return {
-      thought: `I need timber to rebuild ${ruin.name}.`,
-      goal: 'Gather wood for rebuilding',
-      plan: [{ type: 'chop_wood' }, { type: 'chop_wood' }],
-    };
+    if (p.canDo.includes('chop_wood'))
+      return {
+        thought: `I need timber to rebuild ${ruin.name}.`,
+        goal: 'Gather wood for rebuilding',
+        plan: [{ type: 'chop_wood' }, { type: 'chop_wood' }],
+      };
   }
   const occ = p.self.occupation.toLowerCase();
   const place = (kind: string, produce?: ItemName) =>
@@ -629,6 +651,7 @@ function workPlan(p: Perception, roll: number): Decision | null {
       .filter(
         (k) =>
           k.kind === kind &&
+          !k.burnt &&
           !k.unreachable &&
           (!produce || k.produce === produce) &&
           (k.lastSeenAmount ?? 1) >= 1,
@@ -664,11 +687,14 @@ function workPlan(p: Perception, roll: number): Decision | null {
       };
     }
     if (have('bread') > 4) {
-      return {
-        thought: 'I have more bread than I can eat. To the market.',
-        goal: 'Sell bread',
-        plan: sellSurplus('bread', 3),
-      };
+      const sell = sellSurplus('bread', 3);
+      if (sell.length > 0) {
+        return {
+          thought: 'I have more bread than I can eat. To the market.',
+          goal: 'Sell bread',
+          plan: sell,
+        };
+      }
     }
     const marketOut = p.recent.some((r) => r.includes('market had no wheat'));
     if (p.self.money >= knownBuyPrice(p, 'wheat') * 3 && roll < 0.4 && !marketOut) {

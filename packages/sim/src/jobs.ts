@@ -181,9 +181,11 @@ export function jobAction(ctx: Ctx, agent: Agent, intent: JobIntent): void {
     'conversation',
     [other.id],
   );
-  const byName = nameAsKnown(other, agent);
-  remember(other, tick, `${byName} ended our work agreement.`, 4, 'conversation', [agent.id]);
-  tellEnded(other, byName, `${byName} ended it`);
+  if (other.alive) {
+    const byName = nameAsKnown(other, agent);
+    remember(other, tick, `${byName} ended our work agreement.`, 4, 'conversation', [agent.id]);
+    tellEnded(other, byName, `${byName} ended it`);
+  }
   emit(
     ctx,
     'job',
@@ -301,10 +303,11 @@ export function jobsTick(ctx: Ctx): void {
 export function jobsFor(state: WorldState, agent: Agent): JobView[] {
   const views: JobView[] = [];
   for (const c of state.contracts) {
+    if (state.tick >= c.endTick) continue;
     const role = c.employer === agent.id ? 'employer' : c.worker === agent.id ? 'worker' : null;
     if (!role) continue;
     const other = findAgent(state, role === 'employer' ? c.worker : c.employer);
-    if (!other) continue;
+    if (!other?.alive) continue;
     views.push({
       role,
       otherId: other.id,
