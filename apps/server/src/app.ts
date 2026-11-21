@@ -31,7 +31,7 @@ export async function buildApp(config: ServerConfig, options: BuildOptions = {})
   const server = Fastify({ logger: options.logger ?? false });
   const hub = new Hub();
   const settings = new SettingsStore(config.dataDir, options.env);
-  await settings.checkClaudePlan();
+  await settings.checkPlans();
   const brains = new BrainRouter(settings.buildProviders());
   // Set once the manager exists: a world left running resumes inside its constructor and
   // reports its status before then (nobody is connected yet, so there's no one to tell).

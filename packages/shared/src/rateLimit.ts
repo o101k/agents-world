@@ -8,6 +8,7 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
   openai: 'OpenAI API',
   openai_compatible: 'OpenAI-compatible API',
   claude_plan: 'Claude subscription',
+  agy_plan: 'Gemini subscription',
 };
 
 /** "5m 20s", "45s", "2h 5m". */

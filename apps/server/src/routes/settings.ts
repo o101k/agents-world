@@ -4,7 +4,7 @@ import { PricesUpdate, ProviderUpdate, type SettingsResponse } from '@aw/shared'
 import type { SettingsStore } from '../settings.ts';
 import { NotFoundError } from '../worlds/worldManager.ts';
 
-const PROVIDERS = new Set(['anthropic', 'openai', 'openai_compatible', 'claude_plan']);
+const PROVIDERS = new Set(['anthropic', 'openai', 'openai_compatible', 'claude_plan', 'agy_plan']);
 
 export function registerSettingsRoutes(
   app: FastifyInstance,
@@ -22,17 +22,23 @@ export function registerSettingsRoutes(
       const update = ProviderUpdate.parse(req.body ?? {});
       settings.updateProvider(req.params.id as 'anthropic', update);
       if (req.params.id === 'claude_plan') await settings.checkClaudePlan();
+      else if (req.params.id === 'agy_plan') await settings.checkAgyPlan();
       refresh();
       return settings.view();
     },
   );
 
-  /** Re-checks that Claude Code is installed and signed in (after the owner logs in). */
-  app.post('/api/settings/providers/claude_plan/check', async (): Promise<SettingsResponse> => {
-    await settings.checkClaudePlan();
-    refresh();
-    return settings.view();
-  });
+  /** Re-checks that a subscription CLI (`claude` or `agy`) is installed and signed in. */
+  app.post<{ Params: { id: string } }>(
+    '/api/settings/providers/:id/check',
+    async (req): Promise<SettingsResponse> => {
+      if (req.params.id === 'claude_plan') await settings.checkClaudePlan();
+      else if (req.params.id === 'agy_plan') await settings.checkAgyPlan();
+      else throw new NotFoundError('Unknown plan provider');
+      refresh();
+      return settings.view();
+    },
+  );
 
   app.put('/api/settings/prices', async (req): Promise<SettingsResponse> => {
     settings.updatePrices(PricesUpdate.parse(req.body ?? {}));

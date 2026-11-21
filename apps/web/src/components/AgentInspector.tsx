@@ -307,8 +307,8 @@ export function AgentInspector({
         <h3>Brain</h3>
         <p className="muted small">
           {agent.decisions} decisions ·{' '}
-          {agent.brain.provider === 'claude_plan'
-            ? `${formatUsd(agent.spentUsd)} of AI use (Claude plan, at API prices)`
+          {agent.brain.provider === 'claude_plan' || agent.brain.provider === 'agy_plan'
+            ? `${formatUsd(agent.spentUsd)} of AI use (${agent.brain.provider === 'agy_plan' ? 'Gemini plan' : 'Claude plan'}, at API prices)`
             : `${formatUsd(agent.spentUsd)} spent on AI`}
           {agent.askedUsd && agent.askedUsd > 0
             ? ` · + ${formatUsd(agent.askedUsd)} on your questions`

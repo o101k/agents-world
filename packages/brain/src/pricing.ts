@@ -13,6 +13,10 @@ export const DEFAULT_PRICES: Record<string, ModelPrice> = {
   'claude-opus-5-5': { input: 4, output: 20 },
   'claude-opus-4-8': { input: 5, output: 25 },
   'claude-fable-5-1': { input: 10, output: 50 },
+  'gemini-3.8-flash': { input: 0.15, output: 0.6 },
+  'gemini-4-argon': { input: 1.25, output: 10 },
+  'gemini-4-neon': { input: 2.5, output: 15 },
+  'gemini-4-hydrogen': { input: 2.5, output: 15 },
 };
 
 /** Deliberately pessimistic, so unknown models can't sneak past the spending cap. */

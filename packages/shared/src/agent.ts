@@ -105,7 +105,13 @@ export interface RelationshipView {
   lastSeenTick: number;
 }
 
-export type ProviderId = 'mock' | 'anthropic' | 'openai' | 'openai_compatible' | 'claude_plan';
+export type ProviderId =
+  | 'mock'
+  | 'anthropic'
+  | 'openai'
+  | 'openai_compatible'
+  | 'claude_plan'
+  | 'agy_plan';
 export type EffortLevel = 'frugal' | 'standard' | 'deep';
 
 export interface BrainConfig {
@@ -211,7 +217,7 @@ export interface AgentDetail extends AgentView {
   forgotten: MemoryView[];
   death?: { tick: number; cause: string };
   bornTick: number;
-  /** Cost of their AI decisions (USD), Claude-plan calls included at their API-price value. */
+  /** Cost of their AI decisions (USD), subscription-plan calls included at their API-price value. */
   spentUsd: number;
   /** Cost of the observer's questions about them, answered by their AI (live view only). */
   askedUsd?: number;
@@ -230,7 +236,7 @@ export interface LlmCallView {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
-  /** Made on the owner's Claude subscription: `costUsd` is its API-price value, not billed. */
+  /** Made on the owner's subscription: `costUsd` is its API-price value, not billed. */
   plan: boolean;
   latencyMs: number;
   prompt: string | null;

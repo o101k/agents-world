@@ -38,6 +38,7 @@ export default {
             AW_NO_OPEN: '1',
             AW_PORT: '{port}',
             AW_CLAUDE_CLI: 'off',
+            AW_AGY_CLI: 'off',
           },
           log: '.e2e/logs/helper.log',
         },

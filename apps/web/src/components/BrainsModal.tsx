@@ -21,9 +21,9 @@ export interface BrainsModalRow {
 const YOUNG: LifeStage[] = ['infant', 'toddler', 'child', 'teen'];
 const NO_USAGE: BrainUsage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, planUsd: 0 };
 
-/** Tooltip for a cost that includes Claude plan use priced at API rates. */
+/** Tooltip for a cost that includes subscription plan use priced at API rates. */
 const planTitle = (planUsd: number) =>
-  `Includes ${formatUsd(planUsd)} of Claude plan use at API prices (not billed)`;
+  `Includes ${formatUsd(planUsd)} of subscription plan use at API prices (not billed)`;
 
 const plural = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 

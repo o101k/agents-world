@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { BrainConfig, EffortLevel, ProviderId } from '@aw/shared';
 import { api } from '../api.ts';
-import { PLAN_MODELS } from '../planModels.ts';
+import { planModelsFor } from '../planModels.ts';
 import { useSettings } from '../settingsStore.ts';
 
 const EFFORT_HELP: Record<EffortLevel, string> = {
@@ -36,7 +36,12 @@ export function BrainFields({
     if (!settings) void load();
   }, [settings, load]);
   useEffect(() => {
-    if (value.provider === 'mock' || value.provider === 'claude_plan') return;
+    if (
+      value.provider === 'mock' ||
+      value.provider === 'claude_plan' ||
+      value.provider === 'agy_plan'
+    )
+      return;
     let cancelled = false;
     api
       .providerModels(value.provider)
@@ -51,6 +56,8 @@ export function BrainFields({
   const configured = (id: ProviderId) =>
     id === 'mock' || providers.some((p) => p.id === id && p.configured);
   const current = providers.find((p) => p.id === value.provider);
+  const planModels = current?.kind === 'plan' ? planModelsFor(current) : [];
+  const isAgy = value.provider === 'agy_plan';
 
   return (
     <div className="brain-fields">
@@ -76,7 +83,7 @@ export function BrainFields({
           {!configured(value.provider) && (
             <p className="warn small brain-note">
               {current?.kind === 'plan'
-                ? 'Claude Code isn’t set up yet, so the free mock brain will stand in.'
+                ? `${isAgy ? 'Antigravity CLI' : 'Claude Code'} isn’t set up yet, so the free mock brain will stand in.`
                 : 'This provider has no key yet, so the free mock brain will stand in.'}{' '}
               <button type="button" className="linkish" onClick={() => setOpen(true)}>
                 Open settings
@@ -91,12 +98,12 @@ export function BrainFields({
                 onChange={(e) => onChange({ ...value, model: e.target.value })}
               >
                 <option value="">Default ({current.defaultModel})</option>
-                {PLAN_MODELS.map((m) => (
+                {planModels.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.label}
                   </option>
                 ))}
-                {value.model && !PLAN_MODELS.some((m) => m.id === value.model) && (
+                {value.model && !planModels.some((m) => m.id === value.model) && (
                   <option value={value.model}>{value.model}</option>
                 )}
               </select>
@@ -133,7 +140,7 @@ export function BrainFields({
           <p className="muted small brain-note">
             {EFFORT_HELP[value.effort]}
             {current?.kind === 'plan' &&
-              ` Uses your Claude plan’s limits (Claude effort: ${PLAN_EFFORT[value.effort]}).`}
+              ` Uses your ${isAgy ? 'Gemini' : 'Claude'} plan’s limits (${isAgy ? 'agy' : 'Claude'} effort: ${PLAN_EFFORT[value.effort]}).`}
           </p>
         </>
       )}

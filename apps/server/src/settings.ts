@@ -1,14 +1,19 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  AGY_PLAN_DEFAULT_MODEL,
+  AgyPlanProvider,
   ANTHROPIC_DEFAULT_MODEL,
   AnthropicProvider,
+  checkAgyCli,
   checkClaudeCli,
   CLAUDE_PLAN_DEFAULT_MODEL,
   ClaudePlanProvider,
   DEFAULT_PRICES,
+  findAgyCli,
   findClaudeCli,
   OpenAIProvider,
+  type AgyCliStatus,
   type BrainProvider,
   type ClaudeCliStatus,
 } from '@aw/brain';
@@ -26,6 +31,8 @@ interface Settings {
   prices: Record<string, ModelPrice>;
   /** Where the `claude` command is, if it isn't found automatically. */
   claudeCliPath?: string;
+  /** Where the `agy` command is, if it isn't found automatically. */
+  agyCliPath?: string;
 }
 
 const LABELS: Record<ProviderKey, string> = {
@@ -33,6 +40,7 @@ const LABELS: Record<ProviderKey, string> = {
   openai: 'OpenAI',
   openai_compatible: 'OpenAI-compatible (OpenRouter, Ollama, LM Studio, …)',
   claude_plan: 'Claude subscription (Pro/Max)',
+  agy_plan: 'Gemini subscription (agy)',
 };
 const ENV_KEYS: Partial<Record<ProviderKey, string>> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -44,6 +52,7 @@ const DEFAULT_MODELS: Record<ProviderKey, string> = {
   openai: '',
   openai_compatible: '',
   claude_plan: CLAUDE_PLAN_DEFAULT_MODEL,
+  agy_plan: AGY_PLAN_DEFAULT_MODEL,
 };
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -58,6 +67,8 @@ export class SettingsStore {
   private settings: Settings;
   /** Last check of the Claude Code command (null until checkClaudePlan() has run). */
   private plan: ClaudeCliStatus | null = null;
+  /** Last check of the Antigravity CLI command (null until checkAgyPlan() has run). */
+  private agyPlan: AgyCliStatus | null = null;
 
   constructor(
     readonly dataDir: string,
@@ -108,6 +119,23 @@ export class SettingsStore {
     return this.plan;
   }
 
+  /**
+   * Finds the `agy` command and checks whether it's signed in and can list models. Runs at startup
+   * and whenever the owner presses "Check".
+   */
+  async checkAgyPlan(): Promise<AgyCliStatus> {
+    // AW_AGY_CLI overrides the path; "off" hides Antigravity CLI (end-to-end tests).
+    const forced = this.env.AW_AGY_CLI;
+    const command =
+      forced === 'off' ? null : forced || this.settings.agyCliPath || findAgyCli(this.env);
+    this.agyPlan = await checkAgyCli(command, this.env);
+    return this.agyPlan;
+  }
+
+  async checkPlans(): Promise<void> {
+    await Promise.all([this.checkClaudePlan(), this.checkAgyPlan()]);
+  }
+
   view(): SettingsResponse {
     const providers = (Object.keys(LABELS) as ProviderKey[]).map((id): ProviderStatus => {
       if (id === 'claude_plan')
@@ -122,6 +150,20 @@ export class SettingsStore {
           defaultModel: this.defaultModel(id),
           cliPath: this.plan?.path ?? this.settings.claudeCliPath ?? null,
           message: this.plan?.message ?? 'Not checked yet.',
+        };
+      if (id === 'agy_plan')
+        return {
+          id,
+          kind: 'plan',
+          label: LABELS[id],
+          configured: Boolean(this.agyPlan?.usesPlan),
+          keyHint: null,
+          keySource: null,
+          baseUrl: null,
+          defaultModel: this.defaultModel(id),
+          cliPath: this.agyPlan?.path ?? this.settings.agyCliPath ?? null,
+          message: this.agyPlan?.message ?? 'Not checked yet.',
+          models: this.agyPlan?.models.length ? this.agyPlan.models : undefined,
         };
       const { key, source } = this.key(id);
       // A local server (Ollama, LM Studio) needs no key; a base URL on localhost counts as configured.
@@ -142,8 +184,8 @@ export class SettingsStore {
   }
 
   updateProvider(id: ProviderKey, update: ProviderUpdate): void {
-    // The Claude subscription uses Claude Code's own login, never a key.
-    if (update.apiKey !== undefined && id !== 'claude_plan') {
+    // Subscription providers use their CLI's own login, never an API key.
+    if (update.apiKey !== undefined && id !== 'claude_plan' && id !== 'agy_plan') {
       if (update.apiKey.trim()) this.secrets.apiKeys[id] = update.apiKey.trim();
       else delete this.secrets.apiKeys[id];
       writeFileSync(this.secretsPath, JSON.stringify(this.secrets, null, 2), { mode: 0o600 });
@@ -156,8 +198,14 @@ export class SettingsStore {
     if (update.defaultModel !== undefined)
       this.settings.defaultModels[id] = update.defaultModel.trim();
     if (update.cliPath !== undefined) {
-      if (update.cliPath.trim()) this.settings.claudeCliPath = update.cliPath.trim();
-      else delete this.settings.claudeCliPath;
+      const path = update.cliPath.trim();
+      if (id === 'agy_plan') {
+        if (path) this.settings.agyCliPath = path;
+        else delete this.settings.agyCliPath;
+      } else {
+        if (path) this.settings.claudeCliPath = path;
+        else delete this.settings.claudeCliPath;
+      }
     }
     this.saveSettings();
   }
@@ -179,6 +227,8 @@ export class SettingsStore {
       const { key } = this.key(status.id);
       if (status.id === 'claude_plan')
         out.push(new ClaudePlanProvider(this.plan!.path!, status.defaultModel, this.env));
+      else if (status.id === 'agy_plan')
+        out.push(new AgyPlanProvider(this.agyPlan!.path!, status.defaultModel, this.env, prices));
       else if (status.id === 'anthropic')
         out.push(new AnthropicProvider(key!, status.defaultModel, prices));
       else

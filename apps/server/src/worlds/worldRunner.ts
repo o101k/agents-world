@@ -316,8 +316,8 @@ export class WorldRunner {
 
   /**
    * A provider hit a rate or usage limit while someone was deciding: pause and say exactly what
-   * happened. Time resumes by itself when the provider said when the limit lifts (the Claude
-   * subscription is retried every 30 minutes when it didn't say); otherwise it waits for Play.
+   * happened. Time resumes by itself when the provider said when the limit lifts (subscription
+   * plans are retried every 30 minutes when they didn't say); otherwise it waits for Play.
    * The decision that hit the limit is asked again when time resumes.
    */
   private pauseForRateLimit(
@@ -328,13 +328,11 @@ export class WorldRunner {
   ): void {
     const now = Date.now();
     const agent = this.state.agents.find((a) => a.id === agentId);
+    const isPlan = provider === 'claude_plan' || provider === 'agy_plan';
     let resumeAt: number | null = null;
     if (info.resetsAt !== undefined)
-      resumeAt = Math.max(
-        now + 1_000,
-        info.resetsAt + (provider === 'claude_plan' ? 60_000 : 2_000),
-      );
-    else if (provider === 'claude_plan') resumeAt = now + 30 * 60_000;
+      resumeAt = Math.max(now + 1_000, info.resetsAt + (isPlan ? 60_000 : 2_000));
+    else if (isPlan) resumeAt = now + 30 * 60_000;
     const notice: RateLimitNotice = {
       agentId,
       agentName: agent ? fullName(agent) : agentId,
